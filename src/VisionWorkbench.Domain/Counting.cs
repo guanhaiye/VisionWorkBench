@@ -1,0 +1,163 @@
+using VisionWorkbench.Contracts.Results;
+
+namespace VisionWorkbench.Domain;
+
+/// <summary>可变计数累计器：事件累计产生总数，不允许只存总数（文档 §16.7/§16.8）。</summary>
+public sealed class CounterState
+{
+    private readonly object _lock = new();
+
+    public string CounterId { get; }
+    public long Total { get; private set; }
+    public long ForwardTotal { get; private set; }
+    public long ReverseTotal { get; private set; }
+    public long AcceptedTotal { get; private set; }
+    public long RejectedTotal { get; private set; }
+    public long UncertainTotal { get; private set; }
+    public long CorrectedTotal { get; private set; }
+    public DateTimeOffset UpdatedAt { get; private set; } = DateTimeOffset.UtcNow;
+
+    public CounterState(string counterId) => CounterId = counterId;
+
+    /// <summary>应用一条计数事件并更新累计值。</summary>
+    public void Apply(CountingEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        lock (_lock)
+        {
+            switch (evt.Type)
+            {
+                case CountingEventType.CounterReset:
+                    Total = ForwardTotal = ReverseTotal = 0;
+                    AcceptedTotal = RejectedTotal = UncertainTotal = CorrectedTotal = 0;
+                    break;
+                case CountingEventType.Accepted:
+                    AcceptedTotal += Math.Max(0, evt.Delta);
+                    Total += evt.Delta;
+                    break;
+                case CountingEventType.Rejected:
+                    RejectedTotal += Math.Max(0, evt.Delta);
+                    Total += evt.Delta;
+                    break;
+                case CountingEventType.Uncertain:
+                    UncertainTotal += Math.Max(0, evt.Delta);
+                    break;
+                case CountingEventType.Corrected:
+                    CorrectedTotal++;
+                    Total += evt.Delta;
+                    break;
+                case CountingEventType.CrossedLine:
+                    if (string.Equals(evt.Direction, "forward", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ForwardTotal++;
+                    }
+                    else if (string.Equals(evt.Direction, "reverse", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ReverseTotal++;
+                    }
+                    Total += evt.Delta != 0 ? evt.Delta : 1;
+                    break;
+                default:
+                    // Appeared / EnteredZone / ExitedZone
+                    Total += evt.Delta != 0 ? evt.Delta : 1;
+                    break;
+            }
+            UpdatedAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    public long CurrentTotal { get { lock (_lock) { return Total; } } }
+}
+
+/// <summary>人工修正审计（文档 §16.8：修改前后值、原因、时间、操作者）。</summary>
+public sealed record CountingAdjustment
+{
+    public required CountingEvent Event { get; init; }
+    public long Before { get; init; }
+    public long After { get; init; }
+    public required string Reason { get; init; }
+    public required string Operator { get; init; }
+    public DateTimeOffset CorrectedAt { get; init; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>计数服务：事件应用 + 手动加减一/清零（带审计）。</summary>
+public sealed class CountingService
+{
+    private readonly CounterState _state;
+    private long _eventSeq;
+
+    public CountingService(string counterId) => _state = new CounterState(counterId);
+
+    public CounterState State => _state;
+
+    /// <summary>批量应用算法产生的计数事件。</summary>
+    public IReadOnlyList<CountingEvent> ApplyOutput(AlgorithmOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        foreach (var evt in output.CountingEvents)
+        {
+            _state.Apply(evt);
+        }
+        return output.CountingEvents;
+    }
+
+    /// <summary>手动修正（CNT-S-010）：delta 可为 ±1、±n；reason 必填。</summary>
+    public CountingAdjustment Adjust(long delta, string reason, string @operator, long frameSequence = 0)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new ArgumentException("人工修正必须填写原因（CNT-S-010）", nameof(reason));
+        }
+        var before = _state.CurrentTotal;
+        var evt = new CountingEvent
+        {
+            EventId = $"corr-{Guid.NewGuid():N}",
+            CounterId = _state.CounterId,
+            Type = CountingEventType.Corrected,
+            Delta = delta,
+            Confidence = 1.0,
+            FrameSequence = frameSequence,
+            OccurredAt = DateTimeOffset.UtcNow,
+        };
+        _state.Apply(evt);
+        return new CountingAdjustment
+        {
+            Event = evt,
+            Before = before,
+            After = _state.CurrentTotal,
+            Reason = reason,
+            Operator = @operator,
+        };
+    }
+
+    /// <summary>手动清零（CNT-S-010）：产生 CounterReset 事件并审计。</summary>
+    public CountingAdjustment Reset(string reason, string @operator, long frameSequence = 0)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new ArgumentException("清零必须填写原因（CNT-S-010）", nameof(reason));
+        }
+        var before = _state.CurrentTotal;
+        var evt = new CountingEvent
+        {
+            EventId = $"reset-{Guid.NewGuid():N}",
+            CounterId = _state.CounterId,
+            Type = CountingEventType.CounterReset,
+            Delta = 0,
+            Confidence = 1.0,
+            FrameSequence = frameSequence,
+            OccurredAt = DateTimeOffset.UtcNow,
+        };
+        _state.Apply(evt);
+        return new CountingAdjustment
+        {
+            Event = evt,
+            Before = before,
+            After = _state.CurrentTotal,
+            Reason = reason,
+            Operator = @operator,
+        };
+    }
+
+    public long NextEventSeq() => Interlocked.Increment(ref _eventSeq);
+}

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VisionWorkbench.Cameras.Usb</RootNamespace>
+    <Description>USB 摄像头接入（OpenCvSharp DirectShow 后端）</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <ProjectReference Include="..\VisionWorkbench.Cameras.Abstractions\VisionWorkbench.Cameras.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

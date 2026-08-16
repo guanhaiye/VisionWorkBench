@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VisionWorkbench.Algorithms/VisionWorkbench.Algorithms.csproj" />
+    <Project Path="src/VisionWorkbench.App/VisionWorkbench.App.csproj" />
+    <Project Path="src/VisionWorkbench.Application/VisionWorkbench.Application.csproj" />
+    <Project Path="src/VisionWorkbench.Cameras.Abstractions/VisionWorkbench.Cameras.Abstractions.csproj" />
+    <Project Path="src/VisionWorkbench.Cameras.Files/VisionWorkbench.Cameras.Files.csproj" />
+    <Project Path="src/VisionWorkbench.Cameras.Usb/VisionWorkbench.Cameras.Usb.csproj" />
+    <Project Path="src/VisionWorkbench.Contracts/VisionWorkbench.Contracts.csproj" />
+    <Project Path="src/VisionWorkbench.Domain/VisionWorkbench.Domain.csproj" />
+    <Project Path="src/VisionWorkbench.Infrastructure/VisionWorkbench.Infrastructure.csproj" />
+    <Project Path="src/VisionWorkbench.Persistence/VisionWorkbench.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VisionWorkbench.Tests/VisionWorkbench.Tests.csproj" />
+  </Folder>
+</Solution>

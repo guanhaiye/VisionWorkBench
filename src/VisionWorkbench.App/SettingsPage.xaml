@@ -1,0 +1,54 @@
+<UserControl x:Class="VisionWorkbench.App.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer>
+        <StackPanel Margin="12" MaxWidth="720" HorizontalAlignment="Left">
+            <TextBlock Text="系统设置" FontSize="18" FontWeight="Bold" Margin="0,0,0,12" />
+
+            <GroupBox Header="数据目录（APP-003：支持中文与空格路径；重启后生效）">
+                <StackPanel>
+                    <TextBox x:Name="DataDirText" Margin="0,4,0,4" />
+                    <TextBlock Text="数据库、证据图、日志、临时图都保存在此目录下。" Foreground="#888" FontSize="11" />
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Python 解释器（开发态；打包态用插件内嵌 runtime）">
+                <StackPanel>
+                    <TextBox x:Name="PythonText" Margin="0,4,0,4" />
+                    <TextBlock Text="留空 = 自动探测 workers/.venv/Scripts/python.exe；写入 PYTHONIOENCODING=utf-8 启动 Worker。"
+                               Foreground="#888" FontSize="11" TextWrapping="Wrap" />
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="插件根目录（重启后生效）">
+                <TextBox x:Name="PluginsRootText2" Margin="0,4,0,4" />
+            </GroupBox>
+
+            <GroupBox Header="执行后端（CPU 保底，文档 §19）">
+                <ComboBox x:Name="BackendCombo" Width="200" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="cpu" IsSelected="True" />
+                    <ComboBoxItem Content="cuda" />
+                    <ComboBoxItem Content="openvino" />
+                </ComboBox>
+            </GroupBox>
+
+            <GroupBox Header="角色与操作者（v1 免密切换——已知限制 #8）">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="角色：" VerticalAlignment="Center" />
+                    <ComboBox x:Name="RoleCombo" Width="140">
+                        <ComboBoxItem Content="操作员" Tag="operator" />
+                        <ComboBoxItem Content="工程师" Tag="engineer" IsSelected="True" />
+                        <ComboBoxItem Content="专家" Tag="expert" />
+                    </ComboBox>
+                    <TextBlock Text="操作者姓名：" VerticalAlignment="Center" Margin="24,0,8,0" />
+                    <TextBox x:Name="OperatorNameText" Width="160" />
+                </StackPanel>
+            </GroupBox>
+
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Content="保存设置" Click="Save_Click" MinWidth="110" />
+                <TextBlock x:Name="SaveHintText" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="Green" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

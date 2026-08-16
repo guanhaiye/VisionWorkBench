@@ -1,0 +1,78 @@
+<UserControl x:Class="VisionWorkbench.App.HistoryPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="240" />
+        </Grid.RowDefinitions>
+
+        <!-- 筛选 -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,6">
+            <TextBlock Text="任务：" VerticalAlignment="Center" />
+            <ComboBox x:Name="TaskFilter" Width="180" DisplayMemberPath="Name" />
+            <TextBlock Text="状态：" VerticalAlignment="Center" Margin="16,0,0,0" />
+            <ComboBox x:Name="StatusFilter" Width="120">
+                <ComboBoxItem Content="全部" IsSelected="True" />
+                <ComboBoxItem Content="ok" />
+                <ComboBoxItem Content="ng" />
+                <ComboBoxItem Content="review_required" />
+                <ComboBoxItem Content="error" />
+            </ComboBox>
+            <TextBlock Text="从：" VerticalAlignment="Center" Margin="16,0,0,0" />
+            <DatePicker x:Name="FromDate" Width="130" />
+            <TextBlock Text="到：" VerticalAlignment="Center" Margin="8,0,0,0" />
+            <DatePicker x:Name="ToDate" Width="130" />
+            <Button Content="查询" Click="Query_Click" Margin="16,0,0,0" />
+        </DockPanel>
+
+        <DataGrid x:Name="RecordsGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
+                  SelectionChanged="RecordsGrid_SelectionChanged">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="60" />
+                <DataGridTextColumn Header="任务" Binding="{Binding TaskId}" Width="60" />
+                <DataGridTextColumn Header="批次" Binding="{Binding BatchId}" Width="60" />
+                <DataGridTextColumn Header="时间" Binding="{Binding StartedAt, StringFormat=HH:mm:ss}" Width="90" />
+                <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="110" />
+                <DataGridTextColumn Header="算法耗时(ms)" Binding="{Binding AlgorithmElapsedMs, StringFormat=0.#}" Width="100" />
+                <DataGridTextColumn Header="总耗时(ms)" Binding="{Binding TotalElapsedMs, StringFormat=0.#}" Width="90" />
+                <DataGridCheckBoxColumn Header="已纠错" Binding="{Binding WasCorrected}" Width="60" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- 详情 + 分页 + 纠错 -->
+        <Grid Grid.Row="2" Margin="0,6,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="300" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Background="#111" Margin="0,0,4,0">
+                <Grid>
+                    <Image x:Name="OriginalImage" Stretch="Uniform" />
+                    <TextBlock Text="原图" Foreground="White" Margin="6,4" VerticalAlignment="Top" />
+                </Grid>
+            </Border>
+            <Border Grid.Column="1" Background="#111" Margin="0,0,4,0">
+                <Grid>
+                    <Image x:Name="AnnotatedImage" Stretch="Uniform" />
+                    <TextBlock Text="标注图" Foreground="White" Margin="6,4" VerticalAlignment="Top" />
+                </Grid>
+            </Border>
+            <DockPanel Grid.Column="2">
+                <StackPanel DockPanel.Dock="Top">
+                    <Button Content="纠错此记录" Click="Correct_Click" Margin="0,4" />
+                    <Button Content="查看修正历史" Click="HistoryOfCorrections_Click" Margin="0,4" />
+                    <TextBlock x:Name="DetailText" TextWrapping="Wrap" FontSize="11" Foreground="#444" Margin="0,8,0,0" />
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom"
+                            Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="上一页" Click="PrevPage_Click" />
+                    <TextBlock x:Name="PageText" Text="0 / 0" VerticalAlignment="Center" Margin="8,0" />
+                    <Button Content="下一页" Click="NextPage_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</UserControl>

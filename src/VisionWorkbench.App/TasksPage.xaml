@@ -1,0 +1,112 @@
+<UserControl x:Class="VisionWorkbench.App.TasksPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="8">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="260" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- 左：任务列表 -->
+        <DockPanel Grid.Column="0" Margin="0,0,8,0">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+                <Button Content="新建" Click="New_Click" />
+                <Button Content="删除" Click="Delete_Click" />
+                <Button Content="刷新" Click="Refresh_Click" />
+            </StackPanel>
+            <ListBox x:Name="TaskList" DisplayMemberPath="Name" SelectionChanged="TaskList_SelectionChanged" />
+        </DockPanel>
+
+        <!-- 右：编辑器 -->
+        <ScrollViewer Grid.Column="1">
+            <StackPanel x:Name="EditorPanel" IsEnabled="False">
+                <GroupBox Header="基本信息">
+                    <StackPanel>
+                        <TextBlock Text="任务名" />
+                        <TextBox x:Name="NameText" Margin="0,2,0,8" />
+                        <TextBlock Text="说明" />
+                        <TextBox x:Name="DescriptionText" Margin="0,2,0,8" />
+                    </StackPanel>
+                </GroupBox>
+                <GroupBox Header="输入源（设备管理页可查看可用 ID）">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition />
+                            <RowDefinition />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Provider ID：" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="0" Grid.Column="1" x:Name="ProviderText" Margin="0,2,0,6"
+                                 Text="image-folder" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="设备 ID（目录/视频路径/索引）：" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="DeviceText" Margin="0,2,0,6" />
+                    </Grid>
+                </GroupBox>
+                <GroupBox Header="算法插件">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="插件 ID：" VerticalAlignment="Center" />
+                        <ComboBox x:Name="PluginCombo" Grid.Column="1" />
+                    </Grid>
+                </GroupBox>
+                <GroupBox Header="插件参数（JSON）">
+                    <TextBox x:Name="SettingsText" Height="72" TextWrapping="Wrap" AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto" Text="{}" />
+                </GroupBox>
+                <GroupBox Header="ROI（归一化 0~1；全部 0 表示整幅图）">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="X" VerticalAlignment="Center" />
+                        <TextBox x:Name="RoiXText" Width="56" Text="0" Margin="4,0,12,0" />
+                        <TextBlock Text="Y" VerticalAlignment="Center" />
+                        <TextBox x:Name="RoiYText" Width="56" Text="0" Margin="4,0,12,0" />
+                        <TextBlock Text="W" VerticalAlignment="Center" />
+                        <TextBox x:Name="RoiWText" Width="56" Text="0" Margin="4,0,12,0" />
+                        <TextBlock Text="H" VerticalAlignment="Center" />
+                        <TextBox x:Name="RoiHText" Width="56" Text="0" Margin="4,0,12,0" />
+                        <TextBlock Text="边界策略" VerticalAlignment="Center" Margin="12,0,4,0" />
+                        <ComboBox x:Name="RoiPolicyCombo" Width="130">
+                            <ComboBoxItem Content="中心点在内" Tag="CenterInside" IsSelected="True" />
+                            <ComboBoxItem Content="完整框在内" Tag="FullInside" />
+                            <ComboBoxItem Content="任意重叠" Tag="AnyOverlap" />
+                        </ComboBox>
+                    </StackPanel>
+                </GroupBox>
+                <GroupBox Header="判定规则（RUL-001~005）">
+                    <DataGrid x:Name="RulesGrid" AutoGenerateColumns="False" CanUserAddRows="True"
+                              CanUserDeleteRows="True" MinHeight="120" Height="180">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="规则ID" Binding="{Binding RuleId}" Width="110" />
+                            <DataGridComboBoxColumn Header="类型" SelectedItemBinding="{Binding Kind}" Width="130">
+                                <DataGridComboBoxColumn.ItemsSource>
+                                    <x:Array Type="{x:Type sys:String}"
+                                             xmlns:sys="clr-namespace:System;assembly=mscorlib">
+                                        <sys:String>CountEquals</sys:String>
+                                        <sys:String>CountAtLeast</sys:String>
+                                        <sys:String>CountAtMost</sys:String>
+                                        <sys:String>ClassRequired</sys:String>
+                                        <sys:String>ClassForbidden</sys:String>
+                                        <sys:String>LowConfidence</sys:String>
+                                    </x:Array>
+                                </DataGridComboBoxColumn.ItemsSource>
+                            </DataGridComboBoxColumn>
+                            <DataGridTextColumn Header="类别" Binding="{Binding ClassId}" Width="90" />
+                            <DataGridTextColumn Header="期望数量" Binding="{Binding ExpectedCount}" Width="70" />
+                            <DataGridTextColumn Header="最低置信度" Binding="{Binding MinConfidence}" Width="80" />
+                            <DataGridCheckBoxColumn Header="启用" Binding="{Binding Enabled}" Width="50" />
+                            <DataGridCheckBoxColumn Header="失败转待确认" Binding="{Binding DowngradeToReview}" Width="90" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </GroupBox>
+                <StackPanel Orientation="Horizontal" Margin="0,8">
+                    <Button Content="保存" Click="Save_Click" MinWidth="96" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

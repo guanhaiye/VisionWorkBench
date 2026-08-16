@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VisionWorkbench.Cameras.Files</RootNamespace>
+    <Description>图片目录与视频文件虚拟相机（测试可复现输入源）</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <ProjectReference Include="..\VisionWorkbench.Cameras.Abstractions\VisionWorkbench.Cameras.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

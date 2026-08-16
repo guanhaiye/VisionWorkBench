@@ -1,0 +1,29 @@
+<Window x:Class="VisionWorkbench.App.Shell"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:VisionWorkbench.App"
+        Title="VisionWorkbench — AI 视觉工作台" Width="1280" Height="800"
+        WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="180" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Border Grid.Column="0" Background="#2B2B33">
+            <StackPanel>
+                <TextBlock Text="VisionWorkbench" Foreground="White" FontSize="16" FontWeight="Bold"
+                           Margin="12,16,12,12" />
+                <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0"
+                         SelectionChanged="NavList_SelectionChanged" Margin="0,4">
+                    <ListBoxItem Content="实时检测" Tag="live" IsSelected="True" Foreground="#E8E8E8" />
+                    <ListBoxItem Content="任务配置" Tag="tasks" Foreground="#E8E8E8" />
+                    <ListBoxItem Content="历史记录" Tag="history" Foreground="#E8E8E8" />
+                    <ListBoxItem Content="算法管理" Tag="plugins" Foreground="#E8E8E8" />
+                    <ListBoxItem Content="设备管理" Tag="devices" Foreground="#E8E8E8" />
+                    <ListBoxItem Content="系统设置" Tag="settings" Foreground="#E8E8E8" />
+                </ListBox>
+            </StackPanel>
+        </Border>
+        <ContentControl x:Name="PageHost" Grid.Column="1" />
+    </Grid>
+</Window>

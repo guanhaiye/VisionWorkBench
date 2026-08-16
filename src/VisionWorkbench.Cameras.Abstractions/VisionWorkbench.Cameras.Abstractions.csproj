@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VisionWorkbench.Cameras.Abstractions</RootNamespace>
+    <Description>相机 Provider/Session 抽象与 VideoFrame（纯 BGR 字节缓冲，不依赖具体相机库）</Description>
+  </PropertyGroup>
+</Project>

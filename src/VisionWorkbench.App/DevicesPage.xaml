@@ -1,0 +1,39 @@
+<UserControl x:Class="VisionWorkbench.App.DevicesPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="0,0,0,6">
+            <Button Content="扫描设备" Click="Scan_Click" />
+            <TextBlock Text="USB 用 DSHOW 索引探测；图片/视频为虚拟源，用任务配置里的路径直接打开"
+                       VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
+        </DockPanel>
+        <DataGrid x:Name="DevicesGrid" Grid.Row="1" Height="180" AutoGenerateColumns="False" IsReadOnly="True"
+                  SelectionChanged="DevicesGrid_SelectionChanged">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Provider" Binding="{Binding ProviderId}" Width="120" />
+                <DataGridTextColumn Header="设备 ID" Binding="{Binding DeviceId}" Width="*" />
+                <DataGridTextColumn Header="名称" Binding="{Binding DisplayName}" Width="260" />
+            </DataGrid.Columns>
+        </DataGrid>
+        <GroupBox Grid.Row="2" Header="测试预览（打开 5 秒后自动关闭）">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="测试选中设备" Click="Test_Click" />
+                    <TextBlock x:Name="TestStatusText" VerticalAlignment="Center" Margin="12,0,0,0" />
+                </StackPanel>
+                <Border Grid.Row="1" Background="#111" Margin="0,6,0,0">
+                    <Image x:Name="TestPreviewImage" Stretch="Uniform" />
+                </Border>
+            </Grid>
+        </GroupBox>
+    </Grid>
+</UserControl>

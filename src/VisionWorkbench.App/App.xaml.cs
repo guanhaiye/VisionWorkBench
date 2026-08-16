@@ -1,0 +1,29 @@
+using System.Windows;
+
+namespace VisionWorkbench.App;
+
+public partial class App : System.Windows.Application
+{
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+        AppServices.Instance.Initialize();
+        var shell = new Shell();
+        MainWindow = shell;
+        shell.Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        // 优雅退出：算法 Worker 全部关闭（PLG-011/STB-004）
+        try
+        {
+            AppServices.Instance.AlgorithmManager.ShutdownAllAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception)
+        {
+            // 退出路径尽力而为
+        }
+        base.OnExit(e);
+    }
+}

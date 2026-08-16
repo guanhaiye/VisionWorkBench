@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "通用物体计数参数",
+  "type": "object",
+  "properties": {
+    "minAreaPx": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000000,
+      "default": 80,
+      "title": "最小目标面积（像素）",
+      "description": "小于该面积的轮廓视为噪声"
+    },
+    "maxAreaPx": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "title": "最大目标面积（像素）",
+      "description": "0 表示不限制"
+    },
+    "thresholdBlock": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 401,
+      "default": 31,
+      "title": "自适应阈值窗口",
+      "description": "必须为奇数"
+    },
+    "thresholdC": {
+      "type": "integer",
+      "minimum": -50,
+      "maximum": 50,
+      "default": -12,
+      "title": "阈值偏移",
+      "description": "T = 局部均值 - C；亮目标用负值，暗目标用正值"
+    },
+    "morphKernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 3,
+      "title": "形态学核大小"
+    },
+    "invert": {
+      "type": "boolean",
+      "default": false,
+      "title": "暗目标模式",
+      "description": "目标比背景暗时开启"
+    },
+    "classId": {
+      "type": "string",
+      "default": "object",
+      "title": "类别 ID"
+    },
+    "className": {
+      "type": "string",
+      "default": "物体",
+      "title": "类别显示名"
+    }
+  }
+}

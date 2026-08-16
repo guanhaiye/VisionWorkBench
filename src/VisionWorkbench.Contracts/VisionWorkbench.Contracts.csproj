@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VisionWorkbench.Contracts</RootNamespace>
+    <Description>跨进程协议消息、统一算法输入输出、插件清单与标准错误码</Description>
+  </PropertyGroup>
+</Project>

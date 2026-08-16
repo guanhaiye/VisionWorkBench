@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VisionWorkbench.Domain</RootNamespace>
+    <Description>视觉配方、规则引擎、计数累计与 ROI 边界策略</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VisionWorkbench.Contracts\VisionWorkbench.Contracts.csproj" />
+  </ItemGroup>
+</Project>

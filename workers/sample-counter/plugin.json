@@ -1,0 +1,28 @@
+{
+  "manifestVersion": "1.0",
+  "id": "com.vision.sample-counter",
+  "name": "通用物体计数",
+  "version": "1.0.0",
+  "protocolVersion": "1.0",
+  "minimumHostVersion": "0.1.0",
+  "description": "静态物体计数示例算法：自适应阈值 + 形态学 + 轮廓过滤。用于验证宿主纵向闭环。",
+  "author": "VisionWorkbench",
+  "runtime": {
+    "type": "python",
+    "executable": "runtime/python.exe",
+    "entry": "worker.py"
+  },
+  "capabilities": {
+    "inputModes": ["single-image", "frame-stream"],
+    "outputs": ["detection", "metrics"],
+    "stateful": false,
+    "realtime": true
+  },
+  "streaming": {
+    "preferredFps": 10,
+    "queuePolicy": "latest",
+    "maximumQueueLength": 3
+  },
+  "executionProviders": ["cpu"],
+  "settingsSchema": "settings.schema.json"
+}

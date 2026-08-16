@@ -1,0 +1,13 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+TestResults/
+workers/.venv/
+samples/
+data/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

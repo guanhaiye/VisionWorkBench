@@ -1,0 +1,4 @@
+# 开发态依赖（宿主交付时 Python 运行时随插件打包，客户无需自行安装）
+opencv-python-headless>=4.10
+numpy>=1.26
+pytest>=8.0
