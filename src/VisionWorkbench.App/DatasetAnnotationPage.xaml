@@ -12,6 +12,8 @@
             <Button Content="选择图片目录" Click="BrowseRoot_Click" Margin="6,0,0,0" />
             <Button Content="保存数据集" Click="SaveDataset_Click" Margin="6,0,0,0" />
             <Button Content="导出 YOLO 数据集" Click="ExportDataset_Click" Margin="6,0,0,0" />
+            <Button Content="选择 YOLOE 模型" Click="BrowseYoloeModel_Click" Margin="6,0,0,0" />
+            <Button Content="选择 SAM3 模型" Click="BrowseSam3Model_Click" Margin="6,0,0,0" />
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -59,6 +61,9 @@
                     <Button Content="完成多边形" Click="FinishPolygon_Click" Margin="8,0,0,0" />
                     <Button Content="删除选中标注" Click="DeleteAnnotation_Click" Margin="8,0,0,0" />
                     <Button Content="保存当前标注" Click="SaveAnnotation_Click" Margin="8,0,0,0" />
+                    <Button Content="YOLOE 自动标注当前图" Click="YoloeCurrent_Click" Margin="8,0,0,0" />
+                    <Button Content="YOLOE 传播到后续图片" Click="YoloePropagate_Click" Margin="8,0,0,0" />
+                    <Button Content="SAM3 点击分割" Click="Sam3ClickMode_Click" Margin="8,0,0,0" />
                 </StackPanel>
                 <Border Grid.Row="1" Background="#202020" BorderBrush="#888" BorderThickness="1">
                     <Grid>

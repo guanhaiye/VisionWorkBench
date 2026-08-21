@@ -21,6 +21,8 @@ public sealed class AppSettings
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VisionWorkbench");
     public string? PluginsRoot { get; set; }
     public string? PythonExecutable { get; set; }
+    public string? YoloeModelPath { get; set; }
+    public string? Sam3ModelPath { get; set; }
     public string ExecutionProvider { get; set; } = "cpu";
     public string CurrentRole { get; set; } = "engineer";
     public string OperatorName { get; set; } = Environment.UserName;
@@ -50,6 +52,7 @@ public sealed class AppServices
     public ReInferenceService ReInference { get; private set; } = null!;
     public StationRunCoordinator StationRuns { get; private set; } = null!;
     public DatasetCatalogService Datasets { get; private set; } = null!;
+    public SmartAnnotationService SmartAnnotations { get; private set; } = null!;
     public string SettingsFile { get; private set; } = "";
 
     private AppServices() { }
@@ -134,6 +137,11 @@ public sealed class AppServices
 
         // 6. 算法管理器：插件根目录解析（开发态向上找 workers/，打包态 exe 旁 plugins/）
         var pluginsRoot = Settings.PluginsRoot ?? FindPluginsRoot();
+        SmartAnnotations = new SmartAnnotationService(
+            pluginsRoot,
+            Settings.PythonExecutable,
+            Settings.YoloeModelPath,
+            Settings.Sam3ModelPath);
         AlgorithmManager = new AlgorithmManager(new AlgorithmManagerOptions
         {
             PluginsRoot = pluginsRoot,

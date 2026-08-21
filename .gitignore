@@ -18,6 +18,8 @@ workers/.venv/
 /.pytest-yolo/
 /workers/yolo11/.runtime/
 /workers/yolo11/persistent_cache.json
+/workers/yoloe/models/
+/workers/sam3/models/
 samples/
 data/
 *.log

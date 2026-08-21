@@ -19,6 +19,7 @@ public partial class DatasetAnnotationPage : UserControl
     private Point _dragStart;
     private Rectangle? _draft;
     private bool _dragging;
+    private bool _sam3ClickMode;
     private readonly List<Point> _polygonPoints = [];
     private Polyline? _polygonDraft;
 
@@ -107,6 +108,36 @@ public partial class DatasetAnnotationPage : UserControl
         }
     }
 
+    private void BrowseYoloeModel_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择 YOLOE 模型文件",
+            Filter = "YOLO 模型 (*.pt;*.onnx)|*.pt;*.onnx|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog() != true) return;
+        AppServices.Instance.SmartAnnotations.YoloeModelPath = dialog.FileName;
+        AppServices.Instance.Settings.YoloeModelPath = dialog.FileName;
+        AppServices.Instance.SaveUserSettings();
+        StatusText.Text = $"YOLOE 模型已配置：{dialog.FileName}";
+    }
+
+    private void BrowseSam3Model_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择 SAM3 模型文件",
+            Filter = "模型文件 (*.pt;*.pth;*.ckpt)|*.pt;*.pth;*.ckpt|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog() != true) return;
+        AppServices.Instance.SmartAnnotations.Sam3ModelPath = dialog.FileName;
+        AppServices.Instance.Settings.Sam3ModelPath = dialog.FileName;
+        AppServices.Instance.SaveUserSettings();
+        StatusText.Text = $"SAM3 模型已配置：{dialog.FileName}";
+    }
+
     private void DatasetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (DatasetList.SelectedItem is not DatasetDefinition dataset) return;
@@ -146,6 +177,13 @@ public partial class DatasetAnnotationPage : UserControl
         if (_dataset is null || _image is null || _annotation is null || ClassCombo.SelectedItem is not string)
         {
             StatusText.Text = "请选择数据集、图片和标注类别。";
+            return;
+        }
+        if (_sam3ClickMode)
+        {
+            _sam3ClickMode = false;
+            e.Handled = true;
+            _ = RunSam3ClickAsync(e.GetPosition(AnnotationCanvas));
             return;
         }
         if (IsPolygonMode())
@@ -344,6 +382,7 @@ public partial class DatasetAnnotationPage : UserControl
     {
         _image = null;
         _annotation = null;
+        _sam3ClickMode = false;
         _polygonPoints.Clear();
         _polygonDraft = null;
         AnnotationImage.Source = null;
@@ -353,6 +392,165 @@ public partial class DatasetAnnotationPage : UserControl
 
     private bool IsPolygonMode() =>
         ((AnnotationModeCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "polygon";
+
+    private async void YoloeCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBuildYoloeRequest(out var prompts, out var target)) return;
+        try
+        {
+            StatusText.Text = "YOLOE 正在根据当前框提示识别当前图片，请稍候……";
+            var results = await AppServices.Instance.SmartAnnotations.RunYoloEAsync(
+                _image!.FullPath, prompts, [target.FullPath]);
+            ApplySmartResults(results, "当前图片");
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"YOLOE 自动标注失败：{ex.Message}";
+        }
+    }
+
+    private async void YoloePropagate_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBuildYoloeRequest(out var prompts, out var reference)) return;
+        var images = ImageList.Items.OfType<DatasetImageItem>().ToList();
+        var index = images.FindIndex(x => x.RelativePath == reference.RelativePath);
+        var targets = index >= 0 ? images.Skip(index + 1).ToList() : [];
+        if (targets.Count == 0)
+        {
+            StatusText.Text = "当前图片后面没有可传播的图片。";
+            return;
+        }
+        try
+        {
+            StatusText.Text = $"YOLOE 正在传播到 {targets.Count} 张后续图片，请稍候……";
+            var results = await AppServices.Instance.SmartAnnotations.RunYoloEAsync(
+                reference.FullPath, prompts, targets.Select(x => x.FullPath).ToArray());
+            ApplySmartResults(results, $"{targets.Count} 张后续图片");
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"YOLOE 跨图传播失败：{ex.Message}";
+        }
+    }
+
+    private void Sam3ClickMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dataset is null || _image is null || _annotation is null || ClassCombo.SelectedItem is not string)
+        {
+            StatusText.Text = "请先选择数据集、图片和标注类别。";
+            return;
+        }
+        _sam3ClickMode = true;
+        StatusText.Text = $"{AppServices.Instance.SmartAnnotations.DescribeSam3Availability()}；请在图片上点击目标。";
+    }
+
+    private async Task RunSam3ClickAsync(Point canvasPoint)
+    {
+        if (_image is null || _annotation is null || ClassCombo.SelectedItem is not string className) return;
+        var point = new DatasetPoint
+        {
+            X = Math.Clamp(canvasPoint.X / Math.Max(1, AnnotationCanvas.ActualWidth), 0, 1),
+            Y = Math.Clamp(canvasPoint.Y / Math.Max(1, AnnotationCanvas.ActualHeight), 0, 1),
+        };
+        try
+        {
+            StatusText.Text = "SAM3 正在根据点击生成分割掩码，请稍候……";
+            var result = await AppServices.Instance.SmartAnnotations.RunSam3ClickAsync(
+                _image.FullPath, point, className);
+            if (result is null)
+            {
+                StatusText.Text = "SAM3 没有返回有效分割区域。";
+                return;
+            }
+            _annotation.Objects.Add(ToDatasetObject(result));
+            RefreshAnnotationList(_annotation.Objects.Count - 1);
+            AppServices.Instance.Datasets.SaveAnnotation(_dataset!, _annotation);
+            ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset!);
+            StatusText.Text = $"SAM3 点击分割已生成并保存：{_image.RelativePath}。";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"SAM3 点击分割失败：{ex.Message}";
+        }
+    }
+
+    private bool TryBuildYoloeRequest(out IReadOnlyList<YoloEPrompt> prompts, out DatasetImageItem target)
+    {
+        prompts = [];
+        target = null!;
+        if (_dataset is null || _image is null || _annotation is null)
+        {
+            StatusText.Text = "请先选择数据集和参考图片。";
+            return false;
+        }
+        var classIds = _dataset.Classes
+            .Select((name, index) => (name, index))
+            .ToDictionary(x => x.name, x => x.index, StringComparer.OrdinalIgnoreCase);
+        var items = _annotation.Objects
+            .Where(x => x.Width > 0 && x.Height > 0 && classIds.ContainsKey(x.ClassName))
+            .Select(x => new YoloEPrompt(x.ClassName, classIds[x.ClassName], x.X, x.Y, x.Width, x.Height))
+            .ToArray();
+        if (items.Length == 0)
+        {
+            StatusText.Text = "YOLOE 需要当前图片至少一个有效矩形框作为提示；多边形会使用其外接框。";
+            return false;
+        }
+        prompts = items;
+        target = _image;
+        return true;
+    }
+
+    private void ApplySmartResults(IReadOnlyList<SmartAnnotationImageResult> results, string scope)
+    {
+        if (_dataset is null) return;
+        var images = ImageList.Items.OfType<DatasetImageItem>().ToList();
+        var written = 0;
+        foreach (var result in results)
+        {
+            var image = images.FirstOrDefault(x => PathsEqual(x.FullPath, result.ImagePath));
+            if (image is null) continue;
+            var annotation = AppServices.Instance.Datasets.LoadAnnotation(_dataset, image.RelativePath);
+            annotation.Objects = result.Objects
+                .Where(x => x.Width > 0 && x.Height > 0)
+                .Select(ToDatasetObject)
+                .ToList();
+            AppServices.Instance.Datasets.SaveAnnotation(_dataset, annotation);
+            written++;
+            if (PathsEqual(image.FullPath, _image?.FullPath ?? ""))
+            {
+                _annotation = annotation;
+                RefreshAnnotationList(-1);
+                RenderAnnotations();
+            }
+        }
+        ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset);
+        StatusText.Text = $"YOLOE 已完成 {scope}：写入 {written} 张图片的自动标注；可继续手工调整后保存。";
+    }
+
+    private static DatasetAnnotationObject ToDatasetObject(SmartAnnotationObjectResult source) => new()
+    {
+        ClassName = source.ClassName,
+        Shape = source.Shape,
+        X = Math.Clamp(source.X, 0, 1),
+        Y = Math.Clamp(source.Y, 0, 1),
+        Width = Math.Clamp(source.Width, 0, 1),
+        Height = Math.Clamp(source.Height, 0, 1),
+        Polygon = source.Polygon.Select(point => new DatasetPoint
+        {
+            X = Math.Clamp(point.X, 0, 1),
+            Y = Math.Clamp(point.Y, 0, 1),
+        }).ToList(),
+    };
+
+    private void RefreshAnnotationList(int selectedIndex)
+    {
+        AnnotationList.ItemsSource = null;
+        AnnotationList.ItemsSource = _annotation?.Objects;
+        AnnotationList.SelectedIndex = selectedIndex;
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(System.IO.Path.GetFullPath(left), System.IO.Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
 
     private static List<string> ParseClasses(string text) => text
         .Split([',', ';', '，', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)
