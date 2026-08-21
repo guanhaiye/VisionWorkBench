@@ -69,7 +69,18 @@ public partial class DatasetAnnotationPage : UserControl
         {
             if (_dataset is null) NewDataset_Click(sender, e);
             DatasetRootText.Text = dialog.FolderName;
-            StatusText.Text = "已选择目录，请保存数据集后开始标注。";
+            _dataset!.RootDirectory = dialog.FolderName;
+            var images = AppServices.Instance.Datasets.ListImages(_dataset);
+            ImageList.ItemsSource = images;
+            ImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
+            if (images.Count > 0)
+            {
+                StatusText.Text = $"已扫描图片目录，共发现 {images.Count} 张图片。请点击“保存数据集”完成登记。";
+            }
+            else
+            {
+                StatusText.Text = "目录已选择，但没有找到 jpg、jpeg、png 或 bmp 图片。请检查目录层级和文件格式。";
+            }
         }
     }
 
