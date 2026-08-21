@@ -179,6 +179,67 @@ public sealed class DomainTests
     // ---- CNT-S-010 计数累计与纠错 ----
 
     [Fact]
+    public void DefectSeverityThreshold_Fails_When_Area_Or_Severity_Exceeds()
+    {
+        var output = new AlgorithmOutput
+        {
+            OutputId = "o1",
+            InputId = "i1",
+            Detections =
+            [
+                new DetectionResult
+                {
+                    ClassId = "scratch",
+                    Severity = "critical",
+                    AreaRatio = 0.01,
+                    Box = new NormalizedRect { X = 0.2, Y = 0.2, Width = 0.1, Height = 0.1 },
+                },
+            ],
+        };
+        var decision = RuleEngine.Evaluate(output,
+        [new InspectionRule
+        {
+            RuleId = "severity",
+            Kind = RuleKind.DefectSeverityThreshold,
+            ClassId = "scratch",
+            Threshold = 2,
+        }]);
+
+        Assert.Equal(DecisionStatus.Ng, decision.Status);
+    }
+
+    [Fact]
+    public void EventDurationThreshold_Downgrades_To_Review()
+    {
+        var start = DateTimeOffset.UtcNow;
+        var output = new AlgorithmOutput
+        {
+            OutputId = "o1",
+            InputId = "i1",
+            Events =
+            [
+                new VisionEvent
+                {
+                    EventId = "e1",
+                    EventType = "blocked",
+                    StartedAt = start,
+                    EndedAt = start.AddMilliseconds(250),
+                },
+            ],
+        };
+        var decision = RuleEngine.Evaluate(output,
+        [new InspectionRule
+        {
+            RuleId = "duration",
+            Kind = RuleKind.EventDurationThreshold,
+            ClassId = "blocked",
+            DurationMs = 100,
+        }]);
+
+        Assert.Equal(DecisionStatus.ReviewRequired, decision.Status);
+    }
+
+    [Fact]
     public void CounterState_Accumulates_Events()
     {
         var state = new CounterState("c1");
@@ -230,5 +291,38 @@ public sealed class DomainTests
         service.ApplyOutput(output);
         Assert.Equal(2, service.State.AcceptedTotal);
         Assert.Equal(2, service.State.CurrentTotal);
+    }
+
+    // ---- CNT-L-014 事件重放恢复 ----
+
+    [Fact]
+    public void RestoreFrom_Replays_CrossedLine_Corrected_Reset()
+    {
+        var service = new CountingService("c1");
+        service.RestoreFrom(
+        [
+            new CountingEvent { EventId = "e1", CounterId = "c1", Type = CountingEventType.CrossedLine, Direction = "forward", Delta = 1 },
+            new CountingEvent { EventId = "e2", CounterId = "c1", Type = CountingEventType.CrossedLine, Direction = "forward", Delta = 1 },
+            new CountingEvent { EventId = "c1", CounterId = "c1", Type = CountingEventType.Corrected, Delta = 1 },
+            new CountingEvent { EventId = "e3", CounterId = "c1", Type = CountingEventType.CrossedLine, Direction = "reverse", Delta = 1 },
+        ]);
+        Assert.Equal(4, service.State.CurrentTotal);
+        Assert.Equal(2, service.State.ForwardTotal);
+        Assert.Equal(1, service.State.ReverseTotal);
+        Assert.Equal(1, service.State.CorrectedTotal);
+
+        // 重放含 CounterReset 的完整历史：reset 后的清零语义天然正确
+        var replay = new CountingService("c1");
+        replay.RestoreFrom(
+        [
+            new CountingEvent { EventId = "e1", CounterId = "c1", Type = CountingEventType.CrossedLine, Direction = "forward", Delta = 1 },
+            new CountingEvent { EventId = "e2", CounterId = "c1", Type = CountingEventType.CrossedLine, Direction = "reverse", Delta = 1 },
+            new CountingEvent { EventId = "r1", CounterId = "c1", Type = CountingEventType.CounterReset },
+            new CountingEvent { EventId = "e3", CounterId = "c1", Type = CountingEventType.CrossedLine, Direction = "forward", Delta = 1 },
+        ]);
+        Assert.Equal(1, replay.State.CurrentTotal);
+        Assert.Equal(1, replay.State.ForwardTotal); // reset 清零后重新累计
+        Assert.Equal(0, replay.State.ReverseTotal);
+        Assert.Equal(0, replay.State.CorrectedTotal);
     }
 }

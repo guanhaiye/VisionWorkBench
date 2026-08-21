@@ -23,9 +23,18 @@ public sealed record NormalizedPoint
     public double Y { get; init; }
 }
 
+/// <summary>归一化线段（检测线原语，LineCrossing 模式）。</summary>
+public sealed record NormalizedLine
+{
+    public required NormalizedPoint A { get; init; }
+    public required NormalizedPoint B { get; init; }
+}
+
 /// <summary>分割结果（Segmentation 输出原语）。首版以轮廓点集表达，掩膜文件路径可选。</summary>
 public sealed record SegmentationResult
 {
+    /// <summary>instance = 每个实例独立掩膜；semantic = 按类别合并后的区域。</summary>
+    public string Mode { get; init; } = "instance";
     public string ClassId { get; init; } = "";
     public double Confidence { get; init; }
     public IReadOnlyList<IReadOnlyList<NormalizedPoint>> Contours { get; init; } = [];

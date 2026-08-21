@@ -1,0 +1,50 @@
+<UserControl x:Class="VisionWorkbench.App.ProjectStationsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="8">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <DockPanel Grid.Column="0" Margin="0,0,8,0">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+                <Button Content="新建项目" Click="NewProject_Click" />
+                <Button Content="刷新" Click="Refresh_Click" Margin="6,0,0,0" />
+            </StackPanel>
+            <ListBox x:Name="ProjectList" DisplayMemberPath="Name" SelectionChanged="ProjectList_SelectionChanged" />
+        </DockPanel>
+        <ScrollViewer Grid.Column="1">
+            <StackPanel>
+                <GroupBox Header="项目">
+                    <StackPanel>
+                        <TextBlock Text="项目编号（对外稳定）" />
+                        <TextBox x:Name="ProjectCodeText" MaxLength="64" />
+                        <TextBlock Text="项目名称" Margin="0,6,0,0" />
+                        <TextBox x:Name="ProjectNameText" />
+                        <TextBlock Text="说明" Margin="0,6,0,0" />
+                        <TextBox x:Name="ProjectDescriptionText" />
+                        <Button Content="保存项目" Click="SaveProject_Click" Width="100" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                    </StackPanel>
+                </GroupBox>
+                <GroupBox Header="工位（项目内 StationCode 不区分大小写唯一）" Margin="0,10,0,0">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="新建工位" Click="NewStation_Click" />
+                            <Button Content="归档/删除" Click="ArchiveStation_Click" Margin="6,0,0,0" />
+                        </StackPanel>
+                        <ListBox x:Name="StationList" DisplayMemberPath="Name" SelectionChanged="StationList_SelectionChanged" Margin="0,6,0,0" />
+                        <TextBlock Text="工位编号" Margin="0,8,0,0" />
+                        <TextBox x:Name="StationCodeText" MaxLength="64" />
+                        <TextBlock Text="工位名称" Margin="0,6,0,0" />
+                        <TextBox x:Name="StationNameText" />
+                        <CheckBox x:Name="StationEnabledCheck" Content="启用" IsChecked="True" Margin="0,6,0,0" />
+                        <TextBlock Text="绑定任务 ID（可选）" Margin="0,6,0,0" />
+                        <TextBox x:Name="StationTaskIdText" />
+                        <Button Content="保存工位" Click="SaveStation_Click" Width="100" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                    </StackPanel>
+                </GroupBox>
+                <TextBlock x:Name="HintText" Foreground="Green" Margin="0,10,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

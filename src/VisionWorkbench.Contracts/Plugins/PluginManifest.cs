@@ -50,10 +50,16 @@ public sealed record PluginManifest
     public IReadOnlyList<string> ExecutionProviders { get; init; } = ["cpu"];
     public string? SettingsSchema { get; init; }
 
+    /// <summary>可选的相对文件 SHA-256 清单，供插件启用前完整性校验（SEC-002）。</summary>
+    public IReadOnlyDictionary<string, string> FileHashes { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>清单静态校验（PLG-002 / PLG-003）。返回错误列表；空列表表示通过。</summary>
     public IReadOnlyList<string> Validate()
     {
         var errors = new List<string>();
+        var runtime = Runtime ?? new PluginRuntime();
+        var runtimeType = runtime.Type ?? "";
         if (ManifestVersion != "1.0")
         {
             errors.Add($"manifestVersion 必须为 1.0，当前为 “{ManifestVersion}”");
@@ -80,11 +86,50 @@ public sealed record PluginManifest
         {
             errors.Add("runtime.type 不能为空");
         }
-        else if (Runtime.Type == "python" && string.IsNullOrWhiteSpace(Runtime.Entry))
+        else if (runtimeType.Equals("python", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(runtime.Entry))
         {
             errors.Add("python 类型插件必须提供 runtime.entry");
         }
+        else if (!runtimeType.Equals("python", StringComparison.OrdinalIgnoreCase)
+            && !runtimeType.Equals("executable", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"runtime.type 不支持: {Runtime.Type}（仅支持 python/executable）");
+        }
+        if (runtimeType.Equals("executable", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(runtime.Executable))
+        {
+            errors.Add("executable 类型插件必须提供 runtime.executable");
+        }
+        ValidateRelativePath(runtime.Entry, "runtime.entry", errors);
+        ValidateRelativePath(runtime.Executable, "runtime.executable", errors);
+        ValidateRelativePath(SettingsSchema, "settingsSchema", errors);
+        foreach (var (path, hash) in FileHashes ?? new Dictionary<string, string>())
+        {
+            ValidateRelativePath(path, $"hashes.{path}", errors);
+            if (!IsSha256(hash))
+            {
+                errors.Add($"文件哈希必须是 64 位十六进制 SHA-256: {path}（SEC-002）");
+            }
+        }
         return errors;
+    }
+
+    private static bool IsSha256(string? value) =>
+        value?.Length == 64 && value.All(Uri.IsHexDigit);
+
+    private static void ValidateRelativePath(string? value, string name, ICollection<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+        if (Path.IsPathRooted(value)
+            || value.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment == ".."))
+        {
+            errors.Add($"{name} 必须是插件目录内的相对路径（SEC-001）");
+        }
     }
 
     public static PluginManifest? TryParse(string json)

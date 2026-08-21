@@ -17,6 +17,7 @@
             <Button x:Name="SingleButton" Content="单次检测" Click="Single_Click" IsEnabled="False" />
             <Button x:Name="StopButton" Content="结束批次" Click="Stop_Click" IsEnabled="False" />
             <Button x:Name="AdjustButton" Content="人工修正" Click="Adjust_Click" IsEnabled="False" />
+            <Button x:Name="ResetCountButton" Content="清零" Click="ResetCount_Click" IsEnabled="False" />
         </DockPanel>
 
         <Grid Grid.Row="1">
@@ -53,7 +54,10 @@
                 </GroupBox>
                 <GroupBox Header="累计">
                     <StackPanel>
+                        <TextBlock x:Name="VisibleText" Text="当前可见: 0" Margin="0,2" />
                         <TextBlock x:Name="TotalText" Text="累计: 0" FontSize="22" Margin="0,4" />
+                        <TextBlock x:Name="ForwardText" Text="正向: 0" Margin="0,2" />
+                        <TextBlock x:Name="ReverseText" Text="反向: 0" Margin="0,2" />
                         <TextBlock x:Name="BatchText" Text="批次: —" Margin="0,2" />
                         <TextBlock x:Name="RecordStatsText" Text="OK 0 / NG 0 / 待确认 0" Margin="0,2" />
                     </StackPanel>

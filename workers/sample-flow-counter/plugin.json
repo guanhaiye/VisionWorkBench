@@ -1,0 +1,28 @@
+{
+  "manifestVersion": "1.0",
+  "id": "com.vision.sample-flow-counter",
+  "name": "流水线计数（动态去重/跨线）",
+  "version": "1.0.0",
+  "protocolVersion": "1.0",
+  "minimumHostVersion": "0.1.0",
+  "description": "有状态计数内核：IoU 贪心多目标跟踪 + 动态去重累计（Appeared）与检测线跨线计数（CrossedLine，滞回区防抖）。检测层复用 sample-counter 自适应阈值。",
+  "author": "VisionWorkbench",
+  "runtime": {
+    "type": "python",
+    "executable": "runtime/python.exe",
+    "entry": "worker.py"
+  },
+  "capabilities": {
+    "inputModes": ["frame-stream"],
+    "outputs": ["detection", "tracking", "counting", "events"],
+    "stateful": true,
+    "realtime": true
+  },
+  "streaming": {
+    "preferredFps": 10,
+    "queuePolicy": "bounded",
+    "maximumQueueLength": 5
+  },
+  "executionProviders": ["cpu"],
+  "settingsSchema": "settings.schema.json"
+}

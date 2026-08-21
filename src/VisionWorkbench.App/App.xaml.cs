@@ -18,6 +18,14 @@ public partial class App : System.Windows.Application
         // 优雅退出：算法 Worker 全部关闭（PLG-011/STB-004）
         try
         {
+            AppServices.Instance.StationRuns.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception)
+        {
+            // 退出路径尽力释放各工位资源
+        }
+        try
+        {
             AppServices.Instance.AlgorithmManager.ShutdownAllAsync().GetAwaiter().GetResult();
         }
         catch (Exception)

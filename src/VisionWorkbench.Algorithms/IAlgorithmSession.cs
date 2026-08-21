@@ -71,6 +71,12 @@ public interface IAlgorithmSession : IAsyncDisposable
 
     Task<AlgorithmOutput> SubmitAsync(AlgorithmInput input, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// 发送协议命令（如 counter_command reset，CNT-L-012）。
+    /// 会话不活跃时抛 InvalidOperationException，由调用方决定是否容忍。
+    /// </summary>
+    Task SendCommandAsync(string messageType, object payload, CancellationToken cancellationToken);
+
     Task FlushAsync(CancellationToken cancellationToken);
     Task StopAsync(CancellationToken cancellationToken);
 

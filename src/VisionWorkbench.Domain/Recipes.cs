@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace VisionWorkbench.Domain;
 
-/// <summary>规则种类（文档 §18）。v1 落地前六种，后四种占位。</summary>
+/// <summary>规则种类（文档 §18）。</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum RuleKind
 {
@@ -24,7 +24,7 @@ public enum RuleKind
     /// <summary>置信度过低转人工确认（RUL-005）。</summary>
     LowConfidence,
 
-    // ---- 以下为文档 §18 列出、v1 未实现判定逻辑的规则（占位） ----
+    // ---- 区域、缺陷和行为规则 ----
     RegionMustHaveTarget,
     RegionForbiddenTarget,
     DefectSeverityThreshold,
@@ -52,6 +52,15 @@ public sealed record InspectionRule
 
     /// <summary>失败时是否降级为人工确认而不是 NG。</summary>
     public bool DowngradeToReview { get; init; }
+
+    /// <summary>严重度或面积阈值。严重度使用 1/2/3 对应 info/warning/critical。</summary>
+    public double Threshold { get; init; }
+
+    /// <summary>事件持续时间阈值（毫秒）。</summary>
+    public double DurationMs { get; init; }
+
+    /// <summary>可选区域/事件类型标识；兼容旧配置时为空表示全部。</summary>
+    public string? RegionId { get; init; }
 }
 
 /// <summary>ROI 边界策略（文档 §16.2，CNT-S-006/007）。</summary>
@@ -68,9 +77,36 @@ public enum RoiBoundaryPolicy
     AnyOverlap,
 }
 
+/// <summary>计数模式（文档 §16.2 快照 / §16.3 动态去重 / §16.4 跨线）。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum CountingMode
+{
+    /// <summary>快照计数：逐帧独立检测，无跟踪状态。</summary>
+    Snapshot,
+
+    /// <summary>动态去重：目标跟踪确认后累计一次（UniqueTracking）。</summary>
+    UniqueTracking,
+
+    /// <summary>跨线计数：穿过检测线累计，含正反向（LineCrossing）。</summary>
+    LineCrossing,
+}
+
+/// <summary>检测线配置（LineCrossing 模式，归一化坐标）。</summary>
+public sealed record CountingLineConfig
+{
+    public required Contracts.Results.NormalizedPoint A { get; init; }
+    public required Contracts.Results.NormalizedPoint B { get; init; }
+
+    /// <summary>滞回带半宽（归一化，带内抖动不计，CNT-L-003）。</summary>
+    public double Hysteresis { get; init; } = 0.02;
+}
+
 /// <summary>检测配方 = 任务配置的领域模型（持久化为 JSON 列）。</summary>
 public sealed record Recipe
 {
+    /// <summary>工位编号。项目内唯一，并随检测结果一同输出给外部设备。</summary>
+    public string StationCode { get; init; } = "";
+
     public required string Name { get; init; }
     public string Description { get; init; } = "";
 
@@ -87,6 +123,12 @@ public sealed record Recipe
     public Contracts.Results.NormalizedRect? Roi { get; init; }
 
     public RoiBoundaryPolicy RoiPolicy { get; init; } = RoiBoundaryPolicy.CenterInside;
+
+    /// <summary>计数模式：流水模式（Unique/Line）无 OK/NG 判定，允许零规则。</summary>
+    public CountingMode CountingMode { get; init; } = CountingMode.Snapshot;
+
+    /// <summary>检测线（LineCrossing 模式）；null = 用插件默认竖直中线。</summary>
+    public CountingLineConfig? CountingLine { get; init; }
 
     public IReadOnlyList<InspectionRule> Rules { get; init; } = [];
 }

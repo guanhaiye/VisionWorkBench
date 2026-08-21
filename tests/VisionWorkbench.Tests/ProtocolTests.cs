@@ -1,6 +1,8 @@
 using System.Text.Json;
 using VisionWorkbench.Contracts.Protocol;
 using VisionWorkbench.Contracts.Plugins;
+using VisionWorkbench.Infrastructure.Plugins;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace VisionWorkbench.Tests;
@@ -19,7 +21,8 @@ public sealed class ProtocolTests
         Assert.Contains("\"protocolVersion\"", json);
 
         var parsed = ProtocolMessage.Parse(json);
-        Assert.Equal(MessageType.Submit, parsed.Type);
+        Assert.NotNull(parsed);
+        Assert.Equal(MessageType.Submit, parsed!.Type);
         Assert.Equal("m1", parsed.MessageId);
         Assert.Equal("c1", parsed.CorrelationId);
     }
@@ -32,7 +35,8 @@ public sealed class ProtocolTests
             {"type":"hello","messageId":"m1","payload":{"pluginId":"p","workerVersion":"1","protocolVersion":"1.0","futureField":{"nested":true}},"extraTop":123}
             """;
         var msg = ProtocolMessage.Parse(json);
-        var hello = ProtocolMessage.DeserializePayload<HelloPayload>(msg.Payload);
+        Assert.NotNull(msg);
+        var hello = ProtocolMessage.DeserializePayload<HelloPayload>(msg!.Payload);
         Assert.NotNull(hello);
         Assert.Equal("p", hello!.PluginId);
     }
@@ -76,6 +80,57 @@ public sealed class ProtocolTests
             Runtime = new PluginRuntime { Type = "python", Entry = "worker.py" },
         };
         Assert.Contains(manifest.Validate(), e => e.Contains("不兼容"));
+    }
+
+    [Fact]
+    public void Manifest_Runtime_Path_Traversal_Is_Rejected()
+    {
+        var manifest = new PluginManifest
+        {
+            ManifestVersion = "1.0",
+            Id = "x",
+            Name = "x",
+            Version = "1",
+            ProtocolVersion = "1.0",
+            Runtime = new PluginRuntime { Type = "python", Entry = "../worker.py" },
+        };
+
+        Assert.Contains(manifest.Validate(), e => e.Contains("SEC-001"));
+    }
+
+    [Fact]
+    public void Manifest_Invalid_File_Hash_Is_Rejected()
+    {
+        var manifest = new PluginManifest
+        {
+            ManifestVersion = "1.0",
+            Id = "x",
+            Name = "x",
+            Version = "1",
+            ProtocolVersion = "1.0",
+            Runtime = new PluginRuntime { Type = "python", Entry = "worker.py" },
+            FileHashes = new Dictionary<string, string> { ["worker.py"] = "not-a-sha256" },
+        };
+
+        Assert.Contains(manifest.Validate(), e => e.Contains("SEC-002"));
+    }
+
+    [Fact]
+    public void Scanner_Reports_Missing_Manifest_Directory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"vw-plugins-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, "broken-plugin"));
+        try
+        {
+            var plugins = new PluginScanner(NullLogger.Instance).Scan(root);
+            var broken = Assert.Single(plugins);
+            Assert.Equal(PluginStatus.InvalidManifest, broken.Status);
+            Assert.Contains(broken.Errors, e => e.Contains("PLG-002"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

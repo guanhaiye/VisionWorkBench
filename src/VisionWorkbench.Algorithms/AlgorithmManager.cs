@@ -132,7 +132,12 @@ public sealed class AlgorithmManager
 
         // python 类型
         var entry = Path.Combine(pluginDirectory, manifest.Runtime.Entry ?? "worker.py");
-        var python = _options.PythonExecutable;
+        // 插件目录内的独立虚拟环境优先，允许 YOLO11 等重型插件携带自己的运行时；
+        // 没有插件专属环境时再沿用宿主开发环境或内嵌 runtime。
+        var pluginVenv = OperatingSystem.IsWindows()
+            ? Path.Combine(pluginDirectory, ".venv", "Scripts", "python.exe")
+            : Path.Combine(pluginDirectory, ".venv", "bin", "python");
+        var python = File.Exists(pluginVenv) ? pluginVenv : _options.PythonExecutable;
         if (string.IsNullOrWhiteSpace(python))
         {
             var bundled = Path.Combine(pluginDirectory, "runtime", "python.exe");

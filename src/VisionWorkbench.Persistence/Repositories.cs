@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
+using System.Text;
 
 namespace VisionWorkbench.Persistence;
 
@@ -10,12 +12,145 @@ public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Total, int PageI
 
 /// <summary>历史记录查询条件（历史页筛选，文档 §8）。</summary>
 public sealed record RecordQuery(
+    string? ProjectId = null,
     long? TaskId = null,
+    string? StationCode = null,
     long? BatchId = null,
     string? Status = null,
     DateTime? From = null,
     DateTime? To = null,
-    string? Keyword = null);
+    string? Keyword = null,
+    string? ModelVersion = null);
+
+/// <summary>项目与工位仓储（STA-001~014）。</summary>
+public sealed class ProjectStationRepository(IDbContextFactory<VisionDbContext> factory)
+{
+    public async Task<List<ProjectEntity>> ListProjectsAsync(CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        return await db.Projects.AsNoTracking().OrderBy(p => p.ProjectCode).ToListAsync(ct);
+    }
+
+    public async Task<ProjectEntity> SaveProjectAsync(ProjectEntity project, CancellationToken ct = default)
+    {
+        var code = project.ProjectCode.Trim();
+        if (code.Length is 0 or > 64)
+        {
+            throw new ArgumentException("项目编号不能为空且不能超过 64 个字符");
+        }
+        if (string.IsNullOrWhiteSpace(project.Name))
+        {
+            throw new ArgumentException("项目名称不能为空");
+        }
+        project.ProjectCode = code;
+        project.UpdatedAt = DateTime.UtcNow;
+        await using var db = factory.CreateDbContext();
+        if (project.Id == 0)
+        {
+            project.CreatedAt = DateTime.UtcNow;
+            db.Projects.Add(project);
+        }
+        else
+        {
+            var current = await db.Projects.FirstOrDefaultAsync(p => p.Id == project.Id, ct)
+                ?? throw new InvalidOperationException($"项目不存在: {project.Id}");
+            current.ProjectCode = project.ProjectCode;
+            current.Name = project.Name;
+            current.Description = project.Description;
+            current.UpdatedAt = project.UpdatedAt;
+        }
+        await db.SaveChangesAsync(ct);
+        return project;
+    }
+
+    public async Task<List<StationEntity>> ListStationsAsync(long projectId, bool includeArchived = false,
+        CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var query = db.Stations.AsNoTracking().Where(s => s.ProjectId == projectId);
+        if (!includeArchived)
+        {
+            query = query.Where(s => !s.IsArchived);
+        }
+        return await query.OrderBy(s => s.StationCode).ToListAsync(ct);
+    }
+
+    public async Task<StationEntity> SaveStationAsync(StationEntity station, CancellationToken ct = default)
+    {
+        var code = station.StationCode.Trim();
+        if (code.Length is 0 or > 64)
+        {
+            throw new ArgumentException("工位编号不能为空且不能超过 64 个字符（STA-003）");
+        }
+        if (string.IsNullOrWhiteSpace(station.Name))
+        {
+            throw new ArgumentException("工位名称不能为空");
+        }
+        station.StationCode = code;
+        station.UpdatedAt = DateTime.UtcNow;
+        await using var db = factory.CreateDbContext();
+        if (!await db.Projects.AnyAsync(p => p.Id == station.ProjectId, ct))
+        {
+            throw new InvalidOperationException("所属项目不存在");
+        }
+        var duplicate = await db.Stations.AnyAsync(s => s.ProjectId == station.ProjectId
+            && s.Id != station.Id && s.StationCode.ToLower() == code.ToLower(), ct);
+        if (duplicate)
+        {
+            throw new InvalidOperationException($"项目内工位编号已存在: {code}（STA-003）");
+        }
+        if (station.Id == 0)
+        {
+            station.CreatedAt = DateTime.UtcNow;
+            db.Stations.Add(station);
+        }
+        else
+        {
+            var current = await db.Stations.FirstOrDefaultAsync(s => s.Id == station.Id, ct)
+                ?? throw new InvalidOperationException($"工位不存在: {station.Id}");
+            if (current.IsArchived)
+            {
+                throw new InvalidOperationException("已归档工位不能直接编辑");
+            }
+            current.ProjectId = station.ProjectId;
+            current.StationCode = station.StationCode;
+            current.Name = station.Name;
+            current.Enabled = station.Enabled;
+            current.TaskId = station.TaskId;
+            current.CameraProviderId = station.CameraProviderId;
+            current.CameraDeviceId = station.CameraDeviceId;
+            current.UpdatedAt = station.UpdatedAt;
+        }
+        await db.SaveChangesAsync(ct);
+        return station;
+    }
+
+    public async Task<bool> ArchiveOrDeleteStationAsync(long stationId, CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == stationId, ct);
+        if (station is null)
+        {
+            return false;
+        }
+        var projectCode = await db.Projects.Where(p => p.Id == station.ProjectId)
+            .Select(p => p.ProjectCode).FirstOrDefaultAsync(ct);
+        var hasHistory = projectCode is not null && await db.InspectionRecords.AnyAsync(
+            r => r.ProjectId == projectCode && r.StationCode == station.StationCode, ct);
+        if (hasHistory)
+        {
+            station.IsArchived = true;
+            station.Enabled = false;
+            station.ArchivedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            db.Stations.Remove(station);
+        }
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+}
 
 /// <summary>任务（配方）仓储（CFG-004）。每次操作短生命周期 Context（线程安全）。</summary>
 public sealed class TaskRepository(IDbContextFactory<VisionDbContext> factory)
@@ -37,6 +172,10 @@ public sealed class TaskRepository(IDbContextFactory<VisionDbContext> factory)
         if (string.IsNullOrWhiteSpace(entity.Name))
         {
             throw new ArgumentException("任务名不能为空（CFG-004）");
+        }
+        if (string.IsNullOrWhiteSpace(entity.StationCode))
+        {
+            entity.StationCode = $"ST-{(entity.Id > 0 ? entity.Id : Random.Shared.Next(1, 999999)):000}";
         }
         entity.UpdatedAt = DateTime.UtcNow;
         await using var db = factory.CreateDbContext();
@@ -65,16 +204,43 @@ public sealed class TaskRepository(IDbContextFactory<VisionDbContext> factory)
 /// <summary>批次仓储（CNT-L-012）。</summary>
 public sealed class BatchRepository(IDbContextFactory<VisionDbContext> factory)
 {
-    public async Task<BatchEntity> StartAsync(long taskId, long initialCounterValue, CancellationToken ct = default)
+    public async Task<BatchEntity?> FindRunningAsync(long taskId, string? projectId = null,
+        string? stationCode = null, CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        return await db.Batches.AsNoTracking()
+            .Where(b => b.TaskId == taskId && b.Status == "running"
+                && (projectId == null || b.ProjectId == projectId)
+                && (stationCode == null || b.StationCode == stationCode))
+            .OrderByDescending(b => b.StartedAt)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<BatchEntity> StartAsync(long taskId, long initialCounterValue,
+        string projectId = "default", string stationCode = "", CancellationToken ct = default)
     {
         var batch = new BatchEntity
         {
             TaskId = taskId,
-            BatchNumber = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss"),
+            ProjectId = string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim(),
+            StationCode = stationCode.Trim(),
+            BatchNumber = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"),
             Status = "running",
             InitialCounterValue = initialCounterValue,
         };
         await using var db = factory.CreateDbContext();
+        var task = await db.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskId, ct)
+            ?? throw new InvalidOperationException($"任务不存在: {taskId}");
+        if (string.IsNullOrWhiteSpace(batch.StationCode))
+        {
+            batch.StationCode = task.StationCode;
+        }
+        var batchNumberBase = batch.BatchNumber;
+        var suffix = 1;
+        while (await db.Batches.AnyAsync(b => b.TaskId == taskId && b.BatchNumber == batch.BatchNumber, ct))
+        {
+            batch.BatchNumber = $"{batchNumberBase}-{suffix++:00}";
+        }
         db.Batches.Add(batch);
         await db.SaveChangesAsync(ct);
         return batch;
@@ -100,6 +266,65 @@ public sealed class BatchRepository(IDbContextFactory<VisionDbContext> factory)
 /// <summary>检测记录 + 事件 + 纠错仓储。</summary>
 public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
 {
+    /// <summary>导出历史记录 CSV（DAT-006）：UTF-8 BOM，兼容 Windows 表格工具和中文内容。</summary>
+    public async Task ExportCsvAsync(
+        RecordQuery query,
+        string destinationPath,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        var fullPath = Path.GetFullPath(destinationPath);
+        var parent = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+
+        await using var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
+            FileShare.Read, bufferSize: 64 * 1024, useAsync: true);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        await writer.WriteLineAsync(string.Join(",", new[]
+        {
+            "Id", "ProjectId", "StationCode", "TaskId", "BatchId", "RunType", "SourceRecordId", "StartedAt", "CompletedAt", "Status",
+            "AlgorithmElapsedMs", "TotalElapsedMs", "PluginVersion", "ModelVersion", "WasCorrected",
+        }));
+
+        var pageIndex = 0;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var page = await QueryAsync(query, pageIndex, 500, ct);
+            foreach (var record in page.Items)
+            {
+                await writer.WriteLineAsync(string.Join(",", new[]
+                {
+                    Csv(record.Id),
+                    Csv(record.ProjectId),
+                    Csv(record.StationCode),
+                    Csv(record.TaskId),
+                    Csv(record.BatchId),
+                    Csv(record.RunType),
+                    Csv(record.SourceRecordId),
+                    Csv(record.StartedAt.ToString("O", CultureInfo.InvariantCulture)),
+                    Csv(record.CompletedAt?.ToString("O", CultureInfo.InvariantCulture)),
+                    Csv(record.Status),
+                    Csv(record.AlgorithmElapsedMs.ToString(CultureInfo.InvariantCulture)),
+                    Csv(record.TotalElapsedMs.ToString(CultureInfo.InvariantCulture)),
+                    Csv(record.PluginVersion),
+                    Csv(record.ModelVersion),
+                    Csv(record.WasCorrected),
+                }));
+            }
+            if (page.Items.Count == 0 || pageIndex + 1 >= page.TotalPages)
+            {
+                break;
+            }
+            pageIndex++;
+        }
+        await writer.FlushAsync(ct);
+    }
+
     public async Task<InspectionRecordEntity> AddAsync(
         InspectionRecordEntity record,
         IReadOnlyList<Contracts.Results.CountingEvent>? countingEvents = null,
@@ -107,6 +332,17 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
         CancellationToken ct = default)
     {
         await using var db = factory.CreateDbContext();
+        if (string.IsNullOrWhiteSpace(record.ProjectId))
+        {
+            record.ProjectId = "default";
+        }
+        if (string.IsNullOrWhiteSpace(record.StationCode))
+        {
+            record.StationCode = await db.Tasks.AsNoTracking()
+                .Where(t => t.Id == record.TaskId)
+                .Select(t => t.StationCode)
+                .FirstOrDefaultAsync(ct) ?? $"ST-{record.TaskId:000}";
+        }
         db.InspectionRecords.Add(record);
         if (countingEvents is { Count: > 0 })
         {
@@ -161,9 +397,17 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
         pageSize = Math.Clamp(pageSize, 1, 500);
         await using var db = factory.CreateDbContext();
         var q = db.InspectionRecords.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(query.ProjectId))
+        {
+            q = q.Where(r => r.ProjectId == query.ProjectId);
+        }
         if (query.TaskId is { } taskId)
         {
             q = q.Where(r => r.TaskId == taskId);
+        }
+        if (!string.IsNullOrWhiteSpace(query.StationCode))
+        {
+            q = q.Where(r => r.StationCode == query.StationCode);
         }
         if (query.BatchId is { } batchId)
         {
@@ -172,6 +416,10 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
         if (!string.IsNullOrEmpty(query.Status))
         {
             q = q.Where(r => r.Status == query.Status);
+        }
+        if (!string.IsNullOrWhiteSpace(query.ModelVersion))
+        {
+            q = q.Where(r => r.ModelVersion == query.ModelVersion);
         }
         if (query.From is { } from)
         {
@@ -229,6 +477,14 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
             .Where(c => c.RecordId == recordId)
             .OrderBy(c => c.CorrectedAt)
             .ToListAsync(ct);
+    }
+
+    private static string Csv(object? value)
+    {
+        var text = Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
+        return text.IndexOfAny([',', '"', '\r', '\n']) >= 0
+            ? $"\"{text.Replace("\"", "\"\"", StringComparison.Ordinal)}\""
+            : text;
     }
 
     public async Task<List<CountingEventEntity>> ListCountingEventsAsync(

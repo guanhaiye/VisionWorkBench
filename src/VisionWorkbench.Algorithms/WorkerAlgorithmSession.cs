@@ -108,6 +108,17 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
         }
     }
 
+    public async Task SendCommandAsync(string messageType, object payload, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(messageType))
+        {
+            throw new ArgumentException("消息类型不能为空", nameof(messageType));
+        }
+        EnsureReady();
+        // worker 即时 ack，无推理耗时 → 不设超时
+        await _process.RequestAsync(messageType, payload, null, cancellationToken);
+    }
+
     public async Task FlushAsync(CancellationToken cancellationToken)
     {
         if (State != AlgorithmSessionState.Running)

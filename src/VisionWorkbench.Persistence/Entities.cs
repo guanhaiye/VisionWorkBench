@@ -2,11 +2,61 @@ using System.ComponentModel.DataAnnotations;
 
 namespace VisionWorkbench.Persistence;
 
+/// <summary>项目实体，承载一个或多个独立工位。</summary>
+public sealed class ProjectEntity
+{
+    [Key]
+    public long Id { get; set; }
+
+    [Required, MaxLength(64)]
+    public string ProjectCode { get; set; } = "";
+
+    [Required, MaxLength(200)]
+    public string Name { get; set; } = "";
+
+    public string? Description { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>工位实体。StationCode 是项目内稳定的业务编号，不能用名称或自增 ID 替代。</summary>
+public sealed class StationEntity
+{
+    [Key]
+    public long Id { get; set; }
+
+    public long ProjectId { get; set; }
+    public ProjectEntity? Project { get; set; }
+
+    [Required, MaxLength(64)]
+    public string StationCode { get; set; } = "";
+
+    [Required, MaxLength(200)]
+    public string Name { get; set; } = "";
+
+    public bool Enabled { get; set; } = true;
+    public bool IsArchived { get; set; }
+    public long? TaskId { get; set; }
+
+    [MaxLength(64)]
+    public string? CameraProviderId { get; set; }
+
+    [MaxLength(512)]
+    public string? CameraDeviceId { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? ArchivedAt { get; set; }
+}
+
 /// <summary>检测任务（配方）持久化实体，表 Tasks（文档 §20.1）。</summary>
 public sealed class TaskEntity
 {
     [Key]
     public long Id { get; set; }
+
+    [Required, MaxLength(64)]
+    public string StationCode { get; set; } = "";
 
     [Required, MaxLength(200)]
     public string Name { get; set; } = "";
@@ -50,6 +100,12 @@ public sealed class BatchEntity
     public long TaskId { get; set; }
     public TaskEntity? Task { get; set; }
 
+    [Required, MaxLength(64)]
+    public string ProjectId { get; set; } = "default";
+
+    [Required, MaxLength(64)]
+    public string StationCode { get; set; } = "";
+
     /// <summary>人类可读批次号：yyyyMMdd-HHmmss。</summary>
     [Required, MaxLength(32)]
     public string BatchNumber { get; set; } = "";
@@ -71,11 +127,25 @@ public sealed class InspectionRecordEntity
     [Key]
     public long Id { get; set; }
 
+    /// <summary>检测发生时的工位编号快照，工位配置后续变化不影响历史结果归属。</summary>
+    [Required, MaxLength(64)]
+    public string StationCode { get; set; } = "";
+
+    /// <summary>检测发生时的项目业务编号快照。</summary>
+    [Required, MaxLength(64)]
+    public string ProjectId { get; set; } = "default";
+
     public long TaskId { get; set; }
     public TaskEntity? Task { get; set; }
 
     public long? BatchId { get; set; }
     public BatchEntity? Batch { get; set; }
+
+    /// <summary>重新推理来源记录；重新运行永远新增记录，不覆盖旧结果。</summary>
+    public long? SourceRecordId { get; set; }
+
+    [Required, MaxLength(24)]
+    public string RunType { get; set; } = "production";
 
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }

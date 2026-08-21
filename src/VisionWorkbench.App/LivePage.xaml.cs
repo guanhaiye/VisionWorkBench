@@ -28,6 +28,8 @@ public partial class LivePage : UserControl
     private double _algoFps;
     private Recipe? _activeRecipe;
     private AlgorithmOutput? _lastOutput;
+    private int _reconnectInProgress;
+    private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
 
     public LivePage()
     {
@@ -44,7 +46,7 @@ public partial class LivePage : UserControl
         try
         {
             var tasks = await AppServices.Instance.Recipes.ListAsync();
-            TaskCombo.ItemsSource = tasks.Select(t => new TaskItem(t.Entity.Id, t.Recipe.Name)).ToArray();
+            TaskCombo.ItemsSource = tasks.Select(t => new TaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name)).ToArray();
             if (TaskCombo.Items.Count > 0)
             {
                 TaskCombo.SelectedIndex = 0;
@@ -77,23 +79,16 @@ public partial class LivePage : UserControl
         try
         {
             // 1. 相机会话（虚拟源参数：间隔 200ms）
-            var descriptor = new CameraDescriptor
-            {
-                ProviderId = recipe.CameraProviderId,
-                DeviceId = recipe.CameraDeviceId,
-                DisplayName = recipe.CameraDeviceId,
-            };
-            _cameraSession = await svcs.Cameras.OpenSessionAsync(
-                descriptor, new CameraOpenOptions { FrameIntervalMs = 200, Loop = false }, CancellationToken.None);
-            await _cameraSession.OpenAsync(new CameraOpenOptions { FrameIntervalMs = 200 }, CancellationToken.None);
+            _cameraSession = await OpenCameraAsync(recipe, CancellationToken.None);
 
             // 2. 算法会话
             var algorithm = await svcs.AlgorithmManager.CreateSessionAsync(recipe.PluginId, CancellationToken.None);
 
-            // 3. 批次 + 检测运行时
-            var batch = await svcs.BatchService.StartAsync(entity.Id, 0);
+            // 3. 检测运行时 + 批次：优先恢复上次异常退出遗留的 running 批次
             _run = new DetectionRunService(svcs.Records, svcs.TempImages,
-                svcs.LoggerFactory.CreateLogger<DetectionRunService>(), $"task-{entity.Id}");
+                svcs.LoggerFactory.CreateLogger<DetectionRunService>(), $"task-{entity.Id}", svcs.ResultPublisher);
+            var batch = await svcs.BatchService.ResumeOrStartAsync(
+                entity.Id, _run.Counting, svcs.Records);
             _run.PreviewReceived += (_, frame) => RenderPreview(frame);
             _run.RecordCompleted += OnRecordCompleted;
             _run.Faulted += OnRunFaulted;
@@ -101,6 +96,10 @@ public partial class LivePage : UserControl
             await _run.StartAsync(recipe, entity.Id, _cameraSession, algorithm, batch.Id);
 
             _okCount = _ngCount = _reviewCount = 0;
+            VisibleText.Text = "当前可见: 0";
+            TotalText.Text = "累计: 0";
+            ForwardText.Text = "正向: 0";
+            ReverseText.Text = "反向: 0";
             BatchText.Text = $"批次: {batch.BatchNumber}";
             SetButtons(running: true);
         }
@@ -168,6 +167,30 @@ public partial class LivePage : UserControl
         }
     }
 
+    /// <summary>计数清零（CNT-S-010 / CNT-L-012）：原因必填；流模式同步清 worker 跟踪记忆。</summary>
+    private async void ResetCount_Click(object sender, RoutedEventArgs e)
+    {
+        if (_run is null)
+        {
+            return;
+        }
+        var dialog = new CorrectionDialog("计数清零", hideDelta: true) { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+        try
+        {
+            var adjustment = await _run.ResetCountAsync(
+                dialog.Reason, AppServices.Instance.Settings.OperatorName);
+            TotalText.Text = $"累计: {adjustment.After}";
+        }
+        catch (ArgumentException ex)
+        {
+            MessageBox.Show(ex.Message, "校验失败");
+        }
+    }
+
     private async Task StopBatchAsync()
     {
         if (_run is null)
@@ -201,7 +224,7 @@ public partial class LivePage : UserControl
             await _cameraSession.DisposeAsync();
             _cameraSession = null;
         }
-        SetButtons(running: false);
+        await Dispatcher.InvokeAsync(() => SetButtons(running: false));
     }
 
     private async void OnRunFaulted(object? sender, RunFaultedEventArgs e)
@@ -209,8 +232,64 @@ public partial class LivePage : UserControl
         await Dispatcher.InvokeAsync(() =>
         {
             StatusText.Text = $"故障[{e.Source}] {e.Code}: {e.Message}";
+            if (e.Source == "camera"
+                && e.Code == CameraErrorCodes.DeviceDisconnected
+                && _run is not null
+                && _activeRecipe is not null
+                && Interlocked.Exchange(ref _reconnectInProgress, 1) == 0)
+            {
+                _ = ReconnectCameraAfterFaultAsync();
+                return;
+            }
             SetButtons(running: false);
         });
+    }
+
+    private async Task ReconnectCameraAfterFaultAsync()
+    {
+        try
+        {
+            await Dispatcher.InvokeAsync(() => StatusText.Text = "相机断线，正在自动重连…");
+            var replacement = await _run!.ReconnectCameraAsync(
+                ct => OpenCameraAsync(_activeRecipe!, ct),
+                maxAttempts: 5,
+                retryDelay: TimeSpan.FromSeconds(1));
+            if (replacement is not null)
+            {
+                _cameraSession = replacement;
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    StatusText.Text = "相机已重连，检测继续";
+                    SetButtons(running: true);
+                });
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppServices.Instance.LoggerFactory.CreateLogger<LivePage>()
+                .LogError(ex, "相机自动重连失败");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconnectInProgress, 0);
+        }
+
+        await CleanupAsync();
+    }
+
+    private async Task<ICameraSession> OpenCameraAsync(Recipe recipe, CancellationToken cancellationToken)
+    {
+        var descriptor = new CameraDescriptor
+        {
+            ProviderId = recipe.CameraProviderId,
+            DeviceId = recipe.CameraDeviceId,
+            DisplayName = recipe.CameraDeviceId,
+        };
+        var session = await AppServices.Instance.Cameras.OpenSessionAsync(
+            descriptor, _cameraOptions, cancellationToken);
+        await session.OpenAsync(_cameraOptions, cancellationToken);
+        return session;
     }
 
     // ---- 渲染回调（DetectionRunService 从相机线程调用）----
@@ -248,12 +327,16 @@ public partial class LivePage : UserControl
             };
             DecisionText.Text = text;
             DecisionText.Foreground = color;
-            SummaryText.Text = e.Decision.Summary;
+            SummaryText.Text = $"工位 {e.StationCode} · {e.Decision.Summary}";
             CountText.Text = $"数量: {e.Output.GetCount()}";
             ElapsedText.Text = $"算法耗时: {e.Output.Performance?.TotalMs ?? 0:0.#} ms";
             DetectionListText.Text = string.Join("\n", e.Output.Detections.Take(8)
                 .Select(d => $"{d.ClassName} {d.Confidence:0.00}"));
             TotalText.Text = $"累计: {e.CountAfter}";
+            VisibleText.Text = $"当前可见: {e.Output.GetCount()}";
+            var state = _run?.Counting.State;
+            ForwardText.Text = $"正向: {state?.ForwardTotal ?? 0}";
+            ReverseText.Text = $"反向: {state?.ReverseTotal ?? 0}";
             switch (e.Decision.Status)
             {
                 case DecisionStatus.Ok: _okCount++; break;
@@ -301,33 +384,107 @@ public partial class LivePage : UserControl
         var offsetX = (canvasW - drawW) / 2;
         var offsetY = (canvasH - drawH) / 2;
 
-        foreach (var detection in output.Detections)
+        // YOLO11 instance/semantic segmentation overlays.
+        foreach (var segmentation in output.Segmentations)
         {
-            var rect = new System.Windows.Rect(
-                offsetX + detection.Box.X * drawW,
-                offsetY + detection.Box.Y * drawH,
-                detection.Box.Width * drawW,
-                detection.Box.Height * drawH);
-            var box = new Rectangle
+            foreach (var contour in segmentation.Contours)
             {
-                Width = Math.Max(1, rect.Width),
-                Height = Math.Max(1, rect.Height),
-                Stroke = Brushes.Lime,
-                StrokeThickness = 1.6,
-            };
-            Canvas.SetLeft(box, rect.X);
-            Canvas.SetTop(box, rect.Y);
-            OverlayCanvas.Children.Add(box);
+                if (contour.Count < 3)
+                {
+                    continue;
+                }
+                var semantic = segmentation.Mode.Equals("semantic", StringComparison.OrdinalIgnoreCase);
+                var polygon = new Polygon
+                {
+                    Fill = semantic
+                        ? new SolidColorBrush(Color.FromArgb(48, 255, 165, 0))
+                        : new SolidColorBrush(Color.FromArgb(56, 0, 191, 255)),
+                    Stroke = semantic ? Brushes.Orange : Brushes.DeepSkyBlue,
+                    StrokeThickness = 1.2,
+                };
+                foreach (var point in contour)
+                {
+                    polygon.Points.Add(new System.Windows.Point(
+                        offsetX + point.X * drawW,
+                        offsetY + point.Y * drawH));
+                }
+                OverlayCanvas.Children.Add(polygon);
+            }
+        }
 
-            var label = new TextBlock
+        // 流水模式有轨迹输出：Track 框/ID/Trail 取代裸检测框（含丢失中的轨迹）
+        if (output.Tracks.Count > 0)
+        {
+            foreach (var track in output.Tracks)
             {
-                Text = $"{detection.ClassName} {detection.Confidence:0.00}",
-                Foreground = Brushes.Lime,
-                FontSize = 11,
-            };
-            Canvas.SetLeft(label, rect.X);
-            Canvas.SetTop(label, Math.Max(0, rect.Y - 16));
-            OverlayCanvas.Children.Add(label);
+                var rect = new System.Windows.Rect(
+                    offsetX + track.Box.X * drawW,
+                    offsetY + track.Box.Y * drawH,
+                    track.Box.Width * drawW,
+                    track.Box.Height * drawH);
+                var box = new Rectangle
+                {
+                    Width = Math.Max(1, rect.Width),
+                    Height = Math.Max(1, rect.Height),
+                    Stroke = track.TimeSinceUpdate > 0 ? Brushes.DarkCyan : Brushes.Cyan,
+                    StrokeThickness = 1.4,
+                };
+                Canvas.SetLeft(box, rect.X);
+                Canvas.SetTop(box, rect.Y);
+                OverlayCanvas.Children.Add(box);
+
+                var label = new TextBlock
+                {
+                    Text = $"#{track.TrackId}",
+                    Foreground = Brushes.Cyan,
+                    FontSize = 11,
+                };
+                Canvas.SetLeft(label, rect.X);
+                Canvas.SetTop(label, Math.Max(0, rect.Y - 16));
+                OverlayCanvas.Children.Add(label);
+
+                if (track.Trail.Count > 1)
+                {
+                    var trail = new Polyline { Stroke = Brushes.Orange, StrokeThickness = 1.4 };
+                    foreach (var p in track.Trail)
+                    {
+                        trail.Points.Add(new System.Windows.Point(
+                            offsetX + p.X * drawW, offsetY + p.Y * drawH));
+                    }
+                    OverlayCanvas.Children.Add(trail);
+                }
+            }
+        }
+        else
+        {
+            foreach (var detection in output.Detections)
+            {
+                var rect = new System.Windows.Rect(
+                    offsetX + detection.Box.X * drawW,
+                    offsetY + detection.Box.Y * drawH,
+                    detection.Box.Width * drawW,
+                    detection.Box.Height * drawH);
+                var box = new Rectangle
+                {
+                    Width = Math.Max(1, rect.Width),
+                    Height = Math.Max(1, rect.Height),
+                    Stroke = Brushes.Lime,
+                    StrokeThickness = 1.6,
+                };
+                Canvas.SetLeft(box, rect.X);
+                Canvas.SetTop(box, rect.Y);
+                OverlayCanvas.Children.Add(box);
+
+                var label = new TextBlock
+                {
+                    Text = $"{detection.ClassName} {detection.Confidence:0.00}",
+                    Foreground = Brushes.Lime,
+                    FontSize = 11,
+                };
+                Canvas.SetLeft(label, rect.X);
+                Canvas.SetTop(label, Math.Max(0, rect.Y - 16));
+                OverlayCanvas.Children.Add(label);
+            }
         }
 
         // ROI 框（配置了 ROI 时显示）
@@ -348,6 +505,53 @@ public partial class LivePage : UserControl
             Canvas.SetTop(box, roiRect.Y);
             OverlayCanvas.Children.Add(box);
         }
+
+        // 检测线（实线）+ 滞回带边界（虚线）：LineCrossing 模式；未配置时按插件默认竖直中线
+        CountingLineConfig? line = _activeRecipe?.CountingLine;
+        if (_activeRecipe?.CountingMode == CountingMode.LineCrossing)
+        {
+            line ??= new CountingLineConfig
+            {
+                A = new NormalizedPoint { X = 0.5, Y = 0.1 },
+                B = new NormalizedPoint { X = 0.5, Y = 0.9 },
+            };
+        }
+        if (line is { } cfg)
+        {
+            double Px(double nx) => offsetX + nx * drawW;
+            double Py(double ny) => offsetY + ny * drawH;
+            var main = new Line
+            {
+                X1 = Px(cfg.A.X), Y1 = Py(cfg.A.Y),
+                X2 = Px(cfg.B.X), Y2 = Py(cfg.B.Y),
+                Stroke = Brushes.Yellow, StrokeThickness = 2,
+            };
+            OverlayCanvas.Children.Add(main);
+            // 带边界 = 法向偏移 hysteresis（归一化空间法向，按轴缩放到像素）
+            var dx = cfg.B.X - cfg.A.X;
+            var dy = cfg.B.Y - cfg.A.Y;
+            var len = Math.Sqrt(dx * dx + dy * dy);
+            if (len > 1e-6 && cfg.Hysteresis > 0)
+            {
+                var nx = dy / len;
+                var ny = -dx / len;
+                foreach (var sign in new[] { 1.0, -1.0 })
+                {
+                    var edge = new Line
+                    {
+                        X1 = Px(cfg.A.X + sign * nx * cfg.Hysteresis),
+                        Y1 = Py(cfg.A.Y + sign * ny * cfg.Hysteresis),
+                        X2 = Px(cfg.B.X + sign * nx * cfg.Hysteresis),
+                        Y2 = Py(cfg.B.Y + sign * ny * cfg.Hysteresis),
+                        Stroke = Brushes.Goldenrod,
+                        StrokeThickness = 1,
+                        StrokeDashArray = [4, 3],
+                        Opacity = 0.8,
+                    };
+                    OverlayCanvas.Children.Add(edge);
+                }
+            }
+        }
     }
 
     private void UpdateStatus()
@@ -367,12 +571,13 @@ public partial class LivePage : UserControl
         SingleButton.IsEnabled = running;
         StopButton.IsEnabled = running;
         AdjustButton.IsEnabled = running;
+        ResetCountButton.IsEnabled = running;
         TaskCombo.IsEnabled = !running;
     }
 
-    private sealed record TaskItem(long Id, string Name)
+    private sealed record TaskItem(long Id, string StationCode, string TaskName)
     {
         public long Id { get; } = Id;
-        public string Name { get; } = Name;
+        public string Name { get; } = $"[{StationCode}] {TaskName}";
     }
 }

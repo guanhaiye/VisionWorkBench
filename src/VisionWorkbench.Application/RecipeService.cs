@@ -43,6 +43,10 @@ public sealed class RecipeService(TaskRepository tasks)
         {
             throw new ArgumentException("任务名不能为空（CFG-004）");
         }
+        if (recipe.StationCode.Length > 64)
+        {
+            throw new ArgumentException("工位编号不能超过 64 个字符");
+        }
         if (string.IsNullOrWhiteSpace(recipe.CameraProviderId) || string.IsNullOrWhiteSpace(recipe.CameraDeviceId))
         {
             throw new ArgumentException("必须选择相机（CFG-004）");
@@ -51,7 +55,10 @@ public sealed class RecipeService(TaskRepository tasks)
         {
             throw new ArgumentException("必须选择算法插件（CFG-004）");
         }
-        if (recipe.Rules.Count == 0)
+        ValidateGeometry(recipe);
+        ValidateSettingsJson(recipe.SettingsJson);
+        // 流水计数模式无 OK/NG 判定，允许零规则（§16.3/§16.4）
+        if (recipe.Rules.Count == 0 && recipe.CountingMode == CountingMode.Snapshot)
         {
             throw new ArgumentException("至少配置一条判定规则（CFG-004）");
         }
@@ -67,6 +74,9 @@ public sealed class RecipeService(TaskRepository tasks)
             ? await tasks.FindAsync(id, ct) ?? new TaskEntity { Id = id }
             : new TaskEntity();
         entity.Name = recipe.Name;
+        entity.StationCode = string.IsNullOrWhiteSpace(recipe.StationCode)
+            ? $"ST-{Guid.NewGuid():N}"[..11].ToUpperInvariant()
+            : recipe.StationCode.Trim();
         entity.Description = recipe.Description;
         entity.CameraProviderId = recipe.CameraProviderId;
         entity.CameraDeviceId = recipe.CameraDeviceId;
@@ -74,9 +84,19 @@ public sealed class RecipeService(TaskRepository tasks)
         entity.PluginVersion = recipe.PluginVersion;
         entity.SettingsJson = string.IsNullOrWhiteSpace(recipe.SettingsJson) ? "{}" : recipe.SettingsJson;
         entity.RulesJson = JsonSerializer.Serialize(recipe.Rules, JsonOptions);
-        entity.RegionsJson = recipe.Roi is null
-            ? null
-            : JsonSerializer.Serialize(new { recipe.Roi, Policy = recipe.RoiPolicy.ToString() }, JsonOptions);
+        // ROI / 计数模式 / 检测线 共存于 RegionsJson（可选字段，旧数据缺失回退默认）
+        var hasRegions = recipe.Roi is not null
+            || recipe.CountingLine is not null
+            || recipe.CountingMode != CountingMode.Snapshot;
+        entity.RegionsJson = hasRegions
+            ? JsonSerializer.Serialize(new
+            {
+                recipe.Roi,
+                Policy = recipe.Roi is null ? null : recipe.RoiPolicy.ToString(),
+                Mode = recipe.CountingMode.ToString(),
+                Line = recipe.CountingLine,
+            }, JsonOptions)
+            : null;
         return await tasks.SaveAsync(entity, ct);
     }
 
@@ -95,6 +115,8 @@ public sealed class RecipeService(TaskRepository tasks)
         }
         Contracts.Results.NormalizedRect? roi = null;
         var policy = RoiBoundaryPolicy.CenterInside;
+        var mode = CountingMode.Snapshot;
+        CountingLineConfig? line = null;
         if (!string.IsNullOrWhiteSpace(entity.RegionsJson))
         {
             try
@@ -105,14 +127,20 @@ public sealed class RecipeService(TaskRepository tasks)
                 {
                     policy = parsed;
                 }
+                if (doc?.Mode is { } m)
+                {
+                    mode = m; // JsonStringEnumConverter 已校验，非法值抛 JsonException 走回退
+                }
+                line = doc?.Line;
             }
             catch (JsonException)
             {
-                // 区域损坏退回整幅图
+                // 区域损坏退回整幅图 + 快照模式
             }
         }
         return new Recipe
         {
+            StationCode = string.IsNullOrWhiteSpace(entity.StationCode) ? $"ST-{entity.Id:000}" : entity.StationCode,
             Name = entity.Name,
             Description = entity.Description ?? "",
             CameraProviderId = entity.CameraProviderId,
@@ -122,10 +150,59 @@ public sealed class RecipeService(TaskRepository tasks)
             SettingsJson = entity.SettingsJson,
             Roi = roi,
             RoiPolicy = policy,
+            CountingMode = mode,
+            CountingLine = line,
             Rules = rules,
         };
     }
 
     private sealed record RegionDoc(
-        Contracts.Results.NormalizedRect? Roi, string? Policy);
+        Contracts.Results.NormalizedRect? Roi,
+        string? Policy,
+        CountingMode? Mode,
+        CountingLineConfig? Line);
+
+    private static void ValidateSettingsJson(string settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson))
+        {
+            return;
+        }
+        try
+        {
+            if (JsonDocument.Parse(settingsJson).RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new ArgumentException("插件参数必须是 JSON 对象（CFG-006）");
+            }
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException($"插件参数不是合法 JSON（CFG-006）: {ex.Message}", ex);
+        }
+    }
+
+    private static void ValidateGeometry(Recipe recipe)
+    {
+        if (recipe.Roi is { } roi && !IsValidRect(roi))
+        {
+            throw new ArgumentException("ROI 必须位于 0~1 且宽高大于 0（CFG-006）");
+        }
+        if (recipe.CountingLine is not { } line)
+        {
+            return;
+        }
+        if (!IsValidPoint(line.A) || !IsValidPoint(line.B)
+            || (Math.Abs(line.A.X - line.B.X) < 1e-9 && Math.Abs(line.A.Y - line.B.Y) < 1e-9)
+            || line.Hysteresis < 0 || line.Hysteresis > 0.2)
+        {
+            throw new ArgumentException("检测线端点必须位于 0~1、两端不能重合，滞回宽度须为 0~0.2（CFG-006）");
+        }
+    }
+
+    private static bool IsValidRect(Contracts.Results.NormalizedRect rect) =>
+        rect.X >= 0 && rect.Y >= 0 && rect.Width > 0 && rect.Height > 0
+        && rect.X + rect.Width <= 1 && rect.Y + rect.Height <= 1;
+
+    private static bool IsValidPoint(Contracts.Results.NormalizedPoint point) =>
+        point.X is >= 0 and <= 1 && point.Y is >= 0 and <= 1;
 }

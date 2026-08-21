@@ -79,7 +79,7 @@ internal sealed class UsbCameraSession(
 
     public Task OpenAsync(CameraOpenOptions options, CancellationToken cancellationToken)
     {
-        var index = int.Parse(descriptor.DeviceId);
+        var index = int.Parse(Descriptor.DeviceId);
         var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
         if (!capture.IsOpened() || !capture.Grab())
         {
@@ -172,6 +172,7 @@ internal sealed class UsbCameraSession(
         var interval = _desiredFps > 0
             ? TimeSpan.FromMilliseconds(1000.0 / _desiredFps)
             : TimeSpan.Zero;
+        var consecutiveReadFailures = 0;
 
         while (!ct.IsCancellationRequested)
         {
@@ -186,6 +187,14 @@ internal sealed class UsbCameraSession(
             }
             if (!readOk || mat.Empty())
             {
+                if (++consecutiveReadFailures >= 50)
+                {
+                    Fault(CameraErrorCodes.DeviceDisconnected,
+                        "USB 相机连续取帧失败，可能已断开或被其他程序占用", recoverable: true);
+                    _capture = null;
+                    capture.Dispose();
+                    return;
+                }
                 // DSHOW 偶发空帧，短暂退避后重试
                 try
                 {
@@ -197,6 +206,7 @@ internal sealed class UsbCameraSession(
                 }
                 continue;
             }
+            consecutiveReadFailures = 0;
             var frame = ToFrame(mat, Interlocked.Increment(ref _sequence));
             if (frame is not null)
             {

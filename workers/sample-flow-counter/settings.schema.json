@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "流水线计数参数",
+  "type": "object",
+  "properties": {
+    "countingMode": {
+      "type": "string",
+      "enum": ["unique", "line"],
+      "default": "line",
+      "title": "计数模式",
+      "description": "unique=动态去重（新目标确认后累计一次）；line=跨线计数（穿过检测线累计）"
+    },
+    "minHits": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 3,
+      "title": "确认帧数",
+      "description": "轨迹连续命中该帧数后才确认，过滤短暂误检（CNT-D-006）"
+    },
+    "maxLostFrames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 8,
+      "title": "最大丢失帧数",
+      "description": "超过该帧数未匹配的轨迹移入去重记忆（遮挡容忍，CNT-D-003）"
+    },
+    "iouThreshold": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "default": 0.3,
+      "title": "活跃轨迹 IoU 匹配阈值"
+    },
+    "lostIouThreshold": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "default": 0.05,
+      "title": "丢失轨迹 IoU 匹配阈值",
+      "description": "丢失中的轨迹用低阈值参与匹配，提升遮挡恢复能力"
+    },
+    "dedupLostFrames": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 25,
+      "title": "去重窗口（帧）",
+      "description": "轨迹移除后该窗口内原位复现视为同一目标不重复计数；超窗按新目标计（CNT-D-004 既定政策）"
+    },
+    "trailLength": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 30,
+      "title": "轨迹显示长度（帧）"
+    },
+    "line": {
+      "type": "object",
+      "title": "检测线（line 模式）",
+      "properties": {
+        "ax": { "type": "number", "minimum": 0, "maximum": 1 },
+        "ay": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bx": { "type": "number", "minimum": 0, "maximum": 1 },
+        "by": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["ax", "ay", "bx", "by"],
+      "additionalProperties": false
+    },
+    "hysteresis": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 0.2,
+      "default": 0.02,
+      "title": "滞回区半宽（归一化）",
+      "description": "检测线两侧各该宽度的带内不更新判定侧，防抖动重复计数（CNT-L-003）"
+    },
+    "farConfirmFrames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 2,
+      "title": "对侧确认帧数",
+      "description": "越过检测线后须在对侧确认区连续停留该帧数才计数，中途折返不计（CNT-L-004）"
+    },
+    "minAreaPx": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000000,
+      "default": 80,
+      "title": "最小目标面积（像素）"
+    },
+    "maxAreaPx": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "title": "最大目标面积（0 = 不限制）"
+    },
+    "thresholdBlock": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 401,
+      "default": 31,
+      "title": "自适应阈值窗口（奇数）"
+    },
+    "thresholdC": {
+      "type": "integer",
+      "minimum": -50,
+      "maximum": 50,
+      "default": -12,
+      "title": "阈值偏移"
+    },
+    "morphKernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 3,
+      "title": "形态学核大小"
+    },
+    "invert": {
+      "type": "boolean",
+      "default": false,
+      "title": "暗目标模式"
+    },
+    "classId": {
+      "type": "string",
+      "default": "object",
+      "title": "类别 ID"
+    },
+    "className": {
+      "type": "string",
+      "default": "物体",
+      "title": "类别显示名"
+    }
+  }
+}

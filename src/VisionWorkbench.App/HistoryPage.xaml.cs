@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Win32;
 using VisionWorkbench.Application;
 using VisionWorkbench.Persistence;
 
@@ -31,7 +32,7 @@ public partial class HistoryPage : UserControl
                 TaskFilter.ItemsSource = items;
                 TaskFilter.SelectedIndex = 0;
             }
-            Query();
+            await Query();
         };
     }
 
@@ -41,15 +42,51 @@ public partial class HistoryPage : UserControl
         await Query();
     }
 
+    private async void ExportCsv_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "CSV 文件 (*.csv)|*.csv|所有文件 (*.*)|*.*",
+            FileName = $"vision-history-{DateTime.Now:yyyyMMdd-HHmmss}.csv",
+            AddExtension = true,
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+        try
+        {
+            var taskId = (TaskFilter.SelectedItem as TaskFilterItem)?.Id;
+            var status = (StatusFilter.SelectedItem as ComboBoxItem)?.Content as string;
+            await AppServices.Instance.Records.ExportCsvAsync(new RecordQuery(
+                ProjectId: EmptyToNull(ProjectFilter.Text),
+                TaskId: taskId,
+                StationCode: EmptyToNull(StationFilter.Text),
+                Status: status == "全部" ? null : status,
+                From: FromDate.SelectedDate is { } from ? from.Date : null,
+                To: ToDate.SelectedDate is { } to ? to.Date.AddDays(1).AddTicks(-1) : null,
+                ModelVersion: EmptyToNull(ModelFilter.Text)),
+                dialog.FileName);
+            MessageBox.Show("CSV 导出完成", "历史记录");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"CSV 导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async Task Query()
     {
         var taskId = (TaskFilter.SelectedItem as TaskFilterItem)?.Id;
         var status = (StatusFilter.SelectedItem as ComboBoxItem)?.Content as string;
         var query = new RecordQuery(
+            ProjectId: EmptyToNull(ProjectFilter.Text),
             TaskId: taskId,
+            StationCode: EmptyToNull(StationFilter.Text),
             Status: status == "全部" ? null : status,
             From: FromDate.SelectedDate is { } d ? d.Date : null,
-            To: ToDate.SelectedDate is { } t ? t.Date.AddDays(1).AddTicks(-1) : null);
+            To: ToDate.SelectedDate is { } t ? t.Date.AddDays(1).AddTicks(-1) : null,
+            ModelVersion: EmptyToNull(ModelFilter.Text));
         _lastResult = await AppServices.Instance.Records.QueryAsync(query, _pageIndex, pageSize: 50);
         RecordsGrid.ItemsSource = _lastResult.Items;
         PageText.Text = _lastResult.TotalPages == 0
@@ -83,11 +120,13 @@ public partial class HistoryPage : UserControl
         }
         ShowImage(OriginalImage, record.OriginalImagePath);
         ShowImage(AnnotatedImage, record.AnnotatedImagePath);
-        DetailText.Text = $"记录 {record.Id} | 任务 {record.TaskId} | 批次 {record.BatchId?.ToString() ?? "—"}\n"
+        DetailText.Text = $"记录 {record.Id} | 项目 {record.ProjectId} | 工位 {record.StationCode} | 任务 {record.TaskId} | 批次 {record.BatchId?.ToString() ?? "—"}\n"
             + $"{record.StartedAt:yyyy-MM-dd HH:mm:ss} → {(record.CompletedAt?.ToString("HH:mm:ss") ?? "—")}\n"
             + $"插件: {record.PluginVersion ?? "—"} | 已纠错: {(record.WasCorrected ? "是" : "否")}\n"
             + $"判定: {record.FinalResultJson}";
     }
+
+    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static void ShowImage(Image image, string? path)
     {
@@ -132,6 +171,40 @@ public partial class HistoryPage : UserControl
         catch (Exception ex)
         {
             MessageBox.Show($"纠错失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void ReInference_Click(object sender, RoutedEventArgs e)
+    {
+        if (RecordsGrid.SelectedItem is not InspectionRecordEntity record)
+        {
+            MessageBox.Show("先选择一条有原图的记录", "提示");
+            return;
+        }
+        var recipe = await AppServices.Instance.Recipes.FindAsync(record.TaskId);
+        if (recipe is not { } pair)
+        {
+            MessageBox.Show("关联任务不存在，无法重新推理", "错误");
+            return;
+        }
+        var dialog = new ReInferenceDialog(pair.Recipe.SettingsJson)
+        {
+            Owner = Window.GetWindow(this),
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+        try
+        {
+            var result = await AppServices.Instance.ReInference.RunAsync(
+                record.Id, pair.Recipe.PluginId, dialog.SettingsJson, dialog.ModelVersion);
+            MessageBox.Show($"重新推理完成，新记录 ID：{result.Id}", "历史记录");
+            await Query();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"重新推理失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

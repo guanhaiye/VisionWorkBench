@@ -67,7 +67,7 @@ public sealed class WorkerProcessIntegrationTests(ITestOutputHelper output)
             await process.ShutdownAsync();
             Assert.True(process.HasExited);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             _output.WriteLine($"[diag] garbage={process.GarbageLineCount} pending={process.PendingRequestCount} exited={process.HasExited}");
             throw;

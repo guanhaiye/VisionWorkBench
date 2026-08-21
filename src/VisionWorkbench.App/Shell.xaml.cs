@@ -13,6 +13,8 @@ public partial class Shell : Window
         InitializeComponent();
         _pages["live"] = () => new LivePage();
         _pages["tasks"] = () => new TasksPage();
+        _pages["datasets"] = () => new DatasetAnnotationPage();
+        _pages["stations"] = () => new ProjectStationsPage();
         _pages["history"] = () => new HistoryPage();
         _pages["plugins"] = () => new PluginsPage();
         _pages["devices"] = () => new DevicesPage();

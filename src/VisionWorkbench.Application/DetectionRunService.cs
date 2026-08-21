@@ -1,8 +1,10 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using VisionWorkbench.Algorithms;
 using VisionWorkbench.Cameras.Abstractions;
+using VisionWorkbench.Contracts.Protocol;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Domain;
 using VisionWorkbench.Infrastructure.Imaging;
@@ -21,6 +23,7 @@ public enum DetectionRunState
 
 public sealed class RecordCompletedEventArgs : EventArgs
 {
+    public string StationCode { get; init; } = "";
     public required InspectionRecordEntity Record { get; init; }
     public required AlgorithmOutput Output { get; init; }
     public required DecisionResult Decision { get; init; }
@@ -43,6 +46,7 @@ public sealed class DetectionRunService : IAsyncDisposable
     private readonly RecordRepository _records;
     private readonly TempImageStore _tempStore;
     private readonly ILogger<DetectionRunService>? _logger;
+    private readonly IResultPublisher? _publisher;
     private readonly Channel<Func<CancellationToken, Task>> _dbWrites =
         Channel.CreateUnbounded<Func<CancellationToken, Task>>(
             new UnboundedChannelOptions { SingleReader = true });
@@ -61,6 +65,7 @@ public sealed class DetectionRunService : IAsyncDisposable
     private IAlgorithmSession? _algorithm;
     private Recipe _recipe = null!;
     private long _taskId;
+    private string _projectId = "default";
     private string _evidenceDir = "";
     private volatile bool _paused;
 
@@ -76,11 +81,13 @@ public sealed class DetectionRunService : IAsyncDisposable
         RecordRepository records,
         TempImageStore tempStore,
         ILogger<DetectionRunService>? logger = null,
-        string? counterId = null)
+        string? counterId = null,
+        IResultPublisher? publisher = null)
     {
         _records = records;
         _tempStore = tempStore;
         _logger = logger;
+        _publisher = publisher;
         _counterId = counterId ?? "default";
         Counting = new CountingService(_counterId);
         // 落库循环随服务启动（人工修正可在未开始检测时使用），随 DisposeAsync 结束
@@ -99,7 +106,8 @@ public sealed class DetectionRunService : IAsyncDisposable
         IAlgorithmSession algorithm,
         long? batchId = null,
         FrameRoutingStrategy routingStrategy = FrameRoutingStrategy.LatestOnly,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? projectId = null)
     {
         ArgumentNullException.ThrowIfNull(recipe);
         ArgumentNullException.ThrowIfNull(camera);
@@ -108,9 +116,11 @@ public sealed class DetectionRunService : IAsyncDisposable
         {
             throw new InvalidOperationException("检测已在运行，先停止再开始");
         }
-
-        _recipe = recipe;
+        _recipe = string.IsNullOrWhiteSpace(recipe.StationCode)
+            ? recipe with { StationCode = $"ST-{taskId:000}" }
+            : recipe with { StationCode = recipe.StationCode.Trim() };
         _taskId = taskId;
+        _projectId = string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
         _camera = camera;
         _algorithm = algorithm;
         BatchId = batchId;
@@ -119,10 +129,10 @@ public sealed class DetectionRunService : IAsyncDisposable
             "evidence", DateTimeOffset.UtcNow.ToString("yyyyMMdd"));
         Directory.CreateDirectory(_evidenceDir);
 
-        // 算法初始化（settings JSON → JsonElement）+ 启动会话
+        // 算法初始化（settings JSON + 流水计数参数合并 → JsonElement）+ 启动会话
         await algorithm.InitializeAsync(new AlgorithmInitialization
         {
-            Settings = TryParseJson(recipe.SettingsJson),
+            Settings = MergeCountingSettings(recipe),
         }, cancellationToken);
         await algorithm.StartAsync(new AlgorithmStartOptions
         {
@@ -136,6 +146,7 @@ public sealed class DetectionRunService : IAsyncDisposable
         camera.FrameReceived += OnCameraFrame;
         camera.Completed += OnCameraCompleted;
         camera.Faulted += OnCameraFaulted;
+        algorithm.Faulted += OnAlgorithmFaulted;
         await camera.StartAsync(cancellationToken);
 
         _paused = false;
@@ -163,6 +174,94 @@ public sealed class DetectionRunService : IAsyncDisposable
             SetState(DetectionRunState.Running);
         }
         return Task.CompletedTask;
+    }
+
+    /// <summary>重建相机会话并恢复采集，保留算法会话和已持久化计数。</summary>
+    public async Task<ICameraSession?> ReconnectCameraAsync(
+        Func<CancellationToken, Task<ICameraSession>> createOpenedSession,
+        int maxAttempts = 5,
+        TimeSpan? retryDelay = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(createOpenedSession);
+        if (_camera is null || State is DetectionRunState.Stopped or DetectionRunState.Idle)
+        {
+            return null;
+        }
+
+        var old = _camera;
+        DetachCamera(old);
+        try
+        {
+            await old.StopAsync(CancellationToken.None);
+            await old.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "释放断线相机会话失败");
+        }
+        _camera = null;
+
+        var attempts = Math.Max(1, maxAttempts);
+        var delay = retryDelay ?? TimeSpan.FromSeconds(1);
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ICameraSession? replacement = null;
+            try
+            {
+                replacement = await createOpenedSession(cancellationToken);
+                if (replacement.State == CameraSessionState.Faulted)
+                {
+                    await replacement.DisposeAsync();
+                    throw new InvalidOperationException("相机会话打开后仍处于故障状态");
+                }
+
+                replacement.FrameReceived += OnCameraFrame;
+                replacement.Completed += OnCameraCompleted;
+                replacement.Faulted += OnCameraFaulted;
+                _camera = replacement;
+                await replacement.StartAsync(cancellationToken);
+                if (replacement.State == CameraSessionState.Faulted)
+                {
+                    DetachCamera(replacement);
+                    await replacement.DisposeAsync();
+                    _camera = null;
+                    throw new InvalidOperationException("相机会话启动后仍处于故障状态");
+                }
+                SetState(_paused ? DetectionRunState.Paused : DetectionRunState.Running);
+                _logger?.LogInformation("相机重连成功，尝试次数 {Attempt}", attempt);
+                return replacement;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (replacement is not null && ReferenceEquals(_camera, replacement))
+                {
+                    DetachCamera(replacement);
+                    _camera = null;
+                    try
+                    {
+                        await replacement.DisposeAsync();
+                    }
+                    catch (Exception disposeEx)
+                    {
+                        _logger?.LogDebug(disposeEx, "清理失败的重连会话失败");
+                    }
+                }
+                _logger?.LogWarning(ex, "相机重连失败，尝试 {Attempt}/{MaxAttempts}", attempt, attempts);
+                if (attempt < attempts)
+                {
+                    await Task.Delay(delay, cancellationToken);
+                }
+            }
+        }
+
+        SetState(DetectionRunState.Faulted);
+        return null;
     }
 
     /// <summary>单次检测：取最新一帧走完整流水线（有限源时取下一帧）。</summary>
@@ -201,10 +300,13 @@ public sealed class DetectionRunService : IAsyncDisposable
 
         if (_camera is not null)
         {
-            _camera.FrameReceived -= OnCameraFrame;
-            _camera.Completed -= OnCameraCompleted;
-            _camera.Faulted -= OnCameraFaulted;
-            await _camera.StopAsync(CancellationToken.None);
+            var camera = _camera;
+            DetachCamera(camera);
+            await camera.StopAsync(CancellationToken.None);
+        }
+        if (_algorithm is not null)
+        {
+            _algorithm.Faulted -= OnAlgorithmFaulted;
         }
         if (_processingLoopTask is not null)
         {
@@ -245,17 +347,41 @@ public sealed class DetectionRunService : IAsyncDisposable
         return adjustment;
     }
 
-    /// <summary>计数清零（CNT-S-010）。</summary>
-    public Task<CountingAdjustment> ResetCountAsync(string reason, string @operator)
+    /// <summary>
+    /// 计数清零（CNT-S-010 / CNT-L-012 唯一入口）：宿主累计清零 + CounterReset 落库，
+    /// 流水模式再 best-effort 通知 worker 清除轨迹与去重记忆（失败仅告警，不阻断）。
+    /// </summary>
+    public async Task<CountingAdjustment> ResetCountAsync(string reason, string @operator)
     {
         var adjustment = Counting.Reset(reason, @operator);
         EnqueueWrite(ct => _records.AppendCountingEventAsync(adjustment.Event, BatchId, ct));
-        return Task.FromResult(adjustment);
+        if (_algorithm is not null && _recipe.CountingMode != CountingMode.Snapshot)
+        {
+            try
+            {
+                await _algorithm.SendCommandAsync(
+                    MessageType.CounterCommand,
+                    new { command = "reset" },
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "通知 worker 计数清零失败（尽力而为，CNT-L-012）");
+            }
+        }
+        return adjustment;
     }
 
     // ---- 内部：相机事件 → 调度器 ----
 
     private void OnCameraFrame(object? sender, VideoFrameReceivedEventArgs e) => Scheduler.OnFrame(e.Frame);
+
+    private void DetachCamera(ICameraSession camera)
+    {
+        camera.FrameReceived -= OnCameraFrame;
+        camera.Completed -= OnCameraCompleted;
+        camera.Faulted -= OnCameraFaulted;
+    }
 
     private void OnCameraCompleted(object? sender, EventArgs e)
     {
@@ -271,6 +397,22 @@ public sealed class DetectionRunService : IAsyncDisposable
             Source = "camera",
             Code = e.Fault.Code,
             Message = e.Fault.Message,
+        });
+    }
+
+    private void OnAlgorithmFaulted(object? sender, AlgorithmFaultedEventArgs e)
+    {
+        if (State is DetectionRunState.Stopped or DetectionRunState.Idle)
+        {
+            return;
+        }
+        SetState(DetectionRunState.Faulted);
+        _cts.Cancel();
+        Faulted?.Invoke(this, new RunFaultedEventArgs
+        {
+            Source = "algorithm",
+            Code = e.ErrorCode,
+            Message = e.Message,
         });
     }
 
@@ -299,7 +441,9 @@ public sealed class DetectionRunService : IAsyncDisposable
             }
             if (_paused)
             {
-                continue; // 暂停时丢弃（预览仍走 PreviewReceived）
+                // 暂停即丢帧（CNT-D-007 既定政策）：worker 无输入不产事件也不清零；
+                // 恢复后暂停期间位移大的目标可能因 IoU 失配重建 ID，由去重窗口缓解。
+                continue;
             }
             try
             {
@@ -363,8 +507,20 @@ public sealed class DetectionRunService : IAsyncDisposable
                 ImageAnnotator.AnnotateToFile(frame, output, decision, annotPath);
             }
 
+            var rawEnvelope = new ResultEnvelope
+            {
+                ProjectId = _projectId,
+                StationCode = _recipe.StationCode,
+                TaskId = _taskId,
+                BatchId = BatchId,
+                Timestamp = output.Timestamp,
+                Output = output,
+            };
+            var finalEnvelope = rawEnvelope with { Decision = decision };
             var record = new InspectionRecordEntity
             {
+                ProjectId = _projectId,
+                StationCode = _recipe.StationCode,
                 TaskId = _taskId,
                 BatchId = BatchId,
                 StartedAt = startedAt.UtcDateTime,
@@ -374,14 +530,22 @@ public sealed class DetectionRunService : IAsyncDisposable
                 AnnotatedImagePath = annotPath,
                 AlgorithmElapsedMs = output.Performance?.TotalMs ?? 0,
                 TotalElapsedMs = sw.Elapsed.TotalMilliseconds,
-                RawResultJson = JsonSerializer.Serialize(output, JsonOpts),
-                FinalResultJson = JsonSerializer.Serialize(decision, JsonOpts),
+                RawResultJson = JsonSerializer.Serialize(rawEnvelope, JsonOpts),
+                FinalResultJson = JsonSerializer.Serialize(finalEnvelope, JsonOpts),
             };
 
-            EnqueueWrite(ct => _records.AddAsync(record, output.CountingEvents, output.Events, ct));
+            EnqueueWrite(async ct =>
+            {
+                var saved = await _records.AddAsync(record, output.CountingEvents, output.Events, ct);
+                if (_publisher is not null)
+                {
+                    await _publisher.PublishAsync(finalEnvelope with { RecordId = saved.Id }, ct);
+                }
+            });
 
             var args = new RecordCompletedEventArgs
             {
+                StationCode = _recipe.StationCode,
                 Record = record,
                 Output = output,
                 Decision = decision,
@@ -489,6 +653,47 @@ public sealed class DetectionRunService : IAsyncDisposable
         WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
+
+    /// <summary>
+    /// 流水计数参数合并进插件 settings（配方单一来源）：
+    /// countingMode（"unique"/"line"）与 line{ax,ay,bx,by,hysteresis}，
+    /// 键名与 sample-flow-counter 的 settings.schema.json 对齐；快照模式原样透传。
+    /// </summary>
+    private static JsonElement? MergeCountingSettings(Recipe recipe)
+    {
+        if (recipe.CountingMode == CountingMode.Snapshot)
+        {
+            return TryParseJson(recipe.SettingsJson);
+        }
+        JsonObject? obj = null;
+        if (!string.IsNullOrWhiteSpace(recipe.SettingsJson))
+        {
+            try
+            {
+                obj = JsonNode.Parse(recipe.SettingsJson) as JsonObject;
+            }
+            catch (JsonException)
+            {
+                // 设置损坏 → 只带计数参数
+            }
+        }
+        obj ??= [];
+        obj["countingMode"] = recipe.CountingMode == CountingMode.UniqueTracking ? "unique" : "line";
+        var line = recipe.CountingLine ?? new CountingLineConfig
+        {
+            A = new NormalizedPoint { X = 0.5, Y = 0.1 },
+            B = new NormalizedPoint { X = 0.5, Y = 0.9 },
+        };
+        obj["line"] = new JsonObject
+        {
+            ["ax"] = line.A.X,
+            ["ay"] = line.A.Y,
+            ["bx"] = line.B.X,
+            ["by"] = line.B.Y,
+            ["hysteresis"] = line.Hysteresis,
+        };
+        return JsonSerializer.SerializeToElement(obj);
+    }
 
     private static JsonElement? TryParseJson(string json)
     {

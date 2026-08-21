@@ -35,6 +35,20 @@ public sealed record AlgorithmOutput
     }
 }
 
+/// <summary>宿主发布/持久化的结果信封。Worker 不需要识别工位，宿主在此处补齐上下文。</summary>
+public sealed record ResultEnvelope
+{
+    public string SchemaVersion { get; init; } = "1.0";
+    public required string ProjectId { get; init; }
+    public required string StationCode { get; init; }
+    public long TaskId { get; init; }
+    public long? BatchId { get; init; }
+    public long? RecordId { get; init; }
+    public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
+    public DecisionResult? Decision { get; init; }
+    public required AlgorithmOutput Output { get; init; }
+}
+
 /// <summary>算法输入（文档 §14.1 FrameInput 的首版文件传图形态，文档 §11.3）。</summary>
 public sealed record AlgorithmInput
 {

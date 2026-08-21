@@ -1,4 +1,6 @@
 using VisionWorkbench.Contracts.Results;
+using VisionWorkbench.Application;
+using VisionWorkbench.Domain;
 using VisionWorkbench.Persistence;
 using Xunit;
 
@@ -147,5 +149,156 @@ public sealed class PersistenceTests : IDisposable
         Assert.Single(history);
         Assert.Equal("张工", history[0].OperatorName);
         Assert.Equal("实际为合格品，人工复判", history[0].Reason);
+    }
+
+    [Fact]
+    public async Task BatchService_Resumes_Running_Batch_From_Events()
+    {
+        var tasks = new TaskRepository(_factory);
+        var task = await tasks.SaveAsync(new TaskEntity
+        {
+            Name = "恢复批次",
+            CameraProviderId = "video-file",
+            CameraDeviceId = "x.avi",
+            PluginId = "p",
+        });
+        var batches = new BatchRepository(_factory);
+        var records = new RecordRepository(_factory);
+        var batch = await batches.StartAsync(task.Id, 0);
+        await records.AppendCountingEventAsync(new CountingEvent
+        {
+            EventId = "resume-1",
+            CounterId = "c1",
+            Type = CountingEventType.CrossedLine,
+            Direction = "forward",
+            Delta = 1,
+        }, batch.Id);
+
+        var counting = new CountingService("c1");
+        var resumed = await new BatchService(batches).ResumeOrStartAsync(task.Id, counting, records);
+
+        Assert.Equal(batch.Id, resumed.Id);
+        Assert.Equal(1, counting.State.CurrentTotal);
+        Assert.Equal(1, counting.State.ForwardTotal);
+    }
+
+    [Fact]
+    public async Task History_Csv_Uses_Utf8_Bom_And_Escapes_Chinese()
+    {
+        var tasks = new TaskRepository(_factory);
+        var task = await tasks.SaveAsync(new TaskEntity
+        {
+            Name = "CSV 中文任务",
+            CameraProviderId = "image-folder",
+            CameraDeviceId = "中文目录",
+            PluginId = "p",
+        });
+        var records = new RecordRepository(_factory);
+        await records.AddAsync(new InspectionRecordEntity
+        {
+            TaskId = task.Id,
+            Status = "ng",
+            PluginVersion = "插件,1",
+            RawResultJson = "{}",
+            FinalResultJson = "{}",
+        });
+        var csv = Path.Combine(Path.GetTempPath(), $"vw-history-{Guid.NewGuid():N}.csv");
+        try
+        {
+            await records.ExportCsvAsync(new RecordQuery(TaskId: task.Id), csv);
+            var bytes = await File.ReadAllBytesAsync(csv);
+            Assert.Equal(0xEF, bytes[0]);
+            Assert.Equal(0xBB, bytes[1]);
+            Assert.Equal(0xBF, bytes[2]);
+            var text = await File.ReadAllTextAsync(csv);
+            Assert.Contains("\"插件,1\"", text);
+        }
+        finally
+        {
+            File.Delete(csv);
+        }
+    }
+
+    [Fact]
+    public async Task Database_Backup_And_Restore_Rolls_Back_New_Record()
+    {
+        var tasks = new TaskRepository(_factory);
+        var first = await tasks.SaveAsync(new TaskEntity
+        {
+            Name = "备份前",
+            CameraProviderId = "image-folder",
+            CameraDeviceId = "x",
+            PluginId = "p",
+        });
+        var backup = Path.Combine(Path.GetTempPath(), $"vw-backup-{Guid.NewGuid():N}.db");
+        try
+        {
+            new DatabaseBackupService(_factory).BackupTo(backup);
+            await tasks.SaveAsync(new TaskEntity
+            {
+                Name = "备份后",
+                CameraProviderId = "image-folder",
+                CameraDeviceId = "x",
+                PluginId = "p",
+            });
+            new DatabaseBackupService(_factory).RestoreFrom(backup);
+            var restored = await tasks.ListAsync();
+            Assert.Single(restored);
+            Assert.Equal(first.Id, restored[0].Id);
+            Assert.Equal("备份前", restored[0].Name);
+        }
+        finally
+        {
+            File.Delete(backup);
+        }
+    }
+
+    [Fact]
+    public async Task Project_Station_Code_Is_Unique_Per_Project_And_History_Is_Archived()
+    {
+        var projects = new ProjectStationRepository(_factory);
+        var project = await projects.SaveProjectAsync(new ProjectEntity
+        {
+            ProjectCode = "line-a",
+            Name = "产线 A",
+        });
+        var station = await projects.SaveStationAsync(new StationEntity
+        {
+            ProjectId = project.Id,
+            StationCode = "ST-001",
+            Name = "入口工位",
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => projects.SaveStationAsync(new StationEntity
+        {
+            ProjectId = project.Id,
+            StationCode = "st-001",
+            Name = "重复编号",
+        }));
+
+        var task = await new TaskRepository(_factory).SaveAsync(new TaskEntity
+        {
+            StationCode = "ST-001",
+            Name = "入口配方",
+            CameraProviderId = "image-folder",
+            CameraDeviceId = "images",
+            PluginId = "p",
+        });
+        var record = await new RecordRepository(_factory).AddAsync(new InspectionRecordEntity
+        {
+            ProjectId = "line-a",
+            StationCode = "ST-001",
+            TaskId = task.Id,
+            ModelVersion = "yolo11-seg-v1",
+            Status = "ok",
+        });
+        Assert.True(await projects.ArchiveOrDeleteStationAsync(station.Id));
+        Assert.Empty(await projects.ListStationsAsync(project.Id));
+        Assert.Single(await projects.ListStationsAsync(project.Id, includeArchived: true));
+
+        var page = await new RecordRepository(_factory).QueryAsync(new RecordQuery(
+            ProjectId: "line-a", StationCode: "ST-001", ModelVersion: "yolo11-seg-v1"));
+        Assert.Single(page.Items);
+        Assert.Equal(record.Id, page.Items[0].Id);
+        Assert.Equal("line-a", page.Items[0].ProjectId);
     }
 }

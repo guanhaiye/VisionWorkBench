@@ -72,23 +72,31 @@ def make_overlap_image(rng: np.random.Generator, size=(800, 600)) -> np.ndarray:
     return np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
 
-def make_conveyor_video(path: Path, objects: int = 12) -> dict:
-    """亮色圆从左向右依次通过 x=2/3 处的检测线（正向真值 = objects）。"""
+def make_conveyor_video(path: Path, objects: int = 12, direction: str = "forward", seed: int = 123) -> dict:
+    """亮色圆单方向依次通过 x=2/3 处的检测线。
+
+    forward：左→右（objectsForward = objects）；reverse：右→左（objectsReverse = objects）。
+    时长 = 入场间隔 2.2s×objects + 完整通过时间，保证最后一个目标越过检测线
+    （原版时长截断导致末目标未过线、真值虚标，此处修正为真实可达）。
+    """
     width, height, fps = 800, 400, 25
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (width, height))
     if not writer.isOpened():
         raise RuntimeError("VideoWriter 打开失败: %s" % path)
-    rng = np.random.default_rng(123)
-    duration_s = objects * 2.2
+    rng = np.random.default_rng(seed)
     radius = 26
-    spacing = duration_s / objects
+    spacing = 2.2
+    duration_s = objects * spacing + (width + 2 * radius) / 160 + 1.0
     y_base = height // 2
     for frame_idx in range(int(duration_s * fps)):
         image = np.full((height, width, 3), 100, dtype=np.uint8)
         t = frame_idx / fps
         for i in range(objects):
             start = i * spacing
-            x = int((t - start) * 160)  # 160 px/s
+            if direction == "forward":
+                x = int((t - start) * 160)  # 160 px/s，画面左外入场
+            else:
+                x = int(width + radius - (t - start) * 160)
             if -radius <= x <= width + radius:
                 y = y_base + int(18 * np.sin(i * 1.7))
                 shade = 185 + (i % 5) * 12
@@ -97,7 +105,74 @@ def make_conveyor_video(path: Path, objects: int = 12) -> dict:
         frame = np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
         writer.write(frame)
     writer.release()
-    return {"file": str(path), "frames": int(duration_s * fps), "fps": fps, "objectsForward": objects}
+    info = {"file": str(path), "frames": int(duration_s * fps), "fps": fps}
+    if direction == "forward":
+        info["objectsForward"] = objects
+    else:
+        info["objectsReverse"] = objects
+    return info
+
+
+def make_mixed_video(path: Path, seed: int = 321) -> dict:
+    """正反向混合 + 折返（CNT-L-009 / CNT-L-004 视频级样本）。
+
+    - 4 个目标左→右完整通过（forward = 4）
+    - 2 个目标右→左完整通过（reverse = 2）
+    - 1 个目标越过检测线但未离开滞回带即折返（不计；按 hysteresis ≥ 0.014 有效）
+    车道分离：正向 y=140、折返 y=200、反向 y=260，避免异向目标粘连合并。
+    """
+    width, height, fps = 800, 400, 25
+    line_x = width * 2 // 3
+    radius = 26
+    turn_x = line_x + 8  # 线右侧 8px（滞回带内），跨线即折返
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError("VideoWriter 打开失败: %s" % path)
+    rng = np.random.default_rng(seed)
+
+    specs: list[dict] = []
+    for i in range(4):
+        specs.append({"start": i * 2.2, "v": 160.0, "y": 140, "tag": "forward"})
+    for j in range(2):
+        specs.append({"start": 1.1 + j * 2.2, "v": -160.0, "y": 260, "tag": "reverse"})
+    fold_start = 8.8
+    fold_turn_t = fold_start + (turn_x + radius) / 160.0
+    specs.append({"start": fold_start, "v": 160.0, "y": 200, "tag": "foldback"})
+
+    duration_s = fold_turn_t + (turn_x + radius) / 160.0 + 1.0  # 折返目标完全退场
+    for frame_idx in range(int(duration_s * fps)):
+        image = np.full((height, width, 3), 100, dtype=np.uint8)
+        t = frame_idx / fps
+        for i, spec in enumerate(specs):
+            elapsed = t - spec["start"]
+            if elapsed < 0:
+                continue
+            if spec["tag"] == "foldback":
+                if t <= fold_turn_t:
+                    x = int(-radius + elapsed * spec["v"])
+                else:
+                    x = int(turn_x - (t - fold_turn_t) * spec["v"])
+            elif spec["v"] > 0:
+                x = int(elapsed * spec["v"])
+            else:
+                x = int(width + radius + elapsed * spec["v"])
+            if -radius <= x <= width + radius:
+                y = spec["y"] + int(10 * np.sin(i * 1.7))
+                shade = 185 + (i % 5) * 12
+                cv2.circle(image, (x, y), radius, (shade, shade, shade), -1)
+        noise = rng.normal(0, 2, image.shape).astype(np.int16)
+        frame = np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        writer.write(frame)
+    writer.release()
+    return {
+        "file": str(path),
+        "frames": int(duration_s * fps),
+        "fps": fps,
+        "objectsForward": 4,
+        "objectsReverse": 2,
+        "foldbackNotCounted": 1,
+        "uniqueTotal": 7,
+    }
 
 
 def main() -> int:
@@ -126,16 +201,23 @@ def main() -> int:
     )
 
     video_info = make_conveyor_video(OUT_VIDEO / "conveyor_forward.avi")
+    reverse_info = make_conveyor_video(OUT_VIDEO / "conveyor_reverse.avi", direction="reverse", seed=124)
+    mixed_info = make_mixed_video(OUT_VIDEO / "conveyor_mixed.avi")
 
     manifest = {
         "seed": args.seed,
         "staticCount": {"dir": str(OUT_STATIC), "images": len(truth), "truth": truth},
         "conveyor": video_info,
+        "conveyorReverse": reverse_info,
+        "conveyorMixed": mixed_info,
     }
     (REPO / "samples" / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print("生成完成：静态图 %d 张，视频 %s" % (len(truth), video_info["file"]))
+    print(
+        "生成完成：静态图 %d 张，视频 %s / %s / %s"
+        % (len(truth), video_info["file"], reverse_info["file"], mixed_info["file"])
+    )
     return 0
 
 

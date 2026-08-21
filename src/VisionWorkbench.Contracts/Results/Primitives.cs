@@ -27,6 +27,12 @@ public sealed record DetectionResult
     public double Confidence { get; init; }
     public required NormalizedRect Box { get; init; }
     public string? TrackId { get; init; }
+
+    /// <summary>缺陷严重等级（info/warning/critical 或自定义数字字符串）。</summary>
+    public string? Severity { get; init; }
+
+    /// <summary>目标/缺陷在整幅图中的归一化面积占比。</summary>
+    public double AreaRatio { get; init; }
 }
 
 /// <summary>分类结果（Classification 输出原语）。</summary>

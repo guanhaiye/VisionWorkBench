@@ -32,7 +32,11 @@ public static class RuleEngine
                 RuleKind.ClassRequired => ClassRule(inRoi, rule, required: true),
                 RuleKind.ClassForbidden => ClassRule(inRoi, rule, required: false),
                 RuleKind.LowConfidence => ConfidenceRule(inRoi, rule),
-                _ => (true, false, $"规则类型 {rule.Kind} 暂未实现判定逻辑，已视为通过"),
+                RuleKind.RegionMustHaveTarget => ClassRule(inRoi, rule, required: true),
+                RuleKind.RegionForbiddenTarget => ClassRule(inRoi, rule, required: false),
+                RuleKind.DefectSeverityThreshold => DefectThresholdRule(inRoi, rule),
+                RuleKind.EventDurationThreshold => EventDurationRule(output, rule),
+                _ => (false, false, $"未知规则类型 {rule.Kind}"),
             };
             if (!passed)
             {
@@ -94,4 +98,40 @@ public static class RuleEngine
             passed ? $"{rule.RuleId}: 最低置信度 {weakest:0.00} ≥ {rule.MinConfidence:0.00}"
                    : $"{rule.RuleId}: 存在低置信度检测（最低 {weakest:0.00} < {rule.MinConfidence:0.00}），转人工确认");
     }
+
+    private static (bool passed, bool review, string message) DefectThresholdRule(
+        IReadOnlyList<DetectionResult> detections, InspectionRule rule)
+    {
+        var threshold = rule.Threshold > 0 ? rule.Threshold : rule.MinConfidence;
+        var matches = detections.Where(d => string.IsNullOrEmpty(rule.ClassId) || d.ClassId == rule.ClassId).ToArray();
+        var exceeded = matches.FirstOrDefault(d =>
+            d.AreaRatio >= threshold || SeverityScore(d.Severity) >= threshold);
+        var passed = exceeded is null;
+        return (passed, false,
+            passed ? $"{rule.RuleId}: 缺陷严重度/面积未超过 {threshold:0.###}"
+                   : $"{rule.RuleId}: 类别 {exceeded!.ClassId} 的缺陷严重度或面积超过 {threshold:0.###}");
+    }
+
+    private static (bool passed, bool review, string message) EventDurationRule(
+        AlgorithmOutput output, InspectionRule rule)
+    {
+        var threshold = rule.DurationMs > 0 ? rule.DurationMs : rule.ExpectedCount;
+        var events = output.Events.Where(e => string.IsNullOrEmpty(rule.ClassId)
+            || string.Equals(e.EventType, rule.ClassId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var exceeded = events.FirstOrDefault(e => e.StartedAt is { } start && e.EndedAt is { } end
+            && (end - start).TotalMilliseconds > threshold);
+        var passed = exceeded is null;
+        return (passed, true,
+            passed ? $"{rule.RuleId}: 事件持续时间未超过 {threshold:0.#}ms"
+                   : $"{rule.RuleId}: 事件 {exceeded!.EventType} 持续时间超过 {threshold:0.#}ms");
+    }
+
+    private static double SeverityScore(string? severity) => severity?.Trim().ToLowerInvariant() switch
+    {
+        "critical" or "严重" or "3" => 3,
+        "warning" or "warn" or "警告" or "2" => 2,
+        "info" or "normal" or "提示" or "1" => 1,
+        _ when double.TryParse(severity, out var value) => value,
+        _ => 0,
+    };
 }

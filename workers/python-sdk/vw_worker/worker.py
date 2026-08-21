@@ -45,6 +45,10 @@ class AlgorithmWorker:
         """输出缓冲中的未决结果（流式算法用）。"""
         return {"ack": True}
 
+    def on_counter_command(self, payload: dict) -> dict:
+        """计数器命令（reset/pause/resume）。有状态算法在此清理跟踪记忆。"""
+        return {"ack": True}
+
     def on_stop_session(self, payload: dict) -> dict:
         return {"ack": True}
 
@@ -100,7 +104,7 @@ class AlgorithmWorker:
         elif message.type == "update_settings":
             self._respond(message, "result", self.on_update_settings(payload))
         elif message.type == "counter_command":
-            self._respond(message, "result", {"ack": True})
+            self._respond(message, "result", self.on_counter_command(payload))
         elif message.type == "health":
             self._respond(
                 message,

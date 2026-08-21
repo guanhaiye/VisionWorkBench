@@ -1,9 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <IsPackable>false</IsPackable>
     <RootNamespace>VisionWorkbench.Tests</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- WindowsDesktop SDK 的隐式 usings 不含 System.IO，显式补回（存量测试依赖它） -->
+    <Using Include="System.IO" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
@@ -12,6 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\VisionWorkbench.Algorithms\VisionWorkbench.Algorithms.csproj" />
+    <ProjectReference Include="..\..\src\VisionWorkbench.App\VisionWorkbench.App.csproj" />
     <ProjectReference Include="..\..\src\VisionWorkbench.Application\VisionWorkbench.Application.csproj" />
     <ProjectReference Include="..\..\src\VisionWorkbench.Cameras.Abstractions\VisionWorkbench.Cameras.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\VisionWorkbench.Cameras.Files\VisionWorkbench.Cameras.Files.csproj" />

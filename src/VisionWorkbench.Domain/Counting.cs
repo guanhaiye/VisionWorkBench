@@ -101,6 +101,19 @@ public sealed class CountingService
         return output.CountingEvents;
     }
 
+    /// <summary>
+    /// 按事件顺序重放恢复累计（CNT-L-014）：历史/纠错事件流 → 累计值。
+    /// 用于会话重建或只读展示；流内 CounterReset 自然清零，Corrected 按差值重放。
+    /// </summary>
+    public void RestoreFrom(IEnumerable<CountingEvent> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        foreach (var evt in events)
+        {
+            _state.Apply(evt);
+        }
+    }
+
     /// <summary>手动修正（CNT-S-010）：delta 可为 ±1、±n；reason 必填。</summary>
     public CountingAdjustment Adjust(long delta, string reason, string @operator, long frameSequence = 0)
     {

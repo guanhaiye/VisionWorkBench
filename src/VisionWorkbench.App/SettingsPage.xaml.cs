@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Win32;
 
 namespace VisionWorkbench.App;
 
@@ -61,5 +62,75 @@ public partial class SettingsPage : UserControl
             : OperatorNameText.Text.Trim();
         AppServices.Instance.SaveUserSettings();
         SaveHintText.Text = dataDirChanged ? "已保存（数据目录改动重启后生效）" : "已保存";
+    }
+
+    private void Backup_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "SQLite 备份 (*.db)|*.db|所有文件 (*.*)|*.*",
+            FileName = $"visionworkbench-{DateTime.Now:yyyyMMdd-HHmmss}.db",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+        try
+        {
+            AppServices.Instance.DatabaseBackup.BackupTo(dialog.FileName);
+            SaveHintText.Text = "数据库备份完成";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"数据库备份失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void Restore_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "SQLite 备份 (*.db;*.sqlite)|*.db;*.sqlite|所有文件 (*.*)|*.*",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+        if (MessageBox.Show("恢复会覆盖当前数据库，确认继续吗？恢复后请重启应用。",
+                "确认恢复", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+        try
+        {
+            AppServices.Instance.DatabaseBackup.RestoreFrom(dialog.FileName);
+            SaveHintText.Text = "数据库已恢复，请重启应用";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"数据库恢复失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void Diagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "诊断包 (*.zip)|*.zip|所有文件 (*.*)|*.*",
+            FileName = $"visionworkbench-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+        try
+        {
+            DiagnosticPackageService.Export(AppServices.Instance, dialog.FileName);
+            SaveHintText.Text = "诊断包导出完成（不含客户图片）";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"诊断包导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 }

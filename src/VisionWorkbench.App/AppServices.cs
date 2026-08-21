@@ -24,6 +24,7 @@ public sealed class AppSettings
     public string ExecutionProvider { get; set; } = "cpu";
     public string CurrentRole { get; set; } = "engineer";
     public string OperatorName { get; set; } = Environment.UserName;
+    public string? ResultWebhookUrl { get; set; }
 }
 
 /// <summary>组合根：进程级服务装配（文档 §5）。UI 线程与后台服务共享同一实例。</summary>
@@ -38,11 +39,17 @@ public sealed class AppServices
     public CameraRegistry Cameras { get; private set; } = null!;
     public TempImageStore TempImages { get; private set; } = null!;
     public VisionDbContextFactory Database { get; private set; } = null!;
+    public DatabaseBackupService DatabaseBackup { get; private set; } = null!;
+    public ResultPublisher ResultPublisher { get; private set; } = null!;
     public TaskRepository Tasks { get; private set; } = null!;
+    public ProjectStationRepository Projects { get; private set; } = null!;
     public RecordRepository Records { get; private set; } = null!;
     public BatchRepository Batches { get; private set; } = null!;
     public RecipeService Recipes { get; private set; } = null!;
     public BatchService BatchService { get; private set; } = null!;
+    public ReInferenceService ReInference { get; private set; } = null!;
+    public StationRunCoordinator StationRuns { get; private set; } = null!;
+    public DatasetCatalogService Datasets { get; private set; } = null!;
     public string SettingsFile { get; private set; } = "";
 
     private AppServices() { }
@@ -94,7 +101,13 @@ public sealed class AppServices
         // 3. 数据库（APP-003：数据目录支持中文/空格；工厂模式保证多线程安全）
         var dbPath = Path.Combine(Settings.DataDirectory, "visionworkbench.db");
         Database = VisionDbContextFactory.Create(dbPath);
+        DatabaseBackup = new DatabaseBackupService(Database);
+        ResultPublisher = new ResultPublisher(
+            Path.Combine(Settings.DataDirectory, "results", "results.jsonl"),
+            Settings.ResultWebhookUrl);
+        Datasets = new DatasetCatalogService(Settings.DataDirectory);
         Tasks = new TaskRepository(Database);
+        Projects = new ProjectStationRepository(Database);
         Records = new RecordRepository(Database);
         Batches = new BatchRepository(Database);
         Recipes = new RecipeService(Tasks);
@@ -128,6 +141,10 @@ public sealed class AppServices
             LogsDirectory = logsDir,
             ExecutionProvider = Settings.ExecutionProvider,
         }, loggerFactory.CreateLogger<AlgorithmManager>());
+        ReInference = new ReInferenceService(Records, Recipes, AlgorithmManager);
+        StationRuns = new StationRunCoordinator(
+            Records, Batches, TempImages, ResultPublisher,
+            loggerFactory.CreateLogger<StationRunCoordinator>(), loggerFactory);
 
         // 7. DI 容器（页面按需取服务）
         var services = new ServiceCollection();

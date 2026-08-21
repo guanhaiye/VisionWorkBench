@@ -12,6 +12,12 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,6">
             <TextBlock Text="任务：" VerticalAlignment="Center" />
             <ComboBox x:Name="TaskFilter" Width="180" DisplayMemberPath="Name" />
+            <TextBlock Text="项目：" VerticalAlignment="Center" Margin="12,0,0,0" />
+            <TextBox x:Name="ProjectFilter" Width="110" />
+            <TextBlock Text="工位：" VerticalAlignment="Center" Margin="8,0,0,0" />
+            <TextBox x:Name="StationFilter" Width="90" />
+            <TextBlock Text="模型：" VerticalAlignment="Center" Margin="8,0,0,0" />
+            <TextBox x:Name="ModelFilter" Width="100" />
             <TextBlock Text="状态：" VerticalAlignment="Center" Margin="16,0,0,0" />
             <ComboBox x:Name="StatusFilter" Width="120">
                 <ComboBoxItem Content="全部" IsSelected="True" />
@@ -25,12 +31,15 @@
             <TextBlock Text="到：" VerticalAlignment="Center" Margin="8,0,0,0" />
             <DatePicker x:Name="ToDate" Width="130" />
             <Button Content="查询" Click="Query_Click" Margin="16,0,0,0" />
+            <Button Content="导出 CSV" Click="ExportCsv_Click" Margin="8,0,0,0" />
         </DockPanel>
 
         <DataGrid x:Name="RecordsGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
                   SelectionChanged="RecordsGrid_SelectionChanged">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="60" />
+                <DataGridTextColumn Header="工位" Binding="{Binding StationCode}" Width="90" />
+                <DataGridTextColumn Header="项目" Binding="{Binding ProjectId}" Width="100" />
                 <DataGridTextColumn Header="任务" Binding="{Binding TaskId}" Width="60" />
                 <DataGridTextColumn Header="批次" Binding="{Binding BatchId}" Width="60" />
                 <DataGridTextColumn Header="时间" Binding="{Binding StartedAt, StringFormat=HH:mm:ss}" Width="90" />
@@ -63,6 +72,7 @@
             <DockPanel Grid.Column="2">
                 <StackPanel DockPanel.Dock="Top">
                     <Button Content="纠错此记录" Click="Correct_Click" Margin="0,4" />
+                    <Button Content="重新推理" Click="ReInference_Click" Margin="0,4" />
                     <Button Content="查看修正历史" Click="HistoryOfCorrections_Click" Margin="0,4" />
                     <TextBlock x:Name="DetailText" TextWrapping="Wrap" FontSize="11" Foreground="#444" Margin="0,8,0,0" />
                 </StackPanel>

@@ -23,26 +23,35 @@
                 <GroupBox Header="基本信息">
                     <StackPanel>
                         <TextBlock Text="任务名" />
+                        <TextBlock Text="工位编号（项目内唯一，随结果输出）" />
+                        <TextBox x:Name="StationCodeText" Margin="0,2,0,8" MaxLength="64" />
                         <TextBox x:Name="NameText" Margin="0,2,0,8" />
                         <TextBlock Text="说明" />
                         <TextBox x:Name="DescriptionText" Margin="0,2,0,8" />
                     </StackPanel>
                 </GroupBox>
-                <GroupBox Header="输入源（设备管理页可查看可用 ID）">
+                <GroupBox Header="输入源（支持离线图片目录）">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
+                            <RowDefinition />
                             <RowDefinition />
                             <RowDefinition />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Provider ID：" VerticalAlignment="Center" />
                         <TextBox Grid.Row="0" Grid.Column="1" x:Name="ProviderText" Margin="0,2,0,6"
-                                 Text="image-folder" />
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="设备 ID（目录/视频路径/索引）：" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="DeviceText" Margin="0,2,0,6" />
+                                 Text="image-folder" TextChanged="InputSourceTextChanged" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="图片目录：" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="DeviceText" Margin="0,2,4,6"
+                                 TextChanged="InputSourceTextChanged" />
+                        <Button Grid.Row="1" Grid.Column="2" x:Name="BrowseDeviceButton"
+                                Content="选择目录..." Click="BrowseDevice_Click" Margin="0,2,0,6" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="DevicePreviewText"
+                                   Foreground="#666" Text="尚未选择图片目录" Margin="0,0,0,6" />
                     </Grid>
                 </GroupBox>
                 <GroupBox Header="算法插件">
@@ -52,12 +61,67 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="插件 ID：" VerticalAlignment="Center" />
-                        <ComboBox x:Name="PluginCombo" Grid.Column="1" />
+                        <ComboBox x:Name="PluginCombo" Grid.Column="1" SelectionChanged="PluginCombo_SelectionChanged" />
                     </Grid>
                 </GroupBox>
-                <GroupBox Header="插件参数（JSON）">
+                <GroupBox x:Name="ModelGroup" Header="模型导入与选择" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition />
+                            <RowDefinition />
+                            <RowDefinition />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="任务类型：" VerticalAlignment="Center" />
+                        <ComboBox x:Name="YoloTaskCombo" Grid.Row="0" Grid.Column="1" Margin="4,2,0,6"
+                                  SelectionChanged="YoloTaskCombo_SelectionChanged">
+                            <ComboBoxItem Content="目标检测" Tag="detect" />
+                            <ComboBoxItem Content="实例分割" Tag="instance" />
+                            <ComboBoxItem Content="语义分割" Tag="semantic" />
+                        </ComboBox>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="模型文件：" VerticalAlignment="Center" />
+                        <ComboBox x:Name="ModelCombo" Grid.Row="1" Grid.Column="1" Margin="4,2,4,6" />
+                        <Button Grid.Row="1" Grid.Column="2" x:Name="ImportModelButton"
+                                Content="导入模型..." Click="ImportModel_Click" Margin="0,2,0,6" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ModelStatusText"
+                                   Foreground="#666" Text="请选择或导入模型文件（.pt/.onnx）" Margin="4,0,0,6" />
+                    </Grid>
+                </GroupBox>
+                <GroupBox Header="计数模式">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="模式：" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ModeCombo" Width="220" SelectionChanged="ModeCombo_SelectionChanged">
+                                <ComboBoxItem Content="快照（静态计数）" Tag="Snapshot" IsSelected="True" />
+                                <ComboBoxItem Content="动态去重（新目标累计一次）" Tag="UniqueTracking" />
+                                <ComboBoxItem Content="跨线计数（穿过检测线，含方向）" Tag="LineCrossing" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel x:Name="LinePanel" Orientation="Horizontal" Margin="0,6,0,0" IsEnabled="False">
+                            <TextBlock Text="检测线" VerticalAlignment="Center" />
+                            <TextBlock Text="AX" VerticalAlignment="Center" Margin="8,0,2,0" />
+                            <TextBox x:Name="LineAxText" Width="52" Text="0.5" Margin="0,0,4,0" />
+                            <TextBlock Text="AY" VerticalAlignment="Center" Margin="4,0,2,0" />
+                            <TextBox x:Name="LineAyText" Width="52" Text="0.1" Margin="0,0,4,0" />
+                            <TextBlock Text="BX" VerticalAlignment="Center" Margin="4,0,2,0" />
+                            <TextBox x:Name="LineBxText" Width="52" Text="0.5" Margin="0,0,4,0" />
+                            <TextBlock Text="BY" VerticalAlignment="Center" Margin="4,0,2,0" />
+                            <TextBox x:Name="LineByText" Width="52" Text="0.9" Margin="0,0,8,0" />
+                            <TextBlock Text="滞回宽度" VerticalAlignment="Center" Margin="4,0,2,0" />
+                            <TextBox x:Name="HysteresisText" Width="52" Text="0.02" />
+                        </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+                <GroupBox x:Name="AdvancedSettingsGroup" Header="专家选项：插件参数（JSON）">
+                    <StackPanel>
+                        <TextBlock x:Name="AdvancedHintText" Foreground="#996600" TextWrapping="Wrap" />
                     <TextBox x:Name="SettingsText" Height="72" TextWrapping="Wrap" AcceptsReturn="True"
                              VerticalScrollBarVisibility="Auto" Text="{}" />
+                    </StackPanel>
                 </GroupBox>
                 <GroupBox Header="ROI（归一化 0~1；全部 0 表示整幅图）">
                     <StackPanel Orientation="Horizontal">
@@ -104,7 +168,7 @@
                     </DataGrid>
                 </GroupBox>
                 <StackPanel Orientation="Horizontal" Margin="0,8">
-                    <Button Content="保存" Click="Save_Click" MinWidth="96" />
+                    <Button x:Name="SaveButton" Content="保存" Click="Save_Click" MinWidth="96" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

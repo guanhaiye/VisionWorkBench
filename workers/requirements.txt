@@ -2,3 +2,5 @@
 opencv-python-headless>=4.10
 numpy>=1.26
 pytest>=8.0
+# YOLO11 插件运行时；会同时安装 PyTorch，实际交付建议固定 CPU/CUDA 对应版本。
+ultralytics>=8.3.0,<9

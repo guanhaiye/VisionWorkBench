@@ -1,0 +1,27 @@
+{
+  "manifestVersion": "1.0",
+  "id": "com.vision.yolo11",
+  "name": "YOLO11 视觉模型",
+  "version": "1.0.0",
+  "protocolVersion": "1.0",
+  "minimumHostVersion": "0.1.0",
+  "description": "YOLO11 目标定位、实例分割，以及由 YOLO11-seg 实例掩膜合并得到的语义分割。",
+  "author": "VisionWorkbench",
+  "runtime": {
+    "type": "python",
+    "entry": "worker.py"
+  },
+  "capabilities": {
+    "inputModes": ["single-image", "frame-stream"],
+    "outputs": ["detection", "segmentation", "metrics"],
+    "stateful": false,
+    "realtime": true
+  },
+  "streaming": {
+    "preferredFps": 10,
+    "queuePolicy": "latest",
+    "maximumQueueLength": 3
+  },
+  "executionProviders": ["cpu", "cuda"],
+  "settingsSchema": "settings.schema.json"
+}
