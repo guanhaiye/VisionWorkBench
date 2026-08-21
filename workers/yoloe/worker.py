@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.request
 from pathlib import Path
 
 
@@ -45,6 +46,14 @@ def main(payload: dict) -> dict:
     reference = Path(payload.get("referenceImage", ""))
     targets = [Path(path) for path in payload.get("targets", [])]
     prompts = payload.get("prompts", [])
+    default_model_name = "yoloe-11s-seg.pt"
+    if not model_path.is_file() and model_path.name == default_model_name:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-11s-seg.pt"
+        try:
+            urllib.request.urlretrieve(model_url, model_path)
+        except Exception as error:
+            fail(f"YOLOE 默认权重自动下载失败：{error}")
     if not model_path.is_file():
         fail(f"YOLOE 模型不存在：{model_path}")
     if not reference.is_file():

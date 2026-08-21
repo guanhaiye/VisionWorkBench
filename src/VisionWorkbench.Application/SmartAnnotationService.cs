@@ -45,12 +45,12 @@ public sealed class SmartAnnotationService
         _sam3Script = Path.Combine(sam3Directory, "worker.py");
         _yoloePython = ResolvePython(configuredPython, yoloeDirectory, Path.Combine(root, "yolo11"), root);
         _sam3Python = ResolvePython(configuredPython, sam3Directory, Path.Combine(root, "yolo11"), root);
-        YoloeModelPath = string.IsNullOrWhiteSpace(yoloeModelPath)
-            ? Path.Combine(yoloeDirectory, "models", "yoloe-11s-seg.pt")
-            : Path.GetFullPath(yoloeModelPath);
-        Sam3ModelPath = string.IsNullOrWhiteSpace(sam3ModelPath)
-            ? Path.Combine(sam3Directory, "models", "sam3.pt")
-            : Path.GetFullPath(sam3ModelPath);
+        YoloeModelPath = ResolveModelPath(
+            yoloeModelPath,
+            Path.Combine(yoloeDirectory, "models", "yoloe-11s-seg.pt"));
+        Sam3ModelPath = ResolveModelPath(
+            sam3ModelPath,
+            Path.Combine(sam3Directory, "models", "sam3.pt"));
     }
 
     public string YoloeModelPath { get; set; }
@@ -196,10 +196,20 @@ public sealed class SmartAnnotationService
     {
         var missing = new List<string>();
         if (!File.Exists(script)) missing.Add($"适配器 {script}");
-        if (!File.Exists(model)) missing.Add($"模型 {model}");
+        if (!File.Exists(model))
+        {
+            if (name.Equals("YOLOE", StringComparison.OrdinalIgnoreCase))
+                return $"YOLOE 将在首次推理时自动下载默认权重：{model}。Python：{python}";
+            return $"SAM3 将自动使用官方缓存/默认 checkpoint；当前未发现本地权重：{model}。Python：{python}";
+        }
         if (missing.Count == 0) return $"{name} 已配置：{model}";
         return $"{name} 未就绪：{string.Join("；", missing)}。Python：{python}";
     }
+
+    private static string ResolveModelPath(string? configured, string defaultPath) =>
+        !string.IsNullOrWhiteSpace(configured) && File.Exists(configured)
+            ? Path.GetFullPath(configured)
+            : defaultPath;
 
     private static void TryKill(Process process)
     {

@@ -119,36 +119,6 @@ public partial class DatasetAnnotationPage : UserControl
         }
     }
 
-    private void BrowseYoloeModel_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "选择 YOLOE 模型文件",
-            Filter = "YOLO 模型 (*.pt;*.onnx)|*.pt;*.onnx|所有文件 (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        if (dialog.ShowDialog() != true) return;
-        AppServices.Instance.SmartAnnotations.YoloeModelPath = dialog.FileName;
-        AppServices.Instance.Settings.YoloeModelPath = dialog.FileName;
-        AppServices.Instance.SaveUserSettings();
-        StatusText.Text = $"YOLOE 模型已配置：{dialog.FileName}";
-    }
-
-    private void BrowseSam3Model_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "选择 SAM3 模型文件",
-            Filter = "模型文件 (*.pt;*.pth;*.ckpt)|*.pt;*.pth;*.ckpt|所有文件 (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        if (dialog.ShowDialog() != true) return;
-        AppServices.Instance.SmartAnnotations.Sam3ModelPath = dialog.FileName;
-        AppServices.Instance.Settings.Sam3ModelPath = dialog.FileName;
-        AppServices.Instance.SaveUserSettings();
-        StatusText.Text = $"SAM3 模型已配置：{dialog.FileName}";
-    }
-
     private void DatasetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (DatasetList.SelectedItem is not DatasetDefinition dataset) return;

@@ -40,8 +40,6 @@ def mask_polygon(mask):
 def main(payload: dict) -> dict:
     model_path = Path(payload.get("modelPath", ""))
     image_path = Path(payload.get("image", ""))
-    if not model_path.is_file():
-        fail(f"SAM3 模型不存在：{model_path}")
     if not image_path.is_file():
         fail(f"图片不存在：{image_path}")
     points = payload.get("points", [])
@@ -59,7 +57,13 @@ def main(payload: dict) -> dict:
         from PIL import Image
 
         image = Image.open(image_path).convert("RGB")
-        model = build_sam3_image_model(checkpoint_path=str(model_path))
+        # SAM3 官方 checkpoint 需要 Hugging Face 授权。没有本地文件时，
+        # 让官方 builder 使用其默认缓存/认证下载流程，而不是要求用户选择路径。
+        model = (
+            build_sam3_image_model(checkpoint_path=str(model_path))
+            if model_path.is_file()
+            else build_sam3_image_model()
+        )
         processor = Sam3Processor(model)
         state = processor.set_image(image)
         for point in points:
