@@ -55,6 +55,8 @@ public partial class DatasetAnnotationPage : UserControl
         DatasetNameText.Text = _dataset.Name;
         DatasetRootText.Text = "";
         DatasetClassesText.Text = "object";
+        ClassCombo.ItemsSource = _dataset.Classes;
+        ClassCombo.SelectedIndex = 0;
         ImageList.ItemsSource = null;
         ClearImageView();
         StatusText.Text = "请先选择图片目录，然后保存数据集。";

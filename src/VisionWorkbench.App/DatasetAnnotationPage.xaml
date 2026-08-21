@@ -7,12 +7,12 @@
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+        <WrapPanel Grid.Row="0" Margin="0,0,0,8">
             <Button Content="新建数据集" Click="NewDataset_Click" />
             <Button Content="选择图片目录" Click="BrowseRoot_Click" Margin="6,0,0,0" />
             <Button Content="保存数据集" Click="SaveDataset_Click" Margin="6,0,0,0" />
             <Button Content="导出 YOLO 数据集" Click="ExportDataset_Click" Margin="6,0,0,0" />
-        </StackPanel>
+        </WrapPanel>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
@@ -48,7 +48,8 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="150" />
                 </Grid.RowDefinitions>
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="92" Margin="0,0,0,6">
+                    <WrapPanel>
                     <TextBlock Text="形状：" VerticalAlignment="Center" />
                     <ComboBox x:Name="AnnotationModeCombo" Width="100" SelectedIndex="0" Margin="0,0,8,0">
                         <ComboBoxItem Content="矩形框" Tag="bbox" />
@@ -62,7 +63,8 @@
                     <Button Content="YOLOE 自动标注当前图" Click="YoloeCurrent_Click" Margin="8,0,0,0" />
                     <Button Content="YOLOE 传播到后续图片" Click="YoloePropagate_Click" Margin="8,0,0,0" />
                     <Button Content="SAM3 点击分割" Click="Sam3ClickMode_Click" Margin="8,0,0,0" />
-                </StackPanel>
+                    </WrapPanel>
+                </ScrollViewer>
                 <Border Grid.Row="1" Background="#202020" BorderBrush="#888" BorderThickness="1">
                     <Grid>
                         <Image x:Name="AnnotationImage" Stretch="Fill" />

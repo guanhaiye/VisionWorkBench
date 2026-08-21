@@ -19,7 +19,7 @@ public partial class Shell : Window
         _pages["plugins"] = () => new PluginsPage();
         _pages["devices"] = () => new DevicesPage();
         _pages["settings"] = () => new SettingsPage();
-        ShowPage("live");
+        ShowPage("datasets");
     }
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
