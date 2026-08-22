@@ -64,9 +64,12 @@ public partial class DatasetAnnotationPage : UserControl
     private void NewDataset_Click(object sender, RoutedEventArgs e)
     {
         if (!RolePolicy.CanEditRecipe) return;
+        var typeDialog = new DatasetTypeDialog { Owner = Window.GetWindow(this) };
+        if (typeDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(typeDialog.SelectedTaskType)) return;
         _dataset = new DatasetDefinition
         {
             Name = $"dataset-{DateTime.Now:MMddHHmmss}",
+            TaskType = typeDialog.SelectedTaskType,
             Classes = ["object"],
         };
         DatasetNameText.Text = _dataset.Name;
@@ -74,6 +77,7 @@ public partial class DatasetAnnotationPage : UserControl
         DatasetClassesText.Text = "object";
         ClassCombo.ItemsSource = _dataset.Classes;
         ClassCombo.SelectedIndex = 0;
+        UpdateTaskTypeUi();
         ImageList.ItemsSource = null;
         ClearImageView();
         var datasets = AppServices.Instance.Datasets.List().ToList();
@@ -151,9 +155,11 @@ public partial class DatasetAnnotationPage : UserControl
         DatasetClassesText.Text = string.Join(", ", dataset.Classes);
         ClassCombo.ItemsSource = dataset.Classes;
         if (ClassCombo.Items.Count > 0) ClassCombo.SelectedIndex = 0;
+        UpdateTaskTypeUi();
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(dataset);
         ClearImageView();
-        StatusText.Text = $"{dataset.Name}：{ImageList.Items.Count} 张图片。标注格式为矩形框，可导出 YOLO。";
+        var shapeName = IsPolygonMode() ? "多边形" : "矩形框";
+        StatusText.Text = $"{dataset.Name}：{ImageList.Items.Count} 张图片。标注形状为{shapeName}。";
     }
 
     private async void ImageList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -167,7 +173,7 @@ public partial class DatasetAnnotationPage : UserControl
         {
             AnnotationImage.Source = await Task.Run(() => LoadBitmap(image.FullPath));
             RenderAnnotations();
-            StatusText.Text = $"当前图片：{image.RelativePath}，{_annotation.Objects.Count} 个标注。按住鼠标左键拖出矩形框。";
+            StatusText.Text = $"当前图片：{image.RelativePath}，{_annotation.Objects.Count} 个标注。可在图片上绘制{(IsPolygonMode() ? "多边形" : "矩形框")}。";
         }
         catch (Exception ex)
         {
@@ -631,10 +637,35 @@ public partial class DatasetAnnotationPage : UserControl
     };
 
     private bool IsPolygonMode() =>
-        ((AnnotationModeCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "polygon";
+        _dataset?.TaskType is "semantic_segmentation" or "instance_segmentation";
+
+    private void UpdateTaskTypeUi()
+    {
+        var taskType = _dataset?.TaskType;
+        if (taskType is not ("detection" or "semantic_segmentation" or "instance_segmentation"))
+        {
+            taskType = "detection";
+        }
+        var isDetection = taskType == "detection";
+        var isSegmentation = taskType is "semantic_segmentation" or "instance_segmentation";
+        var typeName = taskType switch
+        {
+            "detection" => "目标检测",
+            "semantic_segmentation" => "语义分割",
+            "instance_segmentation" => "实例分割",
+            _ => "未选择",
+        };
+        var shapeName = isDetection ? "矩形框" : isSegmentation ? "多边形" : "未选择";
+        DatasetTaskTypeText.Text = $"标注类型：{typeName}";
+        AnnotationShapeText.Text = $"形状：{shapeName}";
+        YoloeButton.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
+        Sam3Button.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
+        if (!isSegmentation) _sam3ClickMode = false;
+    }
 
     private async void YoloeCurrent_Click(object sender, RoutedEventArgs e)
     {
+        if (_dataset?.TaskType != "detection") return;
         if (!TryBuildYoloeMemoryRequest(out var prompts, out var reference)) return;
         var target = _image!;
         try
@@ -676,6 +707,7 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void Sam3ClickMode_Click(object sender, RoutedEventArgs e)
     {
+        if (_dataset?.TaskType is not ("semantic_segmentation" or "instance_segmentation")) return;
         if (_dataset is null || _image is null || _annotation is null || ClassCombo.SelectedItem is not string)
         {
             StatusText.Text = "请先选择数据集、图片和标注类别。";

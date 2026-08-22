@@ -20,9 +20,11 @@ public sealed class DatasetCatalogTests
             var dataset = service.Save(new DatasetDefinition
             {
                 Name = "demo",
+                TaskType = "instance_segmentation",
                 RootDirectory = imagesRoot,
                 Classes = ["scratch"],
             });
+            Assert.Equal("instance_segmentation", service.List().Single().TaskType);
             var image = Assert.Single(service.ListImages(dataset));
             service.SaveAnnotation(dataset, new DatasetAnnotation
             {

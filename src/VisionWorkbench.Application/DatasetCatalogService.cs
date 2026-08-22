@@ -9,6 +9,7 @@ public sealed class DatasetDefinition
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "新数据集";
+    public string TaskType { get; set; } = "detection";
     public string RootDirectory { get; set; } = "";
     public List<string> Classes { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -246,7 +247,7 @@ public sealed class DatasetCatalogService
 
     private static DatasetDefinition Clone(DatasetDefinition source) => new()
     {
-        Id = source.Id, Name = source.Name, RootDirectory = source.RootDirectory,
+        Id = source.Id, Name = source.Name, TaskType = source.TaskType, RootDirectory = source.RootDirectory,
         Classes = [.. source.Classes], CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt,
     };
 }
