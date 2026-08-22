@@ -378,12 +378,13 @@ public partial class DatasetAnnotationPage : UserControl
 
     private async void YoloeCurrent_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryBuildYoloeRequest(out var prompts, out var target)) return;
+        if (!TryBuildYoloeMemoryRequest(out var prompts, out var reference)) return;
+        var target = _image!;
         try
         {
             StatusText.Text = "YOLOE 正在根据当前框提示识别当前图片，请稍候……";
             var results = await AppServices.Instance.SmartAnnotations.RunYoloEAsync(
-                _image!.FullPath, prompts, [target.FullPath]);
+                reference.FullPath, prompts, [target.FullPath]);
             ApplySmartResults(results, "当前图片");
         }
         catch (Exception ex)
@@ -455,6 +456,68 @@ public partial class DatasetAnnotationPage : UserControl
         {
             StatusText.Text = $"SAM3 点击分割失败：{ex.Message}";
         }
+    }
+
+    private bool TryBuildYoloeMemoryRequest(out IReadOnlyList<YoloEPrompt> prompts, out DatasetImageItem reference)
+    {
+        prompts = [];
+        reference = null!;
+        if (_dataset is null || _image is null || _annotation is null)
+        {
+            StatusText.Text = "请先选择数据集和图片。";
+            return false;
+        }
+
+        var images = ImageList.Items.OfType<DatasetImageItem>().ToList();
+        var currentIndex = images.FindIndex(image => PathsEqual(image.FullPath, _image.FullPath));
+        var candidates = new List<(DatasetImageItem Image, DatasetAnnotation Annotation)>();
+        if (BuildYoloePrompts(_annotation).Count > 0)
+            candidates.Add((_image, _annotation));
+
+        // 当前图没有标注时，按图像顺序从前往后找最近一张已保存的标注图。
+        if (candidates.Count == 0 && currentIndex > 0)
+        {
+            for (var index = currentIndex - 1; index >= 0; index--)
+            {
+                var annotation = AppServices.Instance.Datasets.LoadAnnotation(_dataset, images[index].RelativePath);
+                if (annotation.Objects.Count > 0)
+                {
+                    candidates.Add((images[index], annotation));
+                    break;
+                }
+            }
+        }
+
+        foreach (var candidate in candidates)
+        {
+            var candidatePrompts = BuildYoloePrompts(candidate.Annotation);
+            if (candidatePrompts.Count > 0)
+            {
+                reference = candidate.Image;
+                prompts = candidatePrompts;
+                return true;
+            }
+        }
+
+        StatusText.Text = "当前图片没有可用的 YOLOE 标注记忆。请先手动画框、选择类别并保存当前标注，然后再执行自动标注。";
+        MessageBox.Show(
+            "还没有可用的标注记忆。请先在当前图片上画至少一个矩形框，选择类别并点击“保存当前标注”，再使用 YOLOE 自动标注。",
+            "需要先建立标注记忆",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+        return false;
+    }
+
+    private IReadOnlyList<YoloEPrompt> BuildYoloePrompts(DatasetAnnotation annotation)
+    {
+        if (_dataset is null) return [];
+        var classIds = _dataset.Classes
+            .Select((name, index) => (name, index))
+            .ToDictionary(x => x.name, x => x.index, StringComparer.OrdinalIgnoreCase);
+        return annotation.Objects
+            .Where(x => x.Width > 0 && x.Height > 0 && classIds.ContainsKey(x.ClassName))
+            .Select(x => new YoloEPrompt(x.ClassName, classIds[x.ClassName], x.X, x.Y, x.Width, x.Height))
+            .ToArray();
     }
 
     private bool TryBuildYoloeRequest(out IReadOnlyList<YoloEPrompt> prompts, out DatasetImageItem target)
