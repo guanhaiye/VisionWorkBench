@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 
 namespace VisionWorkbench.App;
 
@@ -7,10 +8,14 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        var splash = new SplashWindow();
+        splash.Show();
+        Dispatcher.Invoke(DispatcherPriority.Render, new Action(() => { }));
         AppServices.Instance.Initialize();
         var shell = new Shell();
         MainWindow = shell;
         shell.Show();
+        splash.Close();
         // 软件启动阶段立即开始预热，但不阻塞 WPF 主窗口创建。
         _ = AppServices.Instance.SmartAnnotations.WarmupYoloEAsync()
             .ContinueWith(task =>
