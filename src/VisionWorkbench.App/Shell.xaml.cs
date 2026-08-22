@@ -14,6 +14,7 @@ public partial class Shell : Window
         _pages["live"] = () => new LivePage();
         _pages["tasks"] = () => new TasksPage();
         _pages["datasets"] = () => new DatasetAnnotationPage();
+        _pages["training"] = () => new TrainingPage();
         _pages["stations"] = () => new ProjectStationsPage();
         _pages["history"] = () => new HistoryPage();
         _pages["plugins"] = () => new PluginsPage();

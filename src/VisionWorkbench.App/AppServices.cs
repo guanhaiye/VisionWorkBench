@@ -53,6 +53,7 @@ public sealed class AppServices
     public StationRunCoordinator StationRuns { get; private set; } = null!;
     public DatasetCatalogService Datasets { get; private set; } = null!;
     public SmartAnnotationService SmartAnnotations { get; private set; } = null!;
+    public Yolo11TrainingService Yolo11Training { get; private set; } = null!;
     public string SettingsFile { get; private set; } = "";
 
     private AppServices() { }
@@ -142,6 +143,7 @@ public sealed class AppServices
             Settings.PythonExecutable,
             Settings.YoloeModelPath,
             Settings.Sam3ModelPath);
+        Yolo11Training = new Yolo11TrainingService(pluginsRoot, Settings.PythonExecutable);
         AlgorithmManager = new AlgorithmManager(new AlgorithmManagerOptions
         {
             PluginsRoot = pluginsRoot,

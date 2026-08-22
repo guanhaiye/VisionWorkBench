@@ -47,6 +47,14 @@ public partial class App : System.Windows.Application
         {
             // 智能标注 Worker 关闭失败不影响应用退出
         }
+        try
+        {
+            AppServices.Instance.Yolo11Training.Dispose();
+        }
+        catch (Exception)
+        {
+            // 训练 Worker 关闭失败不影响应用退出
+        }
         base.OnExit(e);
     }
 }

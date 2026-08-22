@@ -18,6 +18,7 @@
                     <ListBoxItem Content="实时检测" Tag="live" Foreground="#E8E8E8" />
                     <ListBoxItem Content="任务配置" Tag="tasks" Foreground="#E8E8E8" />
                     <ListBoxItem Content="图片标注与数据集" Tag="datasets" IsSelected="True" Foreground="#E8E8E8" />
+                    <ListBoxItem Content="YOLO11 训练平台" Tag="training" Foreground="#E8E8E8" />
                     <ListBoxItem Content="项目与工位" Tag="stations" Foreground="#E8E8E8" />
                     <ListBoxItem Content="历史记录" Tag="history" Foreground="#E8E8E8" />
                     <ListBoxItem Content="算法管理" Tag="plugins" Foreground="#E8E8E8" />
