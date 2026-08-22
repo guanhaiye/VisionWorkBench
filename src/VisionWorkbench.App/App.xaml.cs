@@ -11,6 +11,13 @@ public partial class App : System.Windows.Application
         var shell = new Shell();
         MainWindow = shell;
         shell.Show();
+        // 软件启动阶段立即开始预热，但不阻塞 WPF 主窗口创建。
+        _ = AppServices.Instance.SmartAnnotations.WarmupYoloEAsync()
+            .ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                    System.Diagnostics.Debug.WriteLine($"YOLOE 启动预热失败：{task.Exception?.GetBaseException().Message}");
+            }, TaskScheduler.Default);
     }
 
     protected override void OnExit(ExitEventArgs e)

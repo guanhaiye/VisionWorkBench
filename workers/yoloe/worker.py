@@ -22,6 +22,38 @@ def fail(message: str) -> None:
     raise SystemExit(2)
 
 
+def ensure_model_path(model_path: Path) -> Path:
+    if not model_path.is_file() and model_path.name == "yoloe-11s-seg.pt":
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = model_path.with_suffix(model_path.suffix + ".download")
+        try:
+            urllib.request.urlretrieve(
+                "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-11s-seg.pt",
+                temporary_path,
+            )
+            temporary_path.replace(model_path)
+        except Exception as error:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            fail(f"YOLOE default weight download failed: {error}")
+    if not model_path.is_file():
+        fail(f"YOLOE model not found: {model_path}")
+    return model_path
+
+
+def load_model(model_path: Path):
+    try:
+        from ultralytics import YOLOE
+    except ImportError as error:
+        fail(f"YOLOE runtime is incomplete: {error}")
+    model_key = str(model_path.resolve())
+    if model_key not in _MODEL_CACHE:
+        _MODEL_CACHE[model_key] = YOLOE(str(model_path))
+    return _MODEL_CACHE[model_key]
+
+
 def polygon_from_mask(mask):
     try:
         import cv2
@@ -48,6 +80,7 @@ def main(payload: dict) -> dict:
     reference = Path(payload.get("referenceImage", ""))
     targets = [Path(path) for path in payload.get("targets", [])]
     prompts = payload.get("prompts", [])
+    model_path = ensure_model_path(model_path)
     default_model_name = "yoloe-11s-seg.pt"
     if not model_path.is_file() and model_path.name == default_model_name:
         model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,10 +117,7 @@ def main(payload: dict) -> dict:
         bboxes.append([x, y, x + width, y + height])
         class_ids.append(int(prompt.get("classId", len(class_ids))))
 
-    model_key = str(model_path.resolve())
-    if model_key not in _MODEL_CACHE:
-        _MODEL_CACHE[model_key] = YOLOE(str(model_path))
-    model = _MODEL_CACHE[model_key]
+    model = load_model(model_path)
     visual_prompts = {"bboxes": np.asarray(bboxes, dtype=np.float32), "cls": np.asarray(class_ids, dtype=np.int64)}
     valid_targets = [target for target in targets if target.is_file()]
     predictions = model.predict(
@@ -140,7 +170,14 @@ def persistent_main() -> None:
         if not line.strip():
             continue
         try:
-            print(json.dumps(main(json.loads(line)), ensure_ascii=False), flush=True)
+            payload = json.loads(line)
+            if payload.get("type") == "warmup":
+                model_path = ensure_model_path(Path(payload.get("modelPath", "")))
+                load_model(model_path)
+                output = {"ready": True, "modelPath": str(model_path)}
+            else:
+                output = main(payload)
+            print(json.dumps(output, ensure_ascii=False), flush=True)
         except Exception as error:
             print(json.dumps({"error": f"YOLOE 智能标注失败：{type(error).__name__}: {error}"}, ensure_ascii=False), flush=True)
 

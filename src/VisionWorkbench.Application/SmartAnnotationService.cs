@@ -63,6 +63,29 @@ public sealed class SmartAnnotationService
     public string DescribeYoloeAvailability() => Describe(_yoloeScript, _yoloePython, YoloeModelPath, "YOLOE");
     public string DescribeSam3Availability() => Describe(_sam3Script, _sam3Python, Sam3ModelPath, "SAM3");
 
+    public async Task WarmupYoloEAsync(CancellationToken cancellationToken = default)
+    {
+        await _yoloeGate.WaitAsync(cancellationToken);
+        try
+        {
+            using var warmupTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            warmupTimeout.CancelAfter(TimeSpan.FromSeconds(60));
+            var response = await RunPersistentYoloEAsync(new YoloEWarmupRequest
+            {
+                Type = "warmup",
+                ModelPath = YoloeModelPath,
+            }, warmupTimeout.Token);
+            if (!string.IsNullOrWhiteSpace(response.Error))
+                throw new InvalidOperationException(response.Error);
+            if (!response.Ready)
+                throw new InvalidOperationException("YOLOE 启动预热没有返回 ready 状态。");
+        }
+        finally
+        {
+            _yoloeGate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<SmartAnnotationImageResult>> RunYoloEAsync(
         string referenceImage,
         IReadOnlyList<YoloEPrompt> prompts,
@@ -189,7 +212,7 @@ public sealed class SmartAnnotationService
     }
 
     private async Task<SmartAnnotationResponse> RunPersistentYoloEAsync(
-        YoloERequest request,
+        object request,
         CancellationToken cancellationToken)
     {
         EnsureYoloEProcess();
@@ -317,6 +340,12 @@ public sealed class SmartAnnotationService
         public double Confidence { get; set; } = 0.25;
     }
 
+    private sealed class YoloEWarmupRequest
+    {
+        public string Type { get; set; } = "warmup";
+        public string ModelPath { get; set; } = "";
+    }
+
     private sealed class Sam3Request
     {
         public string ModelPath { get; set; } = "";
@@ -336,5 +365,6 @@ public sealed class SmartAnnotationService
     {
         public List<SmartAnnotationImageResult>? Results { get; set; }
         public string? Error { get; set; }
+        public bool Ready { get; set; }
     }
 }
