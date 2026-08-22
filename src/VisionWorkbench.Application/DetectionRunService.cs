@@ -57,6 +57,7 @@ public sealed class DetectionRunService : IAsyncDisposable
     private Task? _dbLoopTask;
     private long _pendingDbWrites;
     private Task? _processingLoopTask;
+    private FrameRoutingStrategy _routingStrategy = FrameRoutingStrategy.LatestOnly;
 
     public DetectionRunState State { get; private set; } = DetectionRunState.Idle;
     public FrameScheduler Scheduler { get; private set; } = new();
@@ -125,6 +126,7 @@ public sealed class DetectionRunService : IAsyncDisposable
         _projectId = string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
         _camera = camera;
         _algorithm = algorithm;
+        _routingStrategy = routingStrategy;
         BatchId = batchId;
         _evidenceDir = Path.Combine(
             Path.GetDirectoryName(_tempStore.RootDirectory.TrimEnd(Path.DirectorySeparatorChar)) ?? ".",
@@ -157,6 +159,39 @@ public sealed class DetectionRunService : IAsyncDisposable
         _processingLoopTask = Task.Run(() => ProcessingLoopAsync(_cts.Token));
         _logger?.LogInformation("检测开始: task={TaskId} batch={BatchId} counter={Counter}",
             taskId, batchId, _counterId);
+    }
+
+    /// <summary>替换单次测试输入源，但保留当前算法会话和已加载模型。</summary>
+    public async Task RestartCameraAsync(
+        ICameraSession camera,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        if (_algorithm is null || State is DetectionRunState.Idle or DetectionRunState.Stopped
+            or DetectionRunState.Faulted)
+        {
+            throw new InvalidOperationException("当前检测会话不可复用");
+        }
+
+        if (_camera is not null)
+        {
+            var old = _camera;
+            DetachCamera(old);
+            await old.StopAsync(CancellationToken.None);
+            await old.DisposeAsync();
+        }
+
+        _camera = camera;
+        Scheduler = new FrameScheduler(_routingStrategy);
+        Scheduler.PreviewReceived += (s, frame) => PreviewReceived?.Invoke(s, frame);
+        camera.FrameReceived += OnCameraFrame;
+        camera.Completed += OnCameraCompleted;
+        camera.Faulted += OnCameraFaulted;
+        await camera.StartAsync(cancellationToken);
+
+        _paused = false;
+        SetState(DetectionRunState.Running);
+        _processingLoopTask = Task.Run(() => ProcessingLoopAsync(_cts.Token));
     }
 
     public Task PauseAsync()

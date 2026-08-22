@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
+using VisionWorkbench.Algorithms;
 using VisionWorkbench.Application;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Contracts.Results;
@@ -19,6 +20,7 @@ public partial class LivePage : UserControl
     private readonly PreviewRenderer _preview = new();
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private DetectionRunService? _run;
+    private IAlgorithmSession? _algorithmSession;
     private ICameraSession? _cameraSession;
     private long _okCount;
     private long _ngCount;
@@ -117,7 +119,8 @@ public partial class LivePage : UserControl
             _cameraSession = await OpenCameraAsync(recipe, CancellationToken.None, singleFrame);
 
             // 2. 算法会话
-            var algorithm = await svcs.AlgorithmManager.CreateSessionAsync(recipe.PluginId, CancellationToken.None);
+            _algorithmSession = await svcs.AlgorithmManager.CreateSessionAsync(
+                recipe.PluginId, CancellationToken.None);
 
             // 3. 检测运行时 + 批次：优先恢复上次异常退出遗留的 running 批次
             _run = new DetectionRunService(svcs.Records, svcs.TempImages,
@@ -128,7 +131,7 @@ public partial class LivePage : UserControl
             _run.RecordCompleted += OnRecordCompleted;
             _run.Faulted += OnRunFaulted;
             _run.SourceCompleted += async (_, _) => await Dispatcher.InvokeAsync(StopFromSourceEnd);
-            await _run.StartAsync(recipe, entity.Id, _cameraSession, algorithm, batch.Id);
+            await _run.StartAsync(recipe, entity.Id, _cameraSession, _algorithmSession, batch.Id);
 
             _okCount = _ngCount = _reviewCount = 0;
             VisibleText.Text = "当前可见: 0";
@@ -175,6 +178,33 @@ public partial class LivePage : UserControl
         }
         if (_run is not null && _run.State is (DetectionRunState.Running or DetectionRunState.Paused))
         {
+            if (_activeRecipe?.CameraProviderId is ("image-folder" or "video-file"))
+            {
+                _singleFrameBusy = true;
+                SetButtons(running: true);
+                _singleFrameRun = true;
+                _singleFrameReceived = false;
+                try
+                {
+                    _cameraSession = await OpenCameraAsync(_activeRecipe, CancellationToken.None, true);
+                    await _run.RestartCameraAsync(_cameraSession, CancellationToken.None);
+                    StatusText.Text = "\u5355\u6b21\u68c0\u6d4b\u5904\u7406\u4e2d\uff08\u5df2\u590d\u7528\u6a21\u578b\uff09\u2026";
+                }
+                catch (Exception ex)
+                {
+                    _singleFrameBusy = false;
+                    _singleFrameRun = false;
+                    SetButtons(running: true);
+                    StatusText.Text = $"\u5355\u6b21\u68c0\u6d4b\u542f\u52a8\u5931\u8d25\uff1a{ex.Message}";
+                    if (_cameraSession is not null)
+                    {
+                        await _cameraSession.DisposeAsync();
+                        _cameraSession = null;
+                    }
+                }
+                return;
+            }
+
             var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
             if (result is null)
                 StatusText.Text = "单次检测：等待帧超时或源已播完";
@@ -260,6 +290,24 @@ public partial class LivePage : UserControl
             }
         }
         // 有限源（图片目录/视频）播完：自动结束批次
+        if (_singleFrameRun)
+        {
+            if (_singleFrameReceived)
+            {
+                _singleFrameNextIndex++;
+                StatusText.Text = "\u5355\u6b21\u68c0\u6d4b\u5df2\u5b8c\u6210\uff0c\u53ef\u7ee7\u7eed\u70b9\u51fb\u5355\u6b21\u68c0\u6d4b\uff08\u6a21\u578b\u5df2\u590d\u7528\uff09";
+            }
+            else
+            {
+                StatusText.Text = "\u56fe\u7247\u6e90\u5df2\u5904\u7406\u5b8c\u6bd5";
+            }
+            _singleFrameRun = false;
+            _singleFrameReceived = false;
+            _singleFrameBusy = false;
+            SetButtons(running: true);
+            return;
+        }
+
         if (_singleFrameRun && _singleFrameReceived)
         {
             _singleFrameNextIndex++;
@@ -277,6 +325,11 @@ public partial class LivePage : UserControl
             _run.Faulted -= OnRunFaulted;
             await _run.DisposeAsync();
             _run = null;
+        }
+        if (_algorithmSession is not null)
+        {
+            await _algorithmSession.DisposeAsync();
+            _algorithmSession = null;
         }
         if (_cameraSession is not null)
         {
