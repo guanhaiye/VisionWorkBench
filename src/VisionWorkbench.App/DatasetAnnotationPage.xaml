@@ -9,6 +9,7 @@
         </Grid.RowDefinitions>
         <WrapPanel Grid.Row="0" Margin="0,0,0,8">
             <Button Content="新建数据集" Click="NewDataset_Click" />
+            <Button Content="加载数据集" Click="LoadDataset_Click" Margin="6,0,0,0" />
             <Button Content="选择图片目录" Click="BrowseRoot_Click" Margin="6,0,0,0" />
             <Button Content="保存数据集" Click="SaveDataset_Click" Margin="6,0,0,0" />
             <Button Content="导出 YOLO 数据集" Click="ExportDataset_Click" Margin="6,0,0,0" />
@@ -23,7 +24,10 @@
 
             <DockPanel Grid.Column="0" Margin="0,0,8,0">
                 <TextBlock DockPanel.Dock="Top" Text="数据集" FontWeight="Bold" Margin="0,0,0,4" />
-                <ListBox x:Name="DatasetList" DisplayMemberPath="Name" SelectionChanged="DatasetList_SelectionChanged" />
+                <ListBox x:Name="DatasetList"
+                         DisplayMemberPath="Name"
+                         SelectionChanged="DatasetList_SelectionChanged"
+                         PreviewMouseRightButtonDown="DatasetList_PreviewMouseRightButtonDown" />
             </DockPanel>
 
             <StackPanel Grid.Column="1" Margin="0,0,8,0">

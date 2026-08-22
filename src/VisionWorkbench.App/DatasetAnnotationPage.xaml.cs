@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -87,6 +88,42 @@ public partial class DatasetAnnotationPage : UserControl
         StatusText.Text = "已新建数据集单元。请填写图片目录和类别，然后保存数据集。";
     }
 
+    private void LoadDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RolePolicy.CanEditRecipe) return;
+        var dialog = new OpenFolderDialog { Title = "加载已有数据集目录" };
+        if (dialog.ShowDialog() != true) return;
+        var rootDirectory = dialog.FolderName;
+        var existing = AppServices.Instance.Datasets.List()
+            .FirstOrDefault(dataset => PathsEqual(dataset.RootDirectory, rootDirectory));
+        if (existing is not null)
+        {
+            RefreshDatasets(existing.Id);
+            StatusText.Text = $"数据集已在列表中：{existing.Name}";
+            return;
+        }
+
+        var typeDialog = new DatasetTypeDialog { Owner = Window.GetWindow(this) };
+        if (typeDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(typeDialog.SelectedTaskType)) return;
+        try
+        {
+            var directory = new DirectoryInfo(rootDirectory);
+            var dataset = AppServices.Instance.Datasets.Save(new DatasetDefinition
+            {
+                Name = directory.Name,
+                RootDirectory = rootDirectory,
+                TaskType = typeDialog.SelectedTaskType,
+                Classes = ["object"],
+            });
+            RefreshDatasets(dataset.Id);
+            StatusText.Text = $"已加载数据集：{dataset.Name}。请根据需要修改类别并保存。";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"加载数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void BrowseRoot_Click(object sender, RoutedEventArgs e)
     {
         if (!RolePolicy.CanEditRecipe) return;
@@ -160,6 +197,99 @@ public partial class DatasetAnnotationPage : UserControl
         ClearImageView();
         var shapeName = IsPolygonMode() ? "多边形" : "矩形框";
         StatusText.Text = $"{dataset.Name}：{ImageList.Items.Count} 张图片。标注形状为{shapeName}。";
+    }
+
+    private void DatasetList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var index = FindDatasetListIndex(e.OriginalSource as DependencyObject);
+        if (index is null) return;
+        DatasetList.SelectedIndex = index.Value;
+        if (DatasetList.SelectedItem is DatasetDefinition dataset)
+        {
+            ShowDatasetContextMenu(dataset);
+            e.Handled = true;
+        }
+    }
+
+    private int? FindDatasetListIndex(DependencyObject? source)
+    {
+        while (source is not null && source is not ListBoxItem)
+        {
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return source is ListBoxItem item
+            ? DatasetList.ItemContainerGenerator.IndexFromContainer(item)
+            : null;
+    }
+
+    private void ShowDatasetContextMenu(DatasetDefinition dataset)
+    {
+        var menu = new ContextMenu { PlacementTarget = DatasetList };
+        var open = new MenuItem { Header = "打开本地目录" };
+        open.Click += (_, _) => OpenDatasetDirectory(dataset);
+        menu.Items.Add(open);
+        var rename = new MenuItem { Header = "修改数据集名称" };
+        rename.Click += (_, _) => RenameDataset(dataset);
+        menu.Items.Add(rename);
+        menu.Items.Add(new Separator());
+        var delete = new MenuItem { Header = "删除数据集" };
+        delete.Click += (_, _) => DeleteDataset(dataset);
+        menu.Items.Add(delete);
+        menu.IsOpen = true;
+    }
+
+    private void OpenDatasetDirectory(DatasetDefinition dataset)
+    {
+        if (!Directory.Exists(dataset.RootDirectory))
+        {
+            MessageBox.Show($"本地目录不存在：{dataset.RootDirectory}", "打开目录", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = dataset.RootDirectory,
+            UseShellExecute = true,
+        });
+    }
+
+    private void RenameDataset(DatasetDefinition dataset)
+    {
+        var dialog = new DatasetRenameDialog(dataset.Name) { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            dataset.Name = dialog.DatasetName;
+            AppServices.Instance.Datasets.Save(dataset);
+            RefreshDatasets(dataset.Id);
+            StatusText.Text = $"数据集已重命名为：{dataset.Name}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"修改数据集名称失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void DeleteDataset(DatasetDefinition dataset)
+    {
+        var result = MessageBox.Show(
+            $"确定要删除数据集“{dataset.Name}”吗？\n\n此操作只会从 VisionWorkbench 列表中移除数据集，不会删除本地图片和标注文件。",
+            "确认删除数据集",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+        AppServices.Instance.Datasets.Delete(dataset.Id);
+        RefreshDatasets();
+        if (DatasetList.Items.Count == 0)
+        {
+            _dataset = null;
+            DatasetNameText.Text = "";
+            DatasetRootText.Text = "";
+            DatasetClassesText.Text = "";
+            ClassCombo.ItemsSource = null;
+            UpdateTaskTypeUi();
+            ClearImageView();
+        }
+        StatusText.Text = $"数据集“{dataset.Name}”已从列表中删除，本地文件未被删除。";
     }
 
     private async void ImageList_SelectionChanged(object sender, SelectionChangedEventArgs e)
