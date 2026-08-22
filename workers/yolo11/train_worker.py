@@ -22,6 +22,10 @@ def scalar(value: Any) -> float | None:
     if value is None:
         return None
     try:
+        if isinstance(value, dict):
+            values = [scalar(item) for item in value.values()]
+            values = [item for item in values if item is not None]
+            return sum(values) if values else None
         if hasattr(value, "detach"):
             value = value.detach()
         if hasattr(value, "cpu"):
