@@ -33,6 +33,7 @@ internal sealed class ImageFolderSession(
     private int _intervalMs;
     private bool _loop;
     private int? _maxFrames;
+    private int _startFrameIndex;
 
     public CameraDescriptor Descriptor { get; } = descriptor;
     public CameraSessionState State { get; private set; } = CameraSessionState.Idle;
@@ -60,6 +61,7 @@ internal sealed class ImageFolderSession(
         _intervalMs = options.FrameIntervalMs;
         _loop = options.Loop;
         _maxFrames = options.MaxFrames;
+        _startFrameIndex = Math.Max(0, options.StartFrameIndex);
         State = CameraSessionState.Idle;
         return Task.CompletedTask;
     }
@@ -113,9 +115,10 @@ internal sealed class ImageFolderSession(
     private async Task RunAsync(string dir, TimeSpan interval, bool loop, CancellationToken ct)
     {
         var emittedFrames = 0;
+        var startFrameIndex = _startFrameIndex;
         while (!ct.IsCancellationRequested)
         {
-            foreach (var file in EnumerateImages(dir))
+            foreach (var file in EnumerateImages(dir).Skip(startFrameIndex))
             {
                 if (ct.IsCancellationRequested)
                 {
@@ -158,6 +161,7 @@ internal sealed class ImageFolderSession(
             {
                 break;
             }
+            startFrameIndex = 0;
         }
         if (State == CameraSessionState.Streaming)
         {

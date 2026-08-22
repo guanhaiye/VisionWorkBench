@@ -77,6 +77,9 @@ public sealed record CameraOpenOptions
 
     /// <summary>虚拟源：最多输出的有效帧数；null 表示不限制。</summary>
     public int? MaxFrames { get; init; }
+
+    /// <summary>虚拟源：从指定的帧索引开始输出，索引从 0 开始。</summary>
+    public int StartFrameIndex { get; init; }
 }
 
 /// <summary>相机参数集合（首版占位，仅接口形状落地）。</summary>

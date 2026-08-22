@@ -29,6 +29,9 @@ public partial class LivePage : UserControl
     private Recipe? _activeRecipe;
     private AlgorithmOutput? _lastOutput;
     private int _reconnectInProgress;
+    private int _singleFrameNextIndex;
+    private bool _singleFrameRun;
+    private bool _singleFrameReceived;
     private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
 
     public LivePage()
@@ -80,6 +83,12 @@ public partial class LivePage : UserControl
             return;
         }
         _activeRecipe = recipe;
+        if (!singleFrame)
+        {
+            _singleFrameNextIndex = 0;
+        }
+        _singleFrameRun = singleFrame;
+        _singleFrameReceived = false;
         var svcs = AppServices.Instance;
         var logger = svcs.LoggerFactory.CreateLogger<LivePage>();
 
@@ -228,6 +237,12 @@ public partial class LivePage : UserControl
             }
         }
         // 有限源（图片目录/视频）播完：自动结束批次
+        if (_singleFrameRun && _singleFrameReceived)
+        {
+            _singleFrameNextIndex++;
+        }
+        _singleFrameRun = false;
+        _singleFrameReceived = false;
         await StopBatchAsync();
     }
 
@@ -309,7 +324,7 @@ public partial class LivePage : UserControl
             DisplayName = recipe.CameraDeviceId,
         };
         var options = singleFrame && recipe.CameraProviderId is ("image-folder" or "video-file")
-            ? _cameraOptions with { MaxFrames = 1 }
+            ? _cameraOptions with { MaxFrames = 1, StartFrameIndex = _singleFrameNextIndex }
             : _cameraOptions;
         var session = await AppServices.Instance.Cameras.OpenSessionAsync(
             descriptor, options, cancellationToken);
@@ -331,6 +346,10 @@ public partial class LivePage : UserControl
 
     private void OnRecordCompleted(object? sender, RecordCompletedEventArgs e)
     {
+        if (_singleFrameRun)
+        {
+            _singleFrameReceived = true;
+        }
         _algoFpsFrames++;
         var now = DateTimeOffset.UtcNow;
         if (now - _algoFpsWindow >= TimeSpan.FromSeconds(1))

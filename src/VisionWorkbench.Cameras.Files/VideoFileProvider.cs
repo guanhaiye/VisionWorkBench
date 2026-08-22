@@ -34,6 +34,7 @@ internal sealed class VideoFileSession(
     private bool _loop;
     private int _intervalMsOverride;
     private int? _maxFrames;
+    private int _startFrameIndex;
     private string? _asciiFallbackPath;
 
     public CameraDescriptor Descriptor { get; } = descriptor;
@@ -67,6 +68,11 @@ internal sealed class VideoFileSession(
         _intervalMsOverride = options.FrameIntervalMs;
         _loop = options.Loop;
         _maxFrames = options.MaxFrames;
+        _startFrameIndex = Math.Max(0, options.StartFrameIndex);
+        if (_startFrameIndex > 0)
+        {
+            _capture.Set(VideoCaptureProperties.PosFrames, _startFrameIndex);
+        }
         Capabilities = new CameraCapabilities
         {
             SupportedModes =
