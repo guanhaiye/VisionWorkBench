@@ -389,6 +389,11 @@ public partial class LivePage : UserControl
             }
             RecordStatsText.Text = $"OK {_okCount} / NG {_ngCount} / 待确认 {_reviewCount}";
 
+            // 结果必须绘制在本次推理对应的原始帧上，避免批量处理时错叠到下一张图片。
+            if (e.Frame is not null)
+            {
+                _preview.Render(PreviewImage, e.Frame, force: true);
+            }
             DrawOverlay(e.Output);
             if (e.Decision.Status is DecisionStatus.Ng or DecisionStatus.ReviewRequired
                 && e.Record.AnnotatedImagePath is { } path && File.Exists(path))

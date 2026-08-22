@@ -20,11 +20,11 @@ public sealed class PreviewRenderer
     public long RenderedFrames => _renderedFrames;
 
     /// <summary>写入目标 Image 控件；返回是否渲染（节流跳过返回 false）。</summary>
-    public bool Render(System.Windows.Controls.Image image, VideoFrame frame, int maxFps = 30)
+    public bool Render(System.Windows.Controls.Image image, VideoFrame frame, int maxFps = 30, bool force = false)
     {
         var now = DateTimeOffset.UtcNow;
         var minInterval = TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, maxFps));
-        if (now - _lastRender < minInterval)
+        if (!force && now - _lastRender < minInterval)
         {
             return false;
         }

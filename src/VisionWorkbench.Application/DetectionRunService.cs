@@ -25,6 +25,8 @@ public sealed class RecordCompletedEventArgs : EventArgs
 {
     public string StationCode { get; init; } = "";
     public required InspectionRecordEntity Record { get; init; }
+    /// <summary>本次结果对应的原始帧，供界面将原图与结果叠加显示。</summary>
+    public VideoFrame? Frame { get; init; }
     public required AlgorithmOutput Output { get; init; }
     public required DecisionResult Decision { get; init; }
     public long CountAfter { get; init; }
@@ -559,6 +561,7 @@ public sealed class DetectionRunService : IAsyncDisposable
             {
                 StationCode = _recipe.StationCode,
                 Record = record,
+                Frame = frame,
                 Output = output,
                 Decision = decision,
                 CountAfter = Counting.State.CurrentTotal,
