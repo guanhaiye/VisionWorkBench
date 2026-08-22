@@ -14,6 +14,8 @@ public sealed class DatasetCatalogTests
         var exportRoot = Path.Combine(root, "export");
         Directory.CreateDirectory(imagesRoot);
         File.WriteAllBytes(Path.Combine(imagesRoot, "one.png"), [1, 2, 3]);
+        Directory.CreateDirectory(Path.Combine(imagesRoot, ".visionworkbench", "training-data", "run"));
+        File.WriteAllBytes(Path.Combine(imagesRoot, ".visionworkbench", "training-data", "run", "one.png"), [1, 2, 3]);
         try
         {
             var service = new DatasetCatalogService(catalogRoot);

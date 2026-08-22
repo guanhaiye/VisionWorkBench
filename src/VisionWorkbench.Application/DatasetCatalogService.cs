@@ -127,6 +127,7 @@ public sealed class DatasetCatalogService
         var annotationDirectory = GetAnnotationDirectory(dataset);
         return Directory.EnumerateFiles(dataset.RootDirectory, "*.*", SearchOption.AllDirectories)
             .Where(path => ImageExtensions.Contains(Path.GetExtension(path)))
+            .Where(path => !IsInternalDatasetPath(Path.GetRelativePath(dataset.RootDirectory, path)))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(path =>
             {
@@ -216,6 +217,14 @@ public sealed class DatasetCatalogService
 
     private static string GetAnnotationDirectory(DatasetDefinition dataset) =>
         Path.Combine(dataset.RootDirectory, ".visionworkbench", "annotations");
+
+    private static bool IsInternalDatasetPath(string relativePath)
+    {
+        var firstSegment = relativePath
+            .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        return string.Equals(firstSegment, ".visionworkbench", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string GetAnnotationPath(string annotationDirectory, string relativePath)
     {
