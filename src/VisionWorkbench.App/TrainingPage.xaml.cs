@@ -342,13 +342,52 @@ public partial class TrainingPage : UserControl
         LossCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = height - bottom, Stroke = axisBrush });
         LossCanvas.Children.Add(new Line { X1 = left, Y1 = height - bottom, X2 = width - right, Y2 = height - bottom, Stroke = axisBrush });
         if (_lossPoints.Count == 0) return;
-        var maxLoss = Math.Max(0.001, _lossPoints.Max(point => point.Loss) * 1.1);
+
+        // 根据当前数据动态收窄纵轴范围，避免 Loss 都挤在图表顶部。
+        var dataMin = _lossPoints.Min(point => point.Loss);
+        var dataMax = _lossPoints.Max(point => point.Loss);
+        var dataRange = dataMax - dataMin;
+        var padding = dataRange > 0.000001
+            ? dataRange * 0.15
+            : Math.Max(Math.Abs(dataMax) * 0.1, 0.1);
+        var minLoss = Math.Max(0, dataMin - padding);
+        var maxLoss = Math.Max(minLoss + 0.001, dataMax + padding);
         var maxEpoch = Math.Max(1, _lossPoints.Max(point => point.Epoch));
+
+        var gridBrush = new SolidColorBrush(Color.FromRgb(232, 232, 232));
+        const int gridCount = 4;
+        for (var index = 0; index <= gridCount; index++)
+        {
+            var ratio = index / (double)gridCount;
+            var y = top + ratio * plotHeight;
+            LossCanvas.Children.Add(new Line
+            {
+                X1 = left,
+                Y1 = y,
+                X2 = width - right,
+                Y2 = y,
+                Stroke = gridBrush,
+                StrokeDashArray = [2, 2],
+            });
+            var value = maxLoss - ratio * (maxLoss - minLoss);
+            var label = new TextBlock
+            {
+                Text = value.ToString("0.###"),
+                Foreground = Brushes.Gray,
+                FontSize = 10,
+                Width = left - 6,
+                TextAlignment = TextAlignment.Right,
+            };
+            LossCanvas.Children.Add(label);
+            Canvas.SetLeft(label, 0);
+            Canvas.SetTop(label, Math.Max(0, y - 8));
+        }
+
         var polyline = new Polyline { Stroke = Brushes.DodgerBlue, StrokeThickness = 2 };
         foreach (var point in _lossPoints)
         {
             var x = left + (point.Epoch - 1) * plotWidth / Math.Max(1, maxEpoch - 1);
-            var y = top + (maxLoss - point.Loss) * plotHeight / maxLoss;
+            var y = top + (maxLoss - point.Loss) * plotHeight / (maxLoss - minLoss);
             polyline.Points.Add(new Point(x, y));
         }
         LossCanvas.Children.Add(polyline);
