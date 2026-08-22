@@ -40,7 +40,9 @@
                     </StackPanel>
                 </GroupBox>
                 <TextBlock Text="图片列表" FontWeight="Bold" Margin="0,10,0,4" />
-                <ListBox x:Name="ImageList" SelectionChanged="ImageList_SelectionChanged">
+                <ListBox x:Name="ImageList"
+                         SelectionChanged="ImageList_SelectionChanged"
+                         HorizontalContentAlignment="Stretch">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Grid>
