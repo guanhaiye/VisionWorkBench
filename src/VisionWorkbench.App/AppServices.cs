@@ -18,7 +18,7 @@ namespace VisionWorkbench.App;
 public sealed class AppSettings
 {
     public string DataDirectory { get; set; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VisionWorkbench");
+        Path.Combine(FindProjectRoot(), "data");
     public string? PluginsRoot { get; set; }
     public string? PythonExecutable { get; set; }
     public string? YoloeModelPath { get; set; }
@@ -27,6 +27,23 @@ public sealed class AppSettings
     public string CurrentRole { get; set; } = "engineer";
     public string OperatorName { get; set; } = Environment.UserName;
     public string? ResultWebhookUrl { get; set; }
+
+    private static string FindProjectRoot()
+    {
+        foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        {
+            var directory = new DirectoryInfo(start);
+            for (var index = 0; index < 8 && directory is not null; index++, directory = directory.Parent)
+            {
+                if (Directory.Exists(Path.Combine(directory.FullName, "src")) &&
+                    Directory.Exists(Path.Combine(directory.FullName, "workers")))
+                {
+                    return directory.FullName;
+                }
+            }
+        }
+        return AppContext.BaseDirectory;
+    }
 }
 
 /// <summary>组合根：进程级服务装配（文档 §5）。UI 线程与后台服务共享同一实例。</summary>
