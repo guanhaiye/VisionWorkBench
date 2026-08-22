@@ -288,6 +288,17 @@ public sealed class DetectionRunService : IAsyncDisposable
         }
     }
 
+    /// <summary>等待有限输入源的推理队列处理完毕，不主动取消在途帧。</summary>
+    public async Task WaitForCompletionAsync(TimeSpan? timeout = null)
+    {
+        var processing = _processingLoopTask;
+        if (processing is null) return;
+        if (timeout is { } limit)
+            await processing.WaitAsync(limit);
+        else
+            await processing;
+    }
+
     /// <summary>停止检测（不结束批次；批次由 BatchService 管理）。</summary>
     public async Task StopAsync()
     {

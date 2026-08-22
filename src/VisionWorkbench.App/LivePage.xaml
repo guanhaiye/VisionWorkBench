@@ -14,7 +14,7 @@
             <ComboBox x:Name="TaskCombo" Width="240" DisplayMemberPath="Name" />
             <Button x:Name="StartButton" Content="开始" Click="Start_Click" Margin="16,0,0,0" />
             <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False" />
-            <Button x:Name="SingleButton" Content="单次检测" Click="Single_Click" IsEnabled="False" />
+            <Button x:Name="SingleButton" Content="单次检测" Click="Single_Click" />
             <Button x:Name="StopButton" Content="结束批次" Click="Stop_Click" IsEnabled="False" />
             <Button x:Name="AdjustButton" Content="人工修正" Click="Adjust_Click" IsEnabled="False" />
             <Button x:Name="ResetCountButton" Content="清零" Click="ResetCount_Click" IsEnabled="False" />

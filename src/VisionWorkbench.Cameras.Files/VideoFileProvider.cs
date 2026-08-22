@@ -33,6 +33,7 @@ internal sealed class VideoFileSession(
     private double _fps = 25;
     private bool _loop;
     private int _intervalMsOverride;
+    private int? _maxFrames;
     private string? _asciiFallbackPath;
 
     public CameraDescriptor Descriptor { get; } = descriptor;
@@ -65,6 +66,7 @@ internal sealed class VideoFileSession(
         _fps = options.DesiredFps ?? (_capture.Fps > 0 ? _capture.Fps : 25);
         _intervalMsOverride = options.FrameIntervalMs;
         _loop = options.Loop;
+        _maxFrames = options.MaxFrames;
         Capabilities = new CameraCapabilities
         {
             SupportedModes =
@@ -178,6 +180,7 @@ internal sealed class VideoFileSession(
     private async Task RunAsync(VideoCapture capture, CancellationToken ct)
     {
         using var mat = new Mat();
+        var emittedFrames = 0;
         var interval = _intervalMsOverride > 0
             ? TimeSpan.FromMilliseconds(_intervalMsOverride)
             : TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, _fps));
@@ -207,6 +210,11 @@ internal sealed class VideoFileSession(
             if (frame is not null)
             {
                 FrameReceived?.Invoke(this, new VideoFrameReceivedEventArgs(frame));
+                emittedFrames++;
+            }
+            if (_maxFrames is int maxFrames && emittedFrames >= maxFrames)
+            {
+                break;
             }
             await DelaySafe(interval, ct);
         }

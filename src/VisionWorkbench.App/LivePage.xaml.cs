@@ -58,7 +58,9 @@ public partial class LivePage : UserControl
         }
     }
 
-    private async void Start_Click(object sender, RoutedEventArgs e)
+    private async void Start_Click(object sender, RoutedEventArgs e) => await StartRunAsync(singleFrame: false);
+
+    private async Task StartRunAsync(bool singleFrame)
     {
         if (TaskCombo.SelectedItem is not TaskItem item)
         {
@@ -72,6 +74,11 @@ public partial class LivePage : UserControl
             return;
         }
         var (entity, recipe) = pair;
+        if (singleFrame && recipe.CameraProviderId is not ("image-folder" or "video-file"))
+        {
+            MessageBox.Show("当前输入源不是图片目录或视频文件。实时相机请先点击“开始”，再使用“单次检测”。", "单次检测", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         _activeRecipe = recipe;
         var svcs = AppServices.Instance;
         var logger = svcs.LoggerFactory.CreateLogger<LivePage>();
@@ -79,7 +86,7 @@ public partial class LivePage : UserControl
         try
         {
             // 1. 相机会话（虚拟源参数：间隔 200ms）
-            _cameraSession = await OpenCameraAsync(recipe, CancellationToken.None);
+            _cameraSession = await OpenCameraAsync(recipe, CancellationToken.None, singleFrame);
 
             // 2. 算法会话
             var algorithm = await svcs.AlgorithmManager.CreateSessionAsync(recipe.PluginId, CancellationToken.None);
@@ -101,6 +108,9 @@ public partial class LivePage : UserControl
             ForwardText.Text = "正向: 0";
             ReverseText.Text = "反向: 0";
             BatchText.Text = $"批次: {batch.BatchNumber}";
+            StatusText.Text = singleFrame
+                ? "单次检测已启动：图片/视频源只处理一帧。"
+                : "批量检测已启动：图片/视频源将按顺序处理全部内容。";
             SetButtons(running: true);
         }
         catch (Exception ex)
@@ -131,15 +141,14 @@ public partial class LivePage : UserControl
 
     private async void Single_Click(object sender, RoutedEventArgs e)
     {
-        if (_run is null)
+        if (_run is not null && _run.State is (DetectionRunState.Running or DetectionRunState.Paused))
         {
+            var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
+            if (result is null)
+                StatusText.Text = "单次检测：等待帧超时或源已播完";
             return;
         }
-        var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
-        if (result is null)
-        {
-            StatusText.Text = "单次检测：等待帧超时或源已播完";
-        }
+        await StartRunAsync(singleFrame: true);
     }
 
     private async void Stop_Click(object sender, RoutedEventArgs e) => await StopBatchAsync();
@@ -206,6 +215,18 @@ public partial class LivePage : UserControl
 
     private async Task StopFromSourceEnd()
     {
+        // 先等待已进入调度器的帧处理完成，避免单帧模式在源结束时丢失唯一图片。
+        if (_run is not null)
+        {
+            try
+            {
+                await _run.WaitForCompletionAsync(TimeSpan.FromSeconds(30));
+            }
+            catch (TimeoutException)
+            {
+                StatusText.Text = "输入源已结束，但等待最后一帧处理超时。";
+            }
+        }
         // 有限源（图片目录/视频）播完：自动结束批次
         await StopBatchAsync();
     }
@@ -278,7 +299,8 @@ public partial class LivePage : UserControl
         await CleanupAsync();
     }
 
-    private async Task<ICameraSession> OpenCameraAsync(Recipe recipe, CancellationToken cancellationToken)
+    private async Task<ICameraSession> OpenCameraAsync(
+        Recipe recipe, CancellationToken cancellationToken, bool singleFrame = false)
     {
         var descriptor = new CameraDescriptor
         {
@@ -286,9 +308,12 @@ public partial class LivePage : UserControl
             DeviceId = recipe.CameraDeviceId,
             DisplayName = recipe.CameraDeviceId,
         };
+        var options = singleFrame && recipe.CameraProviderId is ("image-folder" or "video-file")
+            ? _cameraOptions with { MaxFrames = 1 }
+            : _cameraOptions;
         var session = await AppServices.Instance.Cameras.OpenSessionAsync(
-            descriptor, _cameraOptions, cancellationToken);
-        await session.OpenAsync(_cameraOptions, cancellationToken);
+            descriptor, options, cancellationToken);
+        await session.OpenAsync(options, cancellationToken);
         return session;
     }
 
@@ -568,7 +593,7 @@ public partial class LivePage : UserControl
         StartButton.IsEnabled = !running;
         PauseButton.IsEnabled = running;
         PauseButton.Content = "暂停";
-        SingleButton.IsEnabled = running;
+        SingleButton.IsEnabled = true;
         StopButton.IsEnabled = running;
         AdjustButton.IsEnabled = running;
         ResetCountButton.IsEnabled = running;
