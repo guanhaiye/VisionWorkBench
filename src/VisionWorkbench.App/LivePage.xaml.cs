@@ -32,6 +32,7 @@ public partial class LivePage : UserControl
     private int _singleFrameNextIndex;
     private bool _singleFrameRun;
     private bool _singleFrameReceived;
+    private bool _singleFrameBusy;
     private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
 
     public LivePage()
@@ -70,15 +71,28 @@ public partial class LivePage : UserControl
             MessageBox.Show("请先在任务配置页创建任务", "提示");
             return;
         }
+        if (singleFrame && _singleFrameBusy)
+        {
+            return;
+        }
+        if (singleFrame)
+        {
+            _singleFrameBusy = true;
+            SetButtons(running: true);
+        }
         var found = await AppServices.Instance.Recipes.FindAsync(item.Id);
         if (found is not { } pair)
         {
+            _singleFrameBusy = false;
+            SetButtons(running: false);
             MessageBox.Show("任务数据无效", "错误");
             return;
         }
         var (entity, recipe) = pair;
         if (singleFrame && recipe.CameraProviderId is not ("image-folder" or "video-file"))
         {
+            _singleFrameBusy = false;
+            SetButtons(running: false);
             MessageBox.Show("当前输入源不是图片目录或视频文件。实时相机请先点击“开始”，再使用“单次检测”。", "单次检测", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -89,6 +103,11 @@ public partial class LivePage : UserControl
         }
         _singleFrameRun = singleFrame;
         _singleFrameReceived = false;
+        if (singleFrame)
+        {
+            OverlayCanvas.Children.Clear();
+            StatusText.Text = "单次检测处理中，请稍候…";
+        }
         var svcs = AppServices.Instance;
         var logger = svcs.LoggerFactory.CreateLogger<LivePage>();
 
@@ -150,6 +169,10 @@ public partial class LivePage : UserControl
 
     private async void Single_Click(object sender, RoutedEventArgs e)
     {
+        if (_singleFrameBusy)
+        {
+            return;
+        }
         if (_run is not null && _run.State is (DetectionRunState.Running or DetectionRunState.Paused))
         {
             var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
@@ -260,6 +283,9 @@ public partial class LivePage : UserControl
             await _cameraSession.DisposeAsync();
             _cameraSession = null;
         }
+        _singleFrameBusy = false;
+        _singleFrameRun = false;
+        _singleFrameReceived = false;
         await Dispatcher.InvokeAsync(() => SetButtons(running: false));
     }
 
@@ -618,7 +644,7 @@ public partial class LivePage : UserControl
         StartButton.IsEnabled = !running;
         PauseButton.IsEnabled = running;
         PauseButton.Content = "暂停";
-        SingleButton.IsEnabled = true;
+        SingleButton.IsEnabled = !_singleFrameBusy;
         StopButton.IsEnabled = running;
         AdjustButton.IsEnabled = running;
         ResetCountButton.IsEnabled = running;
