@@ -61,7 +61,6 @@
                     <Button Content="删除选中标注" Click="DeleteAnnotation_Click" Margin="8,0,0,0" />
                     <Button Content="保存当前标注" Click="SaveAnnotation_Click" Margin="8,0,0,0" />
                     <Button Content="YOLOE 自动标注当前图" Click="YoloeCurrent_Click" Margin="8,0,0,0" />
-                    <Button Content="YOLOE 传播到后续图片" Click="YoloePropagate_Click" Margin="8,0,0,0" />
                     <Button Content="SAM3 点击分割" Click="Sam3ClickMode_Click" Margin="8,0,0,0" />
                     </WrapPanel>
                 </ScrollViewer>
