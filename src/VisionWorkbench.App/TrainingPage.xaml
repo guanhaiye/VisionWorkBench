@@ -61,6 +61,7 @@
                     <WrapPanel Margin="0,12,0,0">
                         <Button x:Name="StartButton" Content="开始训练" Click="StartTraining_Click" Padding="14,6" />
                         <Button x:Name="StopButton" Content="停止训练" Click="StopTraining_Click" IsEnabled="False" Margin="8,0,0,0" Padding="14,6" />
+                        <Button Content="打开本地目录" Click="OpenLocalDirectory_Click" Margin="8,0,0,0" Padding="14,6" />
                     </WrapPanel>
                     <TextBlock x:Name="OutputPathText" TextWrapping="Wrap" Foreground="DarkGreen" Margin="4,10,4,0" />
                 </StackPanel>

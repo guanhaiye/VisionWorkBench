@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -283,6 +284,31 @@ public partial class TrainingPage : UserControl
         if (!AppServices.Instance.Yolo11Training.IsRunning) return;
         await AppServices.Instance.Yolo11Training.CancelAsync();
         _trainingCancellation?.Cancel();
+    }
+
+    private void OpenLocalDirectory_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dataset is null || string.IsNullOrWhiteSpace(_dataset.RootDirectory))
+        {
+            MessageBox.Show("请先选择一个数据集。", "打开本地目录", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!Directory.Exists(_dataset.RootDirectory))
+        {
+            MessageBox.Show($"数据集目录不存在：{_dataset.RootDirectory}", "打开本地目录", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var modelDirectory = IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models");
+        var targetDirectory = Directory.Exists(modelDirectory) ? modelDirectory : _dataset.RootDirectory;
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = targetDirectory,
+            UseShellExecute = true,
+        });
+        if (targetDirectory != modelDirectory)
+            TrainingStatusText.Text = "模型目录尚未生成，已打开数据集本地目录。";
     }
 
     private void HandleProgress(Yolo11TrainingProgress progress)
