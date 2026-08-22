@@ -39,7 +39,31 @@
                     </StackPanel>
                 </GroupBox>
                 <TextBlock Text="图片列表" FontWeight="Bold" Margin="0,10,0,4" />
-                <ListBox x:Name="ImageList" DisplayMemberPath="FileName" SelectionChanged="ImageList_SelectionChanged" />
+                <ListBox x:Name="ImageList" SelectionChanged="ImageList_SelectionChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding FileName}" />
+                                <TextBlock Grid.Column="1" Text="标" Foreground="DarkGreen" FontWeight="Bold" Margin="8,0,2,0">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasAnnotation}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
             </StackPanel>
 
             <Grid Grid.Column="2">
@@ -57,9 +81,6 @@
                     </ComboBox>
                     <TextBlock Text="标注类别：" VerticalAlignment="Center" />
                     <ComboBox x:Name="ClassCombo" Width="150" />
-                    <Button Content="完成多边形" Click="FinishPolygon_Click" Margin="8,0,0,0" />
-                    <Button Content="删除选中标注" Click="DeleteAnnotation_Click" Margin="8,0,0,0" />
-                    <Button Content="保存当前标注" Click="SaveAnnotation_Click" Margin="8,0,0,0" />
                     <Button Content="YOLOE 自动标注当前图" Click="YoloeCurrent_Click" Margin="8,0,0,0" />
                     <Button Content="SAM3 点击分割" Click="Sam3ClickMode_Click" Margin="8,0,0,0" />
                     </WrapPanel>
@@ -69,12 +90,17 @@
                         <Image x:Name="AnnotationImage" Stretch="Fill" />
                         <Canvas x:Name="AnnotationCanvas" Background="#01000000"
                                 MouseLeftButtonDown="AnnotationCanvas_MouseLeftButtonDown"
+                                MouseRightButtonDown="AnnotationCanvas_MouseRightButtonDown"
                                 MouseMove="AnnotationCanvas_MouseMove"
                                 MouseLeftButtonUp="AnnotationCanvas_MouseLeftButtonUp"
                                 SizeChanged="AnnotationCanvas_SizeChanged" />
                     </Grid>
                 </Border>
-                <ListBox Grid.Row="2" x:Name="AnnotationList" SelectionChanged="AnnotationList_SelectionChanged" Margin="0,6,0,0" />
+                <ListBox Grid.Row="2" x:Name="AnnotationList"
+                         SelectionChanged="AnnotationList_SelectionChanged"
+                         PreviewMouseLeftButtonDown="AnnotationList_PreviewMouseLeftButtonDown"
+                         PreviewMouseRightButtonDown="AnnotationList_PreviewMouseRightButtonDown"
+                         Margin="0,6,0,0" />
             </Grid>
         </Grid>
         <TextBlock Grid.Row="2" x:Name="StatusText" Foreground="Green" Margin="0,8,0,0" TextWrapping="Wrap" />

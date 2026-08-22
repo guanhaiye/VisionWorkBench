@@ -22,6 +22,24 @@ public partial class DatasetAnnotationPage : UserControl
     private bool _sam3ClickMode;
     private readonly List<Point> _polygonPoints = [];
     private Polyline? _polygonDraft;
+    private int _editingIndex = -1;
+    private EditMode _editMode;
+    private Point _editStart;
+    private DatasetAnnotationObject? _editOriginal;
+
+    private enum EditMode
+    {
+        None,
+        Move,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+    }
 
     public DatasetAnnotationPage()
     {
@@ -169,9 +187,27 @@ public partial class DatasetAnnotationPage : UserControl
             _ = RunSam3ClickAsync(e.GetPosition(AnnotationCanvas));
             return;
         }
+        var point = e.GetPosition(AnnotationCanvas);
+        var hitIndex = HitTestAnnotation(point);
+        if (hitIndex >= 0)
+        {
+            AnnotationList.SelectedIndex = hitIndex;
+            var hitObject = _annotation.Objects[hitIndex];
+            if (!hitObject.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase))
+            {
+                _editingIndex = hitIndex;
+                _editStart = point;
+                _editOriginal = CloneAnnotationObject(hitObject);
+                _editMode = GetEditMode(point, hitObject);
+                _dragging = true;
+                AnnotationCanvas.CaptureMouse();
+            }
+            e.Handled = true;
+            return;
+        }
         if (IsPolygonMode())
         {
-            _polygonPoints.Add(e.GetPosition(AnnotationCanvas));
+            _polygonPoints.Add(point);
             if (e.ClickCount >= 2 && _polygonPoints.Count >= 3)
             {
                 _polygonPoints.RemoveAt(_polygonPoints.Count - 1);
@@ -192,6 +228,12 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_editingIndex >= 0 && _annotation is not null)
+        {
+            UpdateEditedAnnotation(e.GetPosition(AnnotationCanvas));
+            RenderAnnotations();
+            return;
+        }
         if (IsPolygonMode() && _polygonPoints.Count > 0)
         {
             RenderPolygonDraft(e.GetPosition(AnnotationCanvas));
@@ -203,6 +245,17 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_editingIndex >= 0)
+        {
+            _dragging = false;
+            AnnotationCanvas.ReleaseMouseCapture();
+            _editingIndex = -1;
+            _editMode = EditMode.None;
+            _editOriginal = null;
+            AutoSaveAnnotation("修改标注");
+            e.Handled = true;
+            return;
+        }
         if (IsPolygonMode()) return;
         if (!_dragging || _draft is null || _annotation is null || ClassCombo.SelectedItem is not string className)
             return;
@@ -234,7 +287,72 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationList.ItemsSource = _annotation.Objects;
         AnnotationList.SelectedIndex = _annotation.Objects.Count - 1;
         RenderAnnotations();
+        AutoSaveAnnotation("新增标注");
     }
+
+    private void AnnotationCanvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var index = HitTestAnnotation(e.GetPosition(AnnotationCanvas));
+        if (index < 0) return;
+        AnnotationList.SelectedIndex = index;
+        ShowAnnotationContextMenu(index, AnnotationCanvas);
+        e.Handled = true;
+    }
+
+    private void AnnotationList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var index = FindAnnotationListIndex(e.OriginalSource as DependencyObject);
+        if (index is not null) AnnotationList.SelectedIndex = index.Value;
+    }
+
+    private void AnnotationList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var index = FindAnnotationListIndex(e.OriginalSource as DependencyObject);
+        if (index is null) return;
+        AnnotationList.SelectedIndex = index.Value;
+        ShowAnnotationContextMenu(index.Value, AnnotationList);
+        e.Handled = true;
+    }
+
+    private int? FindAnnotationListIndex(DependencyObject? source)
+    {
+        while (source is not null && source is not ListBoxItem)
+        {
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return source is ListBoxItem item
+            ? AnnotationList.ItemContainerGenerator.IndexFromContainer(item)
+            : null;
+    }
+
+    private void ShowAnnotationContextMenu(int index, FrameworkElement placementTarget)
+    {
+        if (_dataset is null || _annotation is null || index < 0 || index >= _annotation.Objects.Count) return;
+        var menu = new ContextMenu { PlacementTarget = placementTarget };
+        foreach (var className in _dataset.Classes)
+        {
+            var item = new MenuItem { Header = $"切换类别：{className}", Tag = className };
+            item.Click += ChangeAnnotationClass_Click;
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+        var delete = new MenuItem { Header = "删除标注", Tag = index };
+        delete.Click += DeleteAnnotationMenu_Click;
+        menu.Items.Add(delete);
+        menu.IsOpen = true;
+    }
+
+    private void ChangeAnnotationClass_Click(object sender, RoutedEventArgs e)
+    {
+        if (_annotation is null || sender is not MenuItem item || item.Tag is not string className) return;
+        var index = AnnotationList.SelectedIndex;
+        if (index < 0 || index >= _annotation.Objects.Count) return;
+        _annotation.Objects[index].ClassName = className;
+        RefreshAnnotationList(index);
+        AutoSaveAnnotation("切换类别");
+    }
+
+    private void DeleteAnnotationMenu_Click(object sender, RoutedEventArgs e) => DeleteAnnotation_Click(sender, e);
 
     private void FinishPolygon_Click(object sender, RoutedEventArgs e) => FinishPolygon();
 
@@ -271,6 +389,7 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationList.ItemsSource = _annotation.Objects;
         AnnotationList.SelectedIndex = _annotation.Objects.Count - 1;
         RenderAnnotations();
+        AutoSaveAnnotation("新增多边形标注");
     }
 
     private void RenderPolygonDraft(Point? cursor = null)
@@ -298,6 +417,7 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationList.ItemsSource = null;
         AnnotationList.ItemsSource = _annotation.Objects;
         RenderAnnotations();
+        AutoSaveAnnotation("删除标注");
     }
 
     private void SaveAnnotation_Click(object sender, RoutedEventArgs e)
@@ -310,7 +430,14 @@ public partial class DatasetAnnotationPage : UserControl
         StatusText.Text = $"标注已保存：{_image.RelativePath}，共 {_annotation.Objects.Count} 个对象。";
     }
 
-    private void AnnotationList_SelectionChanged(object sender, SelectionChangedEventArgs e) => RenderAnnotations();
+    private void AnnotationList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RenderAnnotations();
+        if (_annotation is not null && AnnotationList.SelectedIndex >= 0 && AnnotationList.SelectedIndex < _annotation.Objects.Count)
+        {
+            StatusText.Text = "已选中标注。左键长按可拖动，选中框的边缘或角点可调整大小，右键可切换类别或删除。";
+        }
+    }
 
     private void AnnotationCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RenderAnnotations();
 
@@ -366,12 +493,139 @@ public partial class DatasetAnnotationPage : UserControl
         _image = null;
         _annotation = null;
         _sam3ClickMode = false;
+        _editingIndex = -1;
+        _editMode = EditMode.None;
+        _editOriginal = null;
+        _dragging = false;
         _polygonPoints.Clear();
         _polygonDraft = null;
         AnnotationImage.Source = null;
         AnnotationList.ItemsSource = null;
         AnnotationCanvas.Children.Clear();
     }
+
+    private void AutoSaveAnnotation(string reason)
+    {
+        if (_dataset is null || _image is null || _annotation is null) return;
+        AppServices.Instance.Datasets.SaveAnnotation(_dataset, _annotation);
+        var relativePath = _image.RelativePath;
+        var images = AppServices.Instance.Datasets.ListImages(_dataset);
+        ImageList.ItemsSource = images;
+        ImageList.SelectedItem = images.FirstOrDefault(x => x.RelativePath == relativePath);
+        StatusText.Text = $"{reason}已自动保存。";
+    }
+
+    private int HitTestAnnotation(Point point)
+    {
+        if (_annotation is null) return -1;
+        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
+        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
+        var x = point.X / canvasWidth;
+        var y = point.Y / canvasHeight;
+        var toleranceX = 8 / canvasWidth;
+        var toleranceY = 8 / canvasHeight;
+        for (var index = _annotation.Objects.Count - 1; index >= 0; index--)
+        {
+            var obj = _annotation.Objects[index];
+            if (x >= obj.X - toleranceX && x <= obj.X + obj.Width + toleranceX &&
+                y >= obj.Y - toleranceY && y <= obj.Y + obj.Height + toleranceY)
+            {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private EditMode GetEditMode(Point point, DatasetAnnotationObject obj)
+    {
+        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
+        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
+        var x = point.X / canvasWidth;
+        var y = point.Y / canvasHeight;
+        var toleranceX = 10 / canvasWidth;
+        var toleranceY = 10 / canvasHeight;
+        var left = Math.Abs(x - obj.X) <= toleranceX;
+        var right = Math.Abs(x - (obj.X + obj.Width)) <= toleranceX;
+        var top = Math.Abs(y - obj.Y) <= toleranceY;
+        var bottom = Math.Abs(y - (obj.Y + obj.Height)) <= toleranceY;
+        if (left && top) return EditMode.TopLeft;
+        if (right && top) return EditMode.TopRight;
+        if (left && bottom) return EditMode.BottomLeft;
+        if (right && bottom) return EditMode.BottomRight;
+        if (left) return EditMode.Left;
+        if (right) return EditMode.Right;
+        if (top) return EditMode.Top;
+        if (bottom) return EditMode.Bottom;
+        return EditMode.Move;
+    }
+
+    private void UpdateEditedAnnotation(Point current)
+    {
+        if (_annotation is null || _editOriginal is null || _editingIndex < 0 || _editingIndex >= _annotation.Objects.Count) return;
+        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
+        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
+        var dx = (current.X - _editStart.X) / canvasWidth;
+        var dy = (current.Y - _editStart.Y) / canvasHeight;
+        var original = _editOriginal;
+        var obj = _annotation.Objects[_editingIndex];
+        var originalRight = original.X + original.Width;
+        var originalBottom = original.Y + original.Height;
+
+        switch (_editMode)
+        {
+            case EditMode.Move:
+                obj.X = Math.Clamp(original.X + dx, 0, 1 - original.Width);
+                obj.Y = Math.Clamp(original.Y + dy, 0, 1 - original.Height);
+                break;
+            case EditMode.Left:
+            case EditMode.TopLeft:
+            case EditMode.BottomLeft:
+                var newLeft = Math.Clamp(original.X + dx, 0, originalRight - 0.005);
+                obj.X = newLeft;
+                obj.Width = Math.Max(0.005, originalRight - newLeft);
+                break;
+        }
+
+        switch (_editMode)
+        {
+            case EditMode.Right:
+            case EditMode.TopRight:
+            case EditMode.BottomRight:
+                obj.Width = Math.Max(0.005, Math.Clamp(originalRight + dx, original.X + 0.005, 1) - original.X);
+                break;
+        }
+
+        switch (_editMode)
+        {
+            case EditMode.Top:
+            case EditMode.TopLeft:
+            case EditMode.TopRight:
+                var newTop = Math.Clamp(original.Y + dy, 0, originalBottom - 0.005);
+                obj.Y = newTop;
+                obj.Height = Math.Max(0.005, originalBottom - newTop);
+                break;
+        }
+
+        switch (_editMode)
+        {
+            case EditMode.Bottom:
+            case EditMode.BottomLeft:
+            case EditMode.BottomRight:
+                obj.Height = Math.Max(0.005, Math.Clamp(originalBottom + dy, original.Y + 0.005, 1) - original.Y);
+                break;
+        }
+    }
+
+    private static DatasetAnnotationObject CloneAnnotationObject(DatasetAnnotationObject source) => new()
+    {
+        ClassName = source.ClassName,
+        Shape = source.Shape,
+        X = source.X,
+        Y = source.Y,
+        Width = source.Width,
+        Height = source.Height,
+        Polygon = source.Polygon.Select(point => new DatasetPoint { X = point.X, Y = point.Y }).ToList(),
+    };
 
     private bool IsPolygonMode() =>
         ((AnnotationModeCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "polygon";
@@ -499,9 +753,9 @@ public partial class DatasetAnnotationPage : UserControl
             }
         }
 
-        StatusText.Text = "当前图片没有可用的 YOLOE 标注记忆。请先手动画框、选择类别并保存当前标注，然后再执行自动标注。";
+        StatusText.Text = "当前图片没有可用的 YOLOE 标注记忆。请先手动画框并选择类别，标注会在操作完成后自动保存。";
         MessageBox.Show(
-            "还没有可用的标注记忆。请先在当前图片上画至少一个矩形框，选择类别并点击“保存当前标注”，再使用 YOLOE 自动标注。",
+            "还没有可用的标注记忆。请先在当前图片上画至少一个矩形框并选择类别，标注完成后会自动保存，再使用 YOLOE 自动标注。",
             "需要先建立标注记忆",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
@@ -570,7 +824,7 @@ public partial class DatasetAnnotationPage : UserControl
             }
         }
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset);
-        StatusText.Text = $"YOLOE 已完成 {scope}：写入 {written} 张图片的自动标注；可继续手工调整后保存。";
+        StatusText.Text = $"YOLOE 已完成 {scope}：写入 {written} 张图片的自动标注；后续修改也会自动保存。";
     }
 
     private static DatasetAnnotationObject ToDatasetObject(SmartAnnotationObjectResult source) => new()
