@@ -69,7 +69,6 @@ public partial class DatasetAnnotationPage : UserControl
             Name = $"dataset-{DateTime.Now:MMddHHmmss}",
             Classes = ["object"],
         };
-        DatasetList.SelectedItem = null;
         DatasetNameText.Text = _dataset.Name;
         DatasetRootText.Text = "";
         DatasetClassesText.Text = "object";
@@ -77,7 +76,11 @@ public partial class DatasetAnnotationPage : UserControl
         ClassCombo.SelectedIndex = 0;
         ImageList.ItemsSource = null;
         ClearImageView();
-        StatusText.Text = "请先选择图片目录，然后保存数据集。";
+        var datasets = AppServices.Instance.Datasets.List().ToList();
+        datasets.Add(_dataset);
+        DatasetList.ItemsSource = datasets;
+        DatasetList.SelectedItem = _dataset;
+        StatusText.Text = "已新建数据集单元。请填写图片目录和类别，然后保存数据集。";
     }
 
     private void BrowseRoot_Click(object sender, RoutedEventArgs e)
