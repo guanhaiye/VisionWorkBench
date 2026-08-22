@@ -1,0 +1,34 @@
+<Window x:Class="VisionWorkbench.App.DatasetSplitDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置数据集划分比例"
+        Width="430"
+        Height="250"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <StackPanel Margin="20">
+        <TextBlock Text="设置训练集与验证集比例" FontSize="18" FontWeight="Bold" />
+        <TextBlock Text="拖动滑块设置比例，确认后会覆盖当前已有的训练集/验证集划分。"
+                   Margin="0,8,0,14"
+                   Foreground="#666"
+                   TextWrapping="Wrap" />
+        <TextBlock x:Name="RatioText" Text="训练集 80%  /  验证集 20%"
+                   HorizontalAlignment="Center"
+                   FontSize="15"
+                   FontWeight="Bold"
+                   Foreground="#1565C0" />
+        <Slider x:Name="TrainRatioSlider"
+                Minimum="10"
+                Maximum="90"
+                Value="80"
+                TickFrequency="5"
+                IsSnapToTickEnabled="True"
+                ValueChanged="TrainRatioSlider_ValueChanged"
+                Margin="4,10,4,14" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" Click="Cancel_Click" Width="76" Margin="0,0,8,0" />
+            <Button Content="确定划分" Click="Confirm_Click" Width="92" />
+        </StackPanel>
+    </StackPanel>
+</Window>

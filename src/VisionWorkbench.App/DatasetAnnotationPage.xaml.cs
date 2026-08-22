@@ -216,15 +216,18 @@ public partial class DatasetAnnotationPage : UserControl
             return;
         }
 
+        var dialog = new DatasetSplitDialog { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true) return;
+
         try
         {
             var selectedPath = _image?.RelativePath;
-            _dataset = AppServices.Instance.Datasets.AutoSplit(_dataset);
+            _dataset = AppServices.Instance.Datasets.AutoSplit(_dataset, dialog.TrainRatio);
             RefreshImageList(selectedPath);
             var images = AppServices.Instance.Datasets.ListImages(_dataset);
             var train = images.Count(x => x.Split == "train");
             var validation = images.Count(x => x.Split == "val");
-            StatusText.Text = $"已自动划分数据集：训练集 {train} 张，验证集 {validation} 张。未划分图片可通过右键菜单调整。";
+            StatusText.Text = $"已自动划分数据集：训练集 {train} 张，验证集 {validation} 张（比例 {(dialog.TrainRatio * 100):0}%:{(100 - dialog.TrainRatio * 100):0}%）。未划分图片可通过右键菜单调整。";
         }
         catch (Exception ex)
         {

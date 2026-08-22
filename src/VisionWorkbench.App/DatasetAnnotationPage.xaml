@@ -12,7 +12,7 @@
             <Button Content="加载数据集" Click="LoadDataset_Click" Margin="6,0,0,0" />
             <Button Content="选择图片目录" Click="BrowseRoot_Click" Margin="6,0,0,0" />
             <Button Content="保存数据集" Click="SaveDataset_Click" Margin="6,0,0,0" />
-            <Button Content="自动划分数据集（8:2）" Click="AutoSplit_Click" Margin="6,0,0,0" />
+            <Button Content="自动划分数据集" Click="AutoSplit_Click" Margin="6,0,0,0" />
             <Button Content="导出 YOLO 数据集" Click="ExportDataset_Click" Margin="6,0,0,0" />
         </WrapPanel>
 
