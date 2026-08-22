@@ -37,7 +37,7 @@
                         <TextBox x:Name="DatasetNameText" Margin="0,2,0,6" />
                         <TextBlock Text="图片目录" />
                         <TextBox x:Name="DatasetRootText" IsReadOnly="True" TextWrapping="Wrap" Margin="0,2,0,6" />
-                        <TextBlock Text="类别（逗号分隔）" />
+                        <TextBlock Text="类别（英文逗号 , 或中文逗号 ， 分隔）" />
                         <TextBox x:Name="DatasetClassesText" AcceptsReturn="True" TextWrapping="Wrap" Height="60" Margin="0,2,0,6" />
                         <TextBlock x:Name="DatasetTaskTypeText" Text="标注类型：未选择" Margin="0,0,0,6" Foreground="#333" TextWrapping="Wrap" />
                         <TextBlock Text="标注保存在图片目录下的 .visionworkbench/annotations" Foreground="#666" TextWrapping="Wrap" />
