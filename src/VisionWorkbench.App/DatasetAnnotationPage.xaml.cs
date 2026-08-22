@@ -131,15 +131,23 @@ public partial class DatasetAnnotationPage : UserControl
         if (Directory.Exists(DatasetRootText.Text)) dialog.InitialDirectory = DatasetRootText.Text;
         if (dialog.ShowDialog() == true)
         {
-            if (_dataset is null) NewDataset_Click(sender, e);
+            if (_dataset is null)
+            {
+                NewDataset_Click(sender, e);
+                if (_dataset is null) return;
+            }
             DatasetRootText.Text = dialog.FolderName;
             _dataset!.RootDirectory = dialog.FolderName;
+            _dataset.Name = DatasetNameText.Text.Trim();
+            _dataset.Classes = ParseClasses(DatasetClassesText.Text);
+            _dataset = AppServices.Instance.Datasets.Save(_dataset);
+            RefreshDatasets(_dataset.Id);
             var images = AppServices.Instance.Datasets.ListImages(_dataset);
             ImageList.ItemsSource = images;
             ImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
             if (images.Count > 0)
             {
-                StatusText.Text = $"已扫描图片目录，共发现 {images.Count} 张图片。请点击“保存数据集”完成登记。";
+                StatusText.Text = $"已扫描并登记数据集，共发现 {images.Count} 张图片。名称或类别修改后请点击“保存数据集”。";
             }
             else
             {

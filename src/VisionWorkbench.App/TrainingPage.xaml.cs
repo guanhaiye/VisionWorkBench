@@ -19,6 +19,11 @@ public partial class TrainingPage : UserControl
     {
         InitializeComponent();
         Loaded += (_, _) => RefreshDatasets();
+        IsVisibleChanged += (_, args) =>
+        {
+            if (args.NewValue is true && !AppServices.Instance.Yolo11Training.IsRunning)
+                RefreshDatasets();
+        };
         DrawLossCurve();
     }
 
