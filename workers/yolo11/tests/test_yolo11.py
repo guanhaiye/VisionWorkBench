@@ -51,6 +51,24 @@ def test_settings_validate_and_resolve_model_path(tmp_path: Path):
     assert settings.confidence == 0.4
 
 
+def test_cuda_selection_reports_unavailable_runtime():
+    previous_torch = sys.modules.get("torch")
+    sys.modules["torch"] = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)
+    )
+    try:
+        Yolo11Engine._resolve_device("cuda")
+    except RuntimeError as error:
+        assert "CUDA" in str(error)
+    else:
+        raise AssertionError("CUDA 不可用时应明确提示，而不是继续启动推理")
+    finally:
+        if previous_torch is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = previous_torch
+
+
 def test_detection_output_is_normalized(tmp_path: Path):
     engine = _engine(tmp_path, "detect")
     output = engine._build_output(_result(), 100, 50, "input.png", 1)

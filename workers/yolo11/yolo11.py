@@ -102,14 +102,25 @@ class Yolo11Engine:
 
     @staticmethod
     def _resolve_device(configured: str) -> str:
-        if configured != "auto":
-            return configured
         try:
             import torch  # type: ignore
-
-            return "cuda:0" if torch.cuda.is_available() else "cpu"
         except ImportError:
+            if configured.startswith("cuda"):
+                raise RuntimeError(
+                    "已选择 CUDA，但 YOLO11 虚拟环境未安装 PyTorch。请安装 CUDA 版 PyTorch，或在任务配置中选择 CPU。"
+                )
             return "cpu"
+
+        if configured == "auto":
+            return "cuda:0" if torch.cuda.is_available() else "cpu"
+        if configured.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError(
+                "已选择 CUDA，但当前 YOLO11 虚拟环境不可用 CUDA。"
+                f" torch.cuda.is_available()={torch.cuda.is_available()}，"
+                f"torch.cuda.device_count()={torch.cuda.device_count()}。"
+                "请安装 CUDA 版 PyTorch，或在任务配置中选择 CPU。"
+            )
+        return configured
 
     def predict(self, image_path: str, sequence: int = 0) -> dict[str, Any]:
         image = _read_image(image_path)
