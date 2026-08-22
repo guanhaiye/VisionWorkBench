@@ -207,6 +207,31 @@ public partial class DatasetAnnotationPage : UserControl
         }
     }
 
+    private void AutoSplit_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RolePolicy.CanEditRecipe) return;
+        if (_dataset is null)
+        {
+            MessageBox.Show("请先选择或保存数据集。", "数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            var selectedPath = _image?.RelativePath;
+            _dataset = AppServices.Instance.Datasets.AutoSplit(_dataset);
+            RefreshImageList(selectedPath);
+            var images = AppServices.Instance.Datasets.ListImages(_dataset);
+            var train = images.Count(x => x.Split == "train");
+            var validation = images.Count(x => x.Split == "val");
+            StatusText.Text = $"已自动划分数据集：训练集 {train} 张，验证集 {validation} 张。未划分图片可通过右键菜单调整。";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"自动划分失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void ExportDataset_Click(object sender, RoutedEventArgs e)
     {
         if (_dataset is null) { MessageBox.Show("请先选择或保存数据集。", "数据集"); return; }
@@ -221,6 +246,76 @@ public partial class DatasetAnnotationPage : UserControl
         {
             MessageBox.Show($"导出失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    private void ImageList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var index = FindImageListIndex(e.OriginalSource as DependencyObject);
+        if (index is null) return;
+        ImageList.SelectedIndex = index.Value;
+        if (ImageList.SelectedItem is DatasetImageItem image)
+        {
+            ShowImageContextMenu(image);
+            e.Handled = true;
+        }
+    }
+
+    private int? FindImageListIndex(DependencyObject? source)
+    {
+        while (source is not null && source is not ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return source is ListBoxItem item
+            ? ImageList.ItemContainerGenerator.IndexFromContainer(item)
+            : null;
+    }
+
+    private void ShowImageContextMenu(DatasetImageItem image)
+    {
+        if (_dataset is null) return;
+        var menu = new ContextMenu { PlacementTarget = ImageList };
+        var train = new MenuItem { Header = "切换为训练集" };
+        train.Click += (_, _) => ChangeImageSplit(image.RelativePath, "train");
+        menu.Items.Add(train);
+        var validation = new MenuItem { Header = "切换为验证集" };
+        validation.Click += (_, _) => ChangeImageSplit(image.RelativePath, "val");
+        menu.Items.Add(validation);
+        var unassigned = new MenuItem { Header = "设为未划分" };
+        unassigned.Click += (_, _) => ChangeImageSplit(image.RelativePath, "unassigned");
+        menu.Items.Add(unassigned);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(new MenuItem { Header = $"当前状态：{image.SplitDisplay}", IsEnabled = false });
+        menu.IsOpen = true;
+    }
+
+    private void ChangeImageSplit(string relativePath, string split)
+    {
+        if (_dataset is null) return;
+        try
+        {
+            var selectedPath = _image?.RelativePath;
+            _dataset = AppServices.Instance.Datasets.SetImageSplit(_dataset, relativePath, split);
+            RefreshImageList(selectedPath);
+            var display = split switch
+            {
+                "train" => "训练集",
+                "val" => "验证集",
+                _ => "未划分",
+            };
+            StatusText.Text = $"图片 {relativePath} 已切换为{display}。";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"切换图片划分状态失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void RefreshImageList(string? selectedRelativePath = null)
+    {
+        if (_dataset is null) return;
+        var images = AppServices.Instance.Datasets.ListImages(_dataset);
+        ImageList.ItemsSource = images;
+        if (selectedRelativePath is not null)
+            ImageList.SelectedItem = images.FirstOrDefault(x => x.RelativePath == selectedRelativePath);
     }
 
     private void DatasetList_SelectionChanged(object sender, SelectionChangedEventArgs e)

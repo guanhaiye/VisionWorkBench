@@ -14,6 +14,7 @@ public sealed class DatasetCatalogTests
         var exportRoot = Path.Combine(root, "export");
         Directory.CreateDirectory(imagesRoot);
         File.WriteAllBytes(Path.Combine(imagesRoot, "one.png"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(imagesRoot, "two.png"), [1, 2, 3]);
         Directory.CreateDirectory(Path.Combine(imagesRoot, ".visionworkbench", "training-data", "run"));
         File.WriteAllBytes(Path.Combine(imagesRoot, ".visionworkbench", "training-data", "run", "one.png"), [1, 2, 3]);
         try
@@ -27,7 +28,13 @@ public sealed class DatasetCatalogTests
                 Classes = ["scratch"],
             });
             Assert.Equal("instance_segmentation", service.List().Single().TaskType);
-            var image = Assert.Single(service.ListImages(dataset));
+            var images = service.ListImages(dataset);
+            Assert.Equal(2, images.Count);
+            Assert.All(images, image => Assert.Equal("unassigned", image.Split));
+            dataset = service.AutoSplit(dataset);
+            Assert.Contains(service.ListImages(dataset), image => image.Split == "train");
+            Assert.Contains(service.ListImages(dataset), image => image.Split == "val");
+            var image = images[0];
             service.SaveAnnotation(dataset, new DatasetAnnotation
             {
                 ImageRelativePath = image.RelativePath,
@@ -42,11 +49,12 @@ public sealed class DatasetCatalogTests
                 }],
             });
 
-            Assert.True(service.ListImages(dataset).Single().HasAnnotation);
+            Assert.Contains(service.ListImages(dataset), image => image.HasAnnotation);
             service.ExportYolo(dataset, exportRoot);
 
             Assert.True(File.Exists(Path.Combine(exportRoot, "data.yaml")));
-            var label = Directory.EnumerateFiles(Path.Combine(exportRoot, "labels"), "*.txt", SearchOption.AllDirectories).Single();
+            var label = Directory.EnumerateFiles(Path.Combine(exportRoot, "labels"), "*.txt", SearchOption.AllDirectories)
+                .First(path => File.ReadAllText(path).Contains("0 0.25 0.4 0.3 0.4", StringComparison.Ordinal));
             Assert.Contains("0 0.25 0.4 0.3 0.4", File.ReadAllText(label));
         }
         finally

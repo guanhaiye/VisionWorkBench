@@ -12,6 +12,7 @@ public sealed class DatasetDefinition
     public string TaskType { get; set; } = "detection";
     public string RootDirectory { get; set; } = "";
     public List<string> Classes { get; set; } = [];
+    public Dictionary<string, string> ImageSplits { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
@@ -23,6 +24,12 @@ public sealed record DatasetImageItem(
     bool HasAnnotation)
 {
     public string FileName => Path.GetFileName(RelativePath);
+    public string SplitDisplay => Split switch
+    {
+        "train" => "训",
+        "val" => "验",
+        _ => "未",
+    };
 }
 
 public sealed class DatasetAnnotation
@@ -91,6 +98,7 @@ public sealed class DatasetCatalogService
         dataset.RootDirectory = Path.GetFullPath(dataset.RootDirectory.Trim());
         dataset.Classes = dataset.Classes.Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        dataset.ImageSplits = NormalizeSplits(dataset.ImageSplits);
         dataset.UpdatedAt = DateTime.UtcNow;
 
         lock (_gate)
@@ -133,9 +141,42 @@ public sealed class DatasetCatalogService
             {
                 var relative = Path.GetRelativePath(dataset.RootDirectory, path);
                 var annotationPath = GetAnnotationPath(annotationDirectory, relative);
-                return new DatasetImageItem(path, relative, SplitFor(relative), File.Exists(annotationPath));
+                return new DatasetImageItem(path, relative, GetSplit(dataset, relative), File.Exists(annotationPath));
             })
             .ToArray();
+    }
+
+    public DatasetDefinition SetImageSplit(DatasetDefinition dataset, string relativePath, string split)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+        if (split is not ("train" or "val" or "unassigned"))
+            throw new ArgumentException("图片划分状态必须是 train、val 或 unassigned", nameof(split));
+
+        dataset.ImageSplits ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        dataset.ImageSplits[NormalizeRelativePath(relativePath)] = split;
+        return Save(dataset);
+    }
+
+    public DatasetDefinition AutoSplit(DatasetDefinition dataset, double trainRatio = 0.8)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+        if (trainRatio <= 0 || trainRatio >= 1)
+            throw new ArgumentOutOfRangeException(nameof(trainRatio), "训练集比例必须在 0 和 1 之间");
+
+        var images = ListImages(dataset);
+        if (images.Count == 0) throw new InvalidOperationException("数据集目录中没有图片");
+
+        var trainCount = (int)Math.Round(images.Count * trainRatio, MidpointRounding.AwayFromZero);
+        if (images.Count >= 2) trainCount = Math.Clamp(trainCount, 1, images.Count - 1);
+        else trainCount = 1;
+
+        dataset.ImageSplits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < images.Count; index++)
+        {
+            dataset.ImageSplits[NormalizeRelativePath(images[index].RelativePath)] =
+                index < trainCount ? "train" : "val";
+        }
+        return Save(dataset);
     }
 
     public DatasetAnnotation LoadAnnotation(DatasetDefinition dataset, string relativePath)
@@ -167,15 +208,18 @@ public sealed class DatasetCatalogService
         if (dataset.Classes.Count == 0) throw new InvalidOperationException("请先配置至少一个类别");
         var images = ListImages(dataset);
         if (images.Count == 0) throw new InvalidOperationException("数据集目录中没有图片");
+        var exportImages = images.Where(x => x.Split is "train" or "val").ToArray();
+        if (exportImages.Length == 0)
+            throw new InvalidOperationException("请先点击“自动划分数据集”，或通过图片右键菜单设置训练集和验证集");
         var output = Path.GetFullPath(outputDirectory);
         foreach (var split in new[] { "train", "val" })
         {
             Directory.CreateDirectory(Path.Combine(output, "images", split));
             Directory.CreateDirectory(Path.Combine(output, "labels", split));
         }
-        foreach (var image in images)
+        foreach (var image in exportImages)
         {
-            var split = image.Split is "val" ? "val" : "train";
+            var split = image.Split;
             var relativeName = image.RelativePath.Replace('/', '_').Replace('\\', '_');
             var imageDestination = Path.Combine(output, "images", split, relativeName);
             var labelDestination = Path.Combine(output, "labels", split,
@@ -209,11 +253,27 @@ public sealed class DatasetCatalogService
 
     private static double Clamp(double value) => Math.Clamp(value, 0, 1);
 
-    private static string SplitFor(string relativePath)
+    private static string GetSplit(DatasetDefinition dataset, string relativePath) =>
+        dataset.ImageSplits is not null &&
+        dataset.ImageSplits.TryGetValue(NormalizeRelativePath(relativePath), out var split) &&
+        split is ("train" or "val")
+            ? split
+            : "unassigned";
+
+    private static Dictionary<string, string> NormalizeSplits(Dictionary<string, string>? source)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(relativePath));
-        return hash[0] % 5 == 0 ? "val" : "train";
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (source is null) return result;
+        foreach (var item in source)
+        {
+            if (item.Value is "train" or "val" or "unassigned")
+                result[NormalizeRelativePath(item.Key)] = item.Value;
+        }
+        return result;
     }
+
+    private static string NormalizeRelativePath(string relativePath) =>
+        relativePath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
 
     private static string GetAnnotationDirectory(DatasetDefinition dataset) =>
         Path.Combine(dataset.RootDirectory, ".visionworkbench", "annotations");
@@ -258,5 +318,6 @@ public sealed class DatasetCatalogService
     {
         Id = source.Id, Name = source.Name, TaskType = source.TaskType, RootDirectory = source.RootDirectory,
         Classes = [.. source.Classes], CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt,
+        ImageSplits = NormalizeSplits(source.ImageSplits),
     };
 }
