@@ -100,6 +100,20 @@ class Yolo11Engine:
         if self.settings.task == "semantic" and model_task not in {"segment", "semantic", ""}:
             raise ValueError("semantic 模式需要 YOLO11-seg 或兼容 semantic_mask 的模型")
 
+        # 把 CUDA 上下文、模型迁移和 Ultralytics 首次编译开销放到初始化阶段，
+        # 避免连续检测的第一帧承担冷启动延迟。
+        self._warmup()
+
+    def _warmup(self) -> None:
+        image = np.zeros(
+            (self.settings.image_size, self.settings.image_size, 3), dtype=np.uint8
+        )
+        self.model.predict(source=image, **self._predict_options())
+        if self.device.startswith("cuda"):
+            import torch  # type: ignore
+
+            torch.cuda.synchronize()
+
     @staticmethod
     def _resolve_device(configured: str) -> str:
         try:
@@ -126,16 +140,7 @@ class Yolo11Engine:
         image = _read_image(image_path)
         height, width = image.shape[:2]
         started = time.perf_counter()
-        results = self.model.predict(
-            source=image_path,
-            conf=self.settings.confidence,
-            iou=self.settings.iou,
-            imgsz=self.settings.image_size,
-            device=self.device,
-            half=self.settings.half and self.device.startswith("cuda"),
-            max_det=self.settings.max_detections,
-            verbose=False,
-        )
+        results = self.model.predict(source=image, **self._predict_options())
         if not results:
             result: Any = None
         else:
@@ -149,6 +154,19 @@ class Yolo11Engine:
             "device": self.device,
         }
         return output
+
+    def _predict_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "conf": self.settings.confidence,
+            "iou": self.settings.iou,
+            "imgsz": self.settings.image_size,
+            "device": self.device,
+            "max_det": self.settings.max_detections,
+            "verbose": False,
+        }
+        if self.settings.half and self.device.startswith("cuda"):
+            options["half"] = True
+        return options
 
     def _build_output(
         self,
