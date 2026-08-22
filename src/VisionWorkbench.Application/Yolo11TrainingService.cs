@@ -25,6 +25,7 @@ public sealed record Yolo11TrainingProgress(
     string Message);
 
 public sealed record Yolo11TrainingResult(string ModelPath, string RunDirectory);
+public sealed record Yolo11GpuMemory(bool Available, long FreeBytes, long TotalBytes);
 
 /// <summary>运行 YOLO11 训练 worker，并把每轮训练事件转发给桌面端。</summary>
 public sealed class Yolo11TrainingService : IDisposable
@@ -72,7 +73,9 @@ public sealed class Yolo11TrainingService : IDisposable
             if (!process.Start()) throw new InvalidOperationException("无法启动 YOLO11 训练 worker。");
 
             using var cancellationRegistration = cancellationToken.Register(() => TryKill(process));
-            await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(request));
+            await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(
+                request,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             await process.StandardInput.FlushAsync(cancellationToken);
             process.StandardInput.Close();
             var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -128,6 +131,45 @@ public sealed class Yolo11TrainingService : IDisposable
     {
         if (_process is { HasExited: false } process) TryKill(process);
         return Task.CompletedTask;
+    }
+
+    public async Task<Yolo11GpuMemory> QueryGpuMemoryAsync(CancellationToken cancellationToken = default)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _python,
+            WorkingDirectory = Path.GetDirectoryName(_scriptPath)!,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add(
+            "import json, torch; " +
+            "ok=torch.cuda.is_available(); " +
+            "free,total=torch.cuda.mem_get_info(0) if ok else (0,0); " +
+            "print(json.dumps({'available':ok,'freeBytes':int(free),'totalBytes':int(total)}))");
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start()) return new Yolo11GpuMemory(false, 0, 0);
+        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        if (process.ExitCode != 0) return new Yolo11GpuMemory(false, 0, 0);
+        try
+        {
+            using var json = JsonDocument.Parse(output.Trim());
+            var root = json.RootElement;
+            return new Yolo11GpuMemory(
+                root.GetProperty("available").GetBoolean(),
+                root.GetProperty("freeBytes").GetInt64(),
+                root.GetProperty("totalBytes").GetInt64());
+        }
+        catch (JsonException)
+        {
+            return new Yolo11GpuMemory(false, 0, 0);
+        }
     }
 
     public void Dispose()

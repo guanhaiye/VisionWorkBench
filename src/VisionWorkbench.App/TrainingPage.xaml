@@ -36,6 +36,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -44,15 +45,16 @@
                             <TextBlock Text="学习次数（Epochs）" Margin="0,4,8,4" />
                             <TextBox x:Name="EpochsText" Grid.Column="1" Text="100" Margin="0,2" />
                             <TextBlock Text="批大小（Batch）" Grid.Row="1" Margin="0,4,8,4" />
-                            <TextBox x:Name="BatchSizeText" Grid.Row="1" Grid.Column="1" Text="8" Margin="0,2" />
+                            <ComboBox x:Name="BatchSizeCombo" Grid.Row="1" Grid.Column="1" SelectedIndex="0" Margin="0,2" />
                             <TextBlock Text="图像尺寸" Grid.Row="2" Margin="0,4,8,4" />
-                            <TextBox x:Name="ImageSizeText" Grid.Row="2" Grid.Column="1" Text="640" Margin="0,2" />
+                            <TextBox x:Name="ImageSizeText" Grid.Row="2" Grid.Column="1" Text="640" Margin="0,2" LostFocus="ImageSizeText_LostFocus" />
                             <TextBlock Text="设备" Grid.Row="3" Margin="0,4,8,4" />
-                            <ComboBox x:Name="DeviceCombo" Grid.Row="3" Grid.Column="1" SelectedIndex="0" Margin="0,2">
+                            <ComboBox x:Name="DeviceCombo" Grid.Row="3" Grid.Column="1" SelectedIndex="0" SelectionChanged="DeviceCombo_SelectionChanged" Margin="0,2">
                                 <ComboBoxItem Content="自动选择（GPU优先）" Tag="auto" />
                                 <ComboBoxItem Content="CPU" Tag="cpu" />
                                 <ComboBoxItem Content="CUDA 0" Tag="0" />
                             </ComboBox>
+                            <TextBlock x:Name="BatchMemoryHintText" Grid.Row="4" Grid.ColumnSpan="2" Foreground="#666" TextWrapping="Wrap" Margin="0,4,0,0" />
                         </Grid>
                     </GroupBox>
                     <TextBlock x:Name="ModelHintText" Foreground="#666" TextWrapping="Wrap" Margin="4,8,4,0" />

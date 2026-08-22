@@ -18,11 +18,18 @@ public partial class TrainingPage : UserControl
     public TrainingPage()
     {
         InitializeComponent();
-        Loaded += (_, _) => RefreshDatasets();
+        Loaded += async (_, _) =>
+        {
+            RefreshDatasets();
+            await RefreshBatchOptionsAsync();
+        };
         IsVisibleChanged += (_, args) =>
         {
             if (args.NewValue is true && !AppServices.Instance.Yolo11Training.IsRunning)
+            {
                 RefreshDatasets();
+                _ = RefreshBatchOptionsAsync();
+            }
         };
         DrawLossCurve();
     }
@@ -41,6 +48,7 @@ public partial class TrainingPage : UserControl
         SetTaskTypeUi(_dataset);
         RefreshModels();
         ResetChart();
+        _ = RefreshBatchOptionsAsync();
     }
 
     private void SetTaskTypeUi(DatasetDefinition? dataset)
@@ -72,17 +80,17 @@ public partial class TrainingPage : UserControl
         if (taskType == "detection")
         {
             options.AddRange([
-                new("使用预训练 YOLO11n（自动下载）", "yolo11n.pt", false),
-                new("使用预训练 YOLO11s（自动下载）", "yolo11s.pt", false),
-                new("使用预训练 YOLO11m（自动下载）", "yolo11m.pt", false),
+                new("使用预训练 YOLO11n（自动下载）", "models/yolo11n.pt", false),
+                new("使用预训练 YOLO11s（自动下载）", "models/yolo11s.pt", false),
+                new("使用预训练 YOLO11m（自动下载）", "models/yolo11m.pt", false),
             ]);
         }
         else if (taskType == "instance_segmentation")
         {
             options.AddRange([
-                new("使用预训练 YOLO11n-seg（自动下载）", "yolo11n-seg.pt", false),
-                new("使用预训练 YOLO11s-seg（自动下载）", "yolo11s-seg.pt", false),
-                new("使用预训练 YOLO11m-seg（自动下载）", "yolo11m-seg.pt", false),
+                new("使用预训练 YOLO11n-seg（自动下载）", "models/yolo11n-seg.pt", false),
+                new("使用预训练 YOLO11s-seg（自动下载）", "models/yolo11s-seg.pt", false),
+                new("使用预训练 YOLO11m-seg（自动下载）", "models/yolo11m-seg.pt", false),
             ]);
         }
 
@@ -122,6 +130,58 @@ public partial class TrainingPage : UserControl
             TrainingStatusText.Text = "已选择已有模型，开始训练时将继续学习。";
             TrainingStatusText.Foreground = Brushes.DarkBlue;
         }
+        _ = RefreshBatchOptionsAsync();
+    }
+
+    private void DeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => _ = RefreshBatchOptionsAsync();
+
+    private void ImageSizeText_LostFocus(object sender, RoutedEventArgs e) => _ = RefreshBatchOptionsAsync();
+
+    private async Task RefreshBatchOptionsAsync()
+    {
+        if (BatchSizeCombo is null) return;
+        var previous = BatchSizeCombo.SelectedItem is int value ? value : 2;
+        var imageSize = int.TryParse(ImageSizeText.Text, out var parsedSize) && parsedSize > 0 ? parsedSize : 640;
+        var device = (DeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+        Yolo11GpuMemory gpu;
+        try
+        {
+            gpu = await AppServices.Instance.Yolo11Training.QueryGpuMemoryAsync();
+        }
+        catch
+        {
+            gpu = new Yolo11GpuMemory(false, 0, 0);
+        }
+        var maxBatch = EstimateMaxBatch(gpu, device, imageSize);
+        var options = new[] { 1, 2, 4, 8, 16, 32, 64 }.Where(batch => batch <= maxBatch).ToList();
+        if (options.Count == 0) options.Add(1);
+        BatchSizeCombo.ItemsSource = options;
+        BatchSizeCombo.SelectedItem = options.Contains(previous) ? previous : options.Last();
+        if (gpu.Available && device is ("auto" or "0"))
+        {
+            var freeGiB = gpu.FreeBytes / 1024d / 1024d / 1024d;
+            BatchMemoryHintText.Text = $"当前可用显存约 {freeGiB:0.00} GB，估算安全最大批大小：{maxBatch}。仅提供 2 的幂次选项。";
+        }
+        else
+        {
+            BatchMemoryHintText.Text = "未检测到可用 CUDA 显存，当前按 CPU 安全上限提供批大小选项。";
+        }
+    }
+
+    private int EstimateMaxBatch(Yolo11GpuMemory gpu, string device, int imageSize)
+    {
+        if (device == "cpu" || !gpu.Available) return 8;
+        var freeGiB = gpu.FreeBytes / 1024d / 1024d / 1024d;
+        var imageFactor = Math.Pow(imageSize / 640d, 2);
+        var modelPath = (ModelCombo.SelectedItem as ModelOption)?.ModelPath ?? "yolo11n.pt";
+        var modelFactor = modelPath.Contains("m", StringComparison.OrdinalIgnoreCase) ? 2.5
+            : modelPath.Contains("s", StringComparison.OrdinalIgnoreCase) ? 1.6
+            : 1.0;
+        var estimatedPerBatchGiB = 0.8 * imageFactor * modelFactor;
+        var rawMaximum = (int)Math.Floor(freeGiB * 0.65 / estimatedPerBatchGiB);
+        var maximum = 1;
+        while (maximum * 2 <= rawMaximum && maximum < 64) maximum *= 2;
+        return maximum;
     }
 
     private void BrowseModel_Click(object sender, RoutedEventArgs e)
@@ -156,8 +216,12 @@ public partial class TrainingPage : UserControl
             return;
         }
         if (!TryParsePositive(EpochsText.Text, "学习次数", out var epochs) ||
-            !TryParsePositive(BatchSizeText.Text, "批大小", out var batchSize) ||
             !TryParsePositive(ImageSizeText.Text, "图像尺寸", out var imageSize)) return;
+        if (BatchSizeCombo.SelectedItem is not int batchSize)
+        {
+            MessageBox.Show("请选择批大小。", "训练参数", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
 
         var device = (DeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
@@ -246,6 +310,9 @@ public partial class TrainingPage : UserControl
         StopButton.IsEnabled = running;
         DatasetCombo.IsEnabled = !running;
         ModelCombo.IsEnabled = !running;
+        BatchSizeCombo.IsEnabled = !running;
+        ImageSizeText.IsEnabled = !running;
+        DeviceCombo.IsEnabled = !running;
     }
 
     private void ResetChart()
