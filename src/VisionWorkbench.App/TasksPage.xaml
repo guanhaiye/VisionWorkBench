@@ -55,14 +55,25 @@
                     </Grid>
                 </GroupBox>
                 <GroupBox Header="算法插件">
-                    <Grid>
+                    <StackPanel>
+                        <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="插件 ID：" VerticalAlignment="Center" />
                         <ComboBox x:Name="PluginCombo" Grid.Column="1" SelectionChanged="PluginCombo_SelectionChanged" />
-                    </Grid>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="推理设备：" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ExecutionProviderCombo" Width="180">
+                                <ComboBoxItem Content="CPU" Tag="cpu" />
+                                <ComboBoxItem Content="CUDA（GPU）" Tag="cuda" />
+                            </ComboBox>
+                        </StackPanel>
+                        <TextBlock Text="CUDA 需要已安装可用的 NVIDIA 驱动和 CUDA 版推理环境。"
+                                   Foreground="#666" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    </StackPanel>
                 </GroupBox>
                 <GroupBox x:Name="ModelGroup" Header="模型导入与选择" Visibility="Collapsed">
                     <Grid>

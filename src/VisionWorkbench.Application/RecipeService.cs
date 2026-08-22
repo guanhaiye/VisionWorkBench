@@ -55,6 +55,10 @@ public sealed class RecipeService(TaskRepository tasks)
         {
             throw new ArgumentException("必须选择算法插件（CFG-004）");
         }
+        if (recipe.ExecutionProvider is not ("cpu" or "cuda"))
+        {
+            throw new ArgumentException("推理设备只能选择 cpu 或 cuda（CFG-006）");
+        }
         ValidateGeometry(recipe);
         ValidateSettingsJson(recipe.SettingsJson);
         // 流水计数模式无 OK/NG 判定，允许零规则（§16.3/§16.4）
@@ -87,7 +91,8 @@ public sealed class RecipeService(TaskRepository tasks)
         // ROI / 计数模式 / 检测线 共存于 RegionsJson（可选字段，旧数据缺失回退默认）
         var hasRegions = recipe.Roi is not null
             || recipe.CountingLine is not null
-            || recipe.CountingMode != CountingMode.Snapshot;
+            || recipe.CountingMode != CountingMode.Snapshot
+            || recipe.ExecutionProvider != "cpu";
         entity.RegionsJson = hasRegions
             ? JsonSerializer.Serialize(new
             {
@@ -95,6 +100,7 @@ public sealed class RecipeService(TaskRepository tasks)
                 Policy = recipe.Roi is null ? null : recipe.RoiPolicy.ToString(),
                 Mode = recipe.CountingMode.ToString(),
                 Line = recipe.CountingLine,
+                ExecutionProvider = recipe.ExecutionProvider,
             }, JsonOptions)
             : null;
         return await tasks.SaveAsync(entity, ct);
@@ -117,6 +123,7 @@ public sealed class RecipeService(TaskRepository tasks)
         var policy = RoiBoundaryPolicy.CenterInside;
         var mode = CountingMode.Snapshot;
         CountingLineConfig? line = null;
+        var executionProvider = "cpu";
         if (!string.IsNullOrWhiteSpace(entity.RegionsJson))
         {
             try
@@ -132,6 +139,7 @@ public sealed class RecipeService(TaskRepository tasks)
                     mode = m; // JsonStringEnumConverter 已校验，非法值抛 JsonException 走回退
                 }
                 line = doc?.Line;
+                executionProvider = doc?.ExecutionProvider is "cuda" ? "cuda" : "cpu";
             }
             catch (JsonException)
             {
@@ -147,6 +155,7 @@ public sealed class RecipeService(TaskRepository tasks)
             CameraDeviceId = entity.CameraDeviceId,
             PluginId = entity.PluginId,
             PluginVersion = entity.PluginVersion,
+            ExecutionProvider = executionProvider,
             SettingsJson = entity.SettingsJson,
             Roi = roi,
             RoiPolicy = policy,
@@ -160,7 +169,8 @@ public sealed class RecipeService(TaskRepository tasks)
         Contracts.Results.NormalizedRect? Roi,
         string? Policy,
         CountingMode? Mode,
-        CountingLineConfig? Line);
+        CountingLineConfig? Line,
+        string? ExecutionProvider);
 
     private static void ValidateSettingsJson(string settingsJson)
     {

@@ -582,8 +582,9 @@ public partial class LivePage : UserControl
     private void UpdateStatus()
     {
         var svcs = AppServices.Instance;
+        var provider = _activeRecipe?.ExecutionProvider ?? svcs.Settings.ExecutionProvider;
         StatusText.Text =
-            $"相机 FPS: {_preview.Fps:0.#} | 算法 FPS: {_algoFps:0.#} | 后端: {svcs.Settings.ExecutionProvider}"
+            $"相机 FPS: {_preview.Fps:0.#} | 算法 FPS: {_algoFps:0.#} | 后端: {provider}"
             + $" | 数据库: {System.IO.Path.Combine(svcs.Settings.DataDirectory, "visionworkbench.db")}"
             + (_run is null ? "" : $" | 丢帧: {_run.Scheduler.DroppedFrameCount}");
     }

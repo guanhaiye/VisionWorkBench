@@ -116,6 +116,9 @@ public sealed record Recipe
     public required string PluginId { get; init; }
     public string? PluginVersion { get; init; }
 
+    /// <summary>推理设备：cpu 或 cuda。</summary>
+    public string ExecutionProvider { get; init; } = "cpu";
+
     /// <summary>插件设置（透传 initialize.settings）。</summary>
     public string SettingsJson { get; init; } = "{}";
 

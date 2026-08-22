@@ -84,6 +84,7 @@ public partial class TasksPage : UserControl
         {
             PluginCombo.Text = recipe.PluginId; // 插件不在列表时仍显示
         }
+        SelectExecutionProvider(recipe.ExecutionProvider);
         SettingsText.Text = recipe.SettingsJson;
         LoadYoloSettings();
         RoiXText.Text = recipe.Roi?.X.ToString("0.###") ?? "0";
@@ -134,6 +135,7 @@ public partial class TasksPage : UserControl
         DeviceText.Text = "";
         UpdateDevicePreview();
         PluginCombo.SelectedIndex = PluginCombo.Items.Count > 0 ? 0 : -1;
+        SelectExecutionProvider(AppServices.Instance.Settings.ExecutionProvider);
         SettingsText.Text = "{}";
         LoadYoloSettings();
         RoiXText.Text = RoiYText.Text = RoiWText.Text = RoiHText.Text = "0";
@@ -234,6 +236,7 @@ public partial class TasksPage : UserControl
             CameraProviderId = ProviderText.Text.Trim(),
             CameraDeviceId = DeviceText.Text.Trim(),
             PluginId = PluginCombo.SelectedItem as string ?? PluginCombo.Text.Trim(),
+            ExecutionProvider = SelectedExecutionProvider(),
             SettingsJson = settingsJson,
             Roi = roi,
             RoiPolicy = Enum.TryParse<RoiBoundaryPolicy>(policy, out var p) ? p : RoiBoundaryPolicy.CenterInside,
@@ -520,5 +523,17 @@ public partial class TasksPage : UserControl
         {
             LinePanel.IsEnabled = mode == CountingMode.LineCrossing;
         }
+    }
+
+    private string SelectedExecutionProvider() =>
+        (ExecutionProviderCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "cpu";
+
+    private void SelectExecutionProvider(string provider)
+    {
+        var normalized = provider.Equals("cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
+        ExecutionProviderCombo.SelectedItem = ExecutionProviderCombo.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, normalized, StringComparison.OrdinalIgnoreCase));
+        if (ExecutionProviderCombo.SelectedItem is null) ExecutionProviderCombo.SelectedIndex = 0;
     }
 }

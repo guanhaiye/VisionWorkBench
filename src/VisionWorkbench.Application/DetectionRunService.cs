@@ -133,6 +133,7 @@ public sealed class DetectionRunService : IAsyncDisposable
         await algorithm.InitializeAsync(new AlgorithmInitialization
         {
             Settings = MergeCountingSettings(recipe),
+            ExecutionProvider = recipe.ExecutionProvider,
         }, cancellationToken);
         await algorithm.StartAsync(new AlgorithmStartOptions
         {
@@ -672,10 +673,7 @@ public sealed class DetectionRunService : IAsyncDisposable
     /// </summary>
     private static JsonElement? MergeCountingSettings(Recipe recipe)
     {
-        if (recipe.CountingMode == CountingMode.Snapshot)
-        {
-            return TryParseJson(recipe.SettingsJson);
-        }
+        var isYolo11 = recipe.PluginId.Contains("yolo11", StringComparison.OrdinalIgnoreCase);
         JsonObject? obj = null;
         if (!string.IsNullOrWhiteSpace(recipe.SettingsJson))
         {
@@ -688,21 +686,31 @@ public sealed class DetectionRunService : IAsyncDisposable
                 // 设置损坏 → 只带计数参数
             }
         }
+        if (recipe.CountingMode == CountingMode.Snapshot && !isYolo11)
+            return TryParseJson(recipe.SettingsJson);
         obj ??= [];
-        obj["countingMode"] = recipe.CountingMode == CountingMode.UniqueTracking ? "unique" : "line";
-        var line = recipe.CountingLine ?? new CountingLineConfig
+        if (recipe.CountingMode != CountingMode.Snapshot)
         {
-            A = new NormalizedPoint { X = 0.5, Y = 0.1 },
-            B = new NormalizedPoint { X = 0.5, Y = 0.9 },
-        };
-        obj["line"] = new JsonObject
+            obj["countingMode"] = recipe.CountingMode == CountingMode.UniqueTracking ? "unique" : "line";
+            var line = recipe.CountingLine ?? new CountingLineConfig
+            {
+                A = new NormalizedPoint { X = 0.5, Y = 0.1 },
+                B = new NormalizedPoint { X = 0.5, Y = 0.9 },
+            };
+            obj["line"] = new JsonObject
+            {
+                ["ax"] = line.A.X,
+                ["ay"] = line.A.Y,
+                ["bx"] = line.B.X,
+                ["by"] = line.B.Y,
+                ["hysteresis"] = line.Hysteresis,
+            };
+        }
+        if (isYolo11)
         {
-            ["ax"] = line.A.X,
-            ["ay"] = line.A.Y,
-            ["bx"] = line.B.X,
-            ["by"] = line.B.Y,
-            ["hysteresis"] = line.Hysteresis,
-        };
+            // YOLO11 使用 settings.device 选择 PyTorch 推理设备。
+            obj["device"] = recipe.ExecutionProvider;
+        }
         return JsonSerializer.SerializeToElement(obj);
     }
 
