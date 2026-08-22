@@ -103,25 +103,57 @@ public partial class DatasetAnnotationPage : UserControl
             return;
         }
 
-        var typeDialog = new DatasetTypeDialog { Owner = Window.GetWindow(this) };
-        if (typeDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(typeDialog.SelectedTaskType)) return;
         try
         {
             var directory = new DirectoryInfo(rootDirectory);
+            var inferred = InferDatasetMetadata(rootDirectory);
             var dataset = AppServices.Instance.Datasets.Save(new DatasetDefinition
             {
                 Name = directory.Name,
                 RootDirectory = rootDirectory,
-                TaskType = typeDialog.SelectedTaskType,
-                Classes = ["object"],
+                TaskType = inferred.TaskType,
+                Classes = inferred.Classes.Count > 0 ? inferred.Classes : ["object"],
             });
             RefreshDatasets(dataset.Id);
-            StatusText.Text = $"已加载数据集：{dataset.Name}。请根据需要修改类别并保存。";
+            var taskName = inferred.TaskType switch
+            {
+                "semantic_segmentation" => "语义分割",
+                "instance_segmentation" => "实例分割",
+                _ => "目标检测",
+            };
+            StatusText.Text = $"已加载数据集：{dataset.Name}。已根据标注自动识别为{taskName}，类别：{string.Join("、", dataset.Classes)}。";
         }
         catch (Exception ex)
         {
             MessageBox.Show($"加载数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    private static (string TaskType, List<string> Classes) InferDatasetMetadata(string rootDirectory)
+    {
+        var probe = new DatasetDefinition { RootDirectory = rootDirectory };
+        var images = AppServices.Instance.Datasets.ListImages(probe);
+        var classes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hasPolygon = false;
+        foreach (var image in images)
+        {
+            var annotation = AppServices.Instance.Datasets.LoadAnnotation(probe, image.RelativePath);
+            foreach (var item in annotation.Objects)
+            {
+                if (!string.IsNullOrWhiteSpace(item.ClassName)) classes.Add(item.ClassName.Trim());
+                if (item.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && item.Polygon.Count >= 3)
+                    hasPolygon = true;
+            }
+        }
+
+        var semanticMaskDirectory = Directory.Exists(System.IO.Path.Combine(rootDirectory, "masks")) ||
+                                    Directory.Exists(System.IO.Path.Combine(rootDirectory, ".visionworkbench", "masks"));
+        var taskType = semanticMaskDirectory
+            ? "semantic_segmentation"
+            : hasPolygon
+                ? "instance_segmentation"
+                : "detection";
+        return (taskType, classes.ToList());
     }
 
     private void BrowseRoot_Click(object sender, RoutedEventArgs e)
