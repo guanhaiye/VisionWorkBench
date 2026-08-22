@@ -14,6 +14,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
+_MODEL_CACHE = {}
+
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -82,57 +84,71 @@ def main(payload: dict) -> dict:
         bboxes.append([x, y, x + width, y + height])
         class_ids.append(int(prompt.get("classId", len(class_ids))))
 
-    model = YOLOE(str(model_path))
+    model_key = str(model_path.resolve())
+    if model_key not in _MODEL_CACHE:
+        _MODEL_CACHE[model_key] = YOLOE(str(model_path))
+    model = _MODEL_CACHE[model_key]
     visual_prompts = {"bboxes": np.asarray(bboxes, dtype=np.float32), "cls": np.asarray(class_ids, dtype=np.int64)}
+    valid_targets = [target for target in targets if target.is_file()]
+    predictions = model.predict(
+        [str(target) for target in valid_targets],
+        refer_image=str(reference),
+        visual_prompts=visual_prompts,
+        predictor=YOLOEVPSegPredictor,
+        conf=float(payload.get("confidence", 0.25)),
+        verbose=False,
+    )
     results = []
-    for target in targets:
-        if not target.is_file():
-            continue
-        predictions = model.predict(
-            str(target),
-            refer_image=str(reference),
-            visual_prompts=visual_prompts,
-            predictor=YOLOEVPSegPredictor,
-            conf=float(payload.get("confidence", 0.25)),
-            verbose=False,
-        )
+    for target, prediction in zip(valid_targets, predictions):
         objects = []
-        for prediction in predictions:
-            boxes = getattr(prediction, "boxes", None)
-            masks = getattr(prediction, "masks", None)
-            if boxes is None:
-                continue
-            xyxy = boxes.xyxy.cpu().numpy()
-            classes = boxes.cls.cpu().numpy().astype(int)
-            scores = boxes.conf.cpu().numpy() if getattr(boxes, "conf", None) is not None else [0.0] * len(xyxy)
-            mask_values = masks.data.cpu().numpy() if masks is not None else []
-            for index, box in enumerate(xyxy):
-                class_value = int(classes[index])
-                prompt_index = class_value if 0 <= class_value < len(prompts) else 0
-                prompt = prompts[prompt_index]
-                left, top, right, bottom = [float(value) for value in box]
-                image_width, image_height = Image.open(target).size
-                x = max(0.0, min(1.0, left / image_width))
-                y = max(0.0, min(1.0, top / image_height))
-                width = max(0.0, min(1.0, (right - left) / image_width))
-                height = max(0.0, min(1.0, (bottom - top) / image_height))
-                polygon = polygon_from_mask(mask_values[index]) if index < len(mask_values) else []
-                item = {
-                    "className": prompt["className"],
-                    "shape": "polygon" if len(polygon) >= 3 else "bbox",
-                    "x": x,
-                    "y": y,
-                    "width": width,
-                    "height": height,
-                    "polygon": polygon,
-                    "score": float(scores[index]),
-                }
-                objects.append(item)
+        boxes = getattr(prediction, "boxes", None)
+        masks = getattr(prediction, "masks", None)
+        if boxes is None:
+            results.append({"imagePath": str(target), "objects": objects})
+            continue
+        xyxy = boxes.xyxy.cpu().numpy()
+        classes = boxes.cls.cpu().numpy().astype(int)
+        scores = boxes.conf.cpu().numpy() if getattr(boxes, "conf", None) is not None else [0.0] * len(xyxy)
+        mask_values = masks.data.cpu().numpy() if masks is not None else []
+        image_width, image_height = Image.open(target).size
+        for index, box in enumerate(xyxy):
+            class_value = int(classes[index])
+            prompt_index = class_value if 0 <= class_value < len(prompts) else 0
+            prompt = prompts[prompt_index]
+            left, top, right, bottom = [float(value) for value in box]
+            x = max(0.0, min(1.0, left / image_width))
+            y = max(0.0, min(1.0, top / image_height))
+            width = max(0.0, min(1.0, (right - left) / image_width))
+            height = max(0.0, min(1.0, (bottom - top) / image_height))
+            polygon = polygon_from_mask(mask_values[index]) if index < len(mask_values) else []
+            objects.append({
+                "className": prompt["className"],
+                "shape": "polygon" if len(polygon) >= 3 else "bbox",
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "polygon": polygon,
+                "score": float(scores[index]),
+            })
         results.append({"imagePath": str(target), "objects": objects})
     return {"results": results}
 
 
+def persistent_main() -> None:
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            print(json.dumps(main(json.loads(line)), ensure_ascii=False), flush=True)
+        except Exception as error:
+            print(json.dumps({"error": f"YOLOE 智能标注失败：{type(error).__name__}: {error}"}, ensure_ascii=False), flush=True)
+
+
 if __name__ == "__main__":
+    if "--persistent" in sys.argv:
+        persistent_main()
+        raise SystemExit(0)
     try:
         request = json.loads(sys.stdin.read())
         print(json.dumps(main(request), ensure_ascii=False))

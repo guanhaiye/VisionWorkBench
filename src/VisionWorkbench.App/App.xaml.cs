@@ -32,6 +32,14 @@ public partial class App : System.Windows.Application
         {
             // 退出路径尽力而为
         }
+        try
+        {
+            AppServices.Instance.SmartAnnotations.Dispose();
+        }
+        catch (Exception)
+        {
+            // 智能标注 Worker 关闭失败不影响应用退出
+        }
         base.OnExit(e);
     }
 }

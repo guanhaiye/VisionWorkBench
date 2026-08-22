@@ -34,6 +34,10 @@ public sealed class SmartAnnotationService
     private readonly string _sam3Script;
     private readonly string _yoloePython;
     private readonly string _sam3Python;
+    private readonly SemaphoreSlim _yoloeGate = new(1, 1);
+    private Process? _yoloeProcess;
+    private StreamWriter? _yoloeWriter;
+    private StreamReader? _yoloeReader;
 
     public SmartAnnotationService(string workersRoot, string? configuredPython, string? yoloeModelPath, string? sam3ModelPath)
     {
@@ -59,29 +63,33 @@ public sealed class SmartAnnotationService
     public string DescribeYoloeAvailability() => Describe(_yoloeScript, _yoloePython, YoloeModelPath, "YOLOE");
     public string DescribeSam3Availability() => Describe(_sam3Script, _sam3Python, Sam3ModelPath, "SAM3");
 
-    public Task<IReadOnlyList<SmartAnnotationImageResult>> RunYoloEAsync(
+    public async Task<IReadOnlyList<SmartAnnotationImageResult>> RunYoloEAsync(
         string referenceImage,
         IReadOnlyList<YoloEPrompt> prompts,
         IReadOnlyList<string> targetImages,
         double confidence = 0.25,
-        CancellationToken cancellationToken = default) =>
-        RunAsync<YoloERequest, SmartAnnotationResponse>(
-            _yoloePython,
-            _yoloeScript,
-            new YoloERequest
+        CancellationToken cancellationToken = default)
+    {
+        await _yoloeGate.WaitAsync(cancellationToken);
+        try
+        {
+            var response = await RunPersistentYoloEAsync(new YoloERequest
             {
                 ModelPath = YoloeModelPath,
                 ReferenceImage = referenceImage,
                 Prompts = prompts,
                 Targets = targetImages,
                 Confidence = confidence,
-            },
-            cancellationToken).ContinueWith(task =>
-            {
-                if (task.IsCanceled) throw new TaskCanceledException(task);
-                if (task.IsFaulted) throw task.Exception?.GetBaseException() ?? new InvalidOperationException("YOLOE 执行失败");
-                return (IReadOnlyList<SmartAnnotationImageResult>)(task.Result.Results ?? []);
-            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(response.Error))
+                throw new InvalidOperationException(response.Error);
+            return response.Results ?? [];
+        }
+        finally
+        {
+            _yoloeGate.Release();
+        }
+    }
 
     public async Task<SmartAnnotationObjectResult?> RunSam3ClickAsync(
         string imagePath,
@@ -180,6 +188,90 @@ public sealed class SmartAnnotationService
         }
     }
 
+    private async Task<SmartAnnotationResponse> RunPersistentYoloEAsync(
+        YoloERequest request,
+        CancellationToken cancellationToken)
+    {
+        EnsureYoloEProcess();
+        await _yoloeWriter!.WriteLineAsync(JsonSerializer.Serialize(request, JsonOptions));
+        await _yoloeWriter.FlushAsync(cancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(15));
+        string? line;
+        try
+        {
+            do
+            {
+                line = await _yoloeReader!.ReadLineAsync(timeout.Token);
+            } while (line is not null && !line.TrimStart().StartsWith('{'));
+        }
+        catch
+        {
+            StopYoloEProcess();
+            throw;
+        }
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            StopYoloEProcess();
+            throw new InvalidOperationException("YOLOE 常驻 Worker 意外退出。");
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<SmartAnnotationResponse>(line, JsonOptions)
+                ?? throw new InvalidOperationException("YOLOE 常驻 Worker 返回为空。");
+        }
+        catch (JsonException ex)
+        {
+            StopYoloEProcess();
+            throw new InvalidOperationException($"YOLOE 常驻 Worker 返回格式无效：{line}", ex);
+        }
+    }
+
+    private void EnsureYoloEProcess()
+    {
+        if (_yoloeProcess is { HasExited: false }) return;
+        if (!File.Exists(_yoloeScript))
+            throw new InvalidOperationException($"YOLOE 适配器不存在：{_yoloeScript}");
+        StopYoloEProcess();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _yoloePython,
+            WorkingDirectory = Path.GetDirectoryName(_yoloeScript)!,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        startInfo.ArgumentList.Add(_yoloeScript);
+        startInfo.ArgumentList.Add("--persistent");
+        _yoloeProcess = new Process { StartInfo = startInfo };
+        if (!_yoloeProcess.Start()) throw new InvalidOperationException("无法启动 YOLOE 常驻 Worker。");
+        _yoloeWriter = _yoloeProcess.StandardInput;
+        _yoloeReader = _yoloeProcess.StandardOutput;
+        _ = _yoloeProcess.StandardError.ReadToEndAsync();
+    }
+
+    private void StopYoloEProcess()
+    {
+        try { if (_yoloeProcess is { HasExited: false }) _yoloeProcess.Kill(true); } catch { }
+        _yoloeWriter?.Dispose();
+        _yoloeReader?.Dispose();
+        _yoloeProcess?.Dispose();
+        _yoloeWriter = null;
+        _yoloeReader = null;
+        _yoloeProcess = null;
+    }
+
+    public void Dispose()
+    {
+        _yoloeGate.Wait();
+        try { StopYoloEProcess(); }
+        finally { _yoloeGate.Release(); _yoloeGate.Dispose(); }
+    }
+
     private static string ResolvePython(string? configured, string primary, string fallback, string root)
     {
         if (!string.IsNullOrWhiteSpace(configured)) return configured;
@@ -243,5 +335,6 @@ public sealed class SmartAnnotationService
     private sealed class SmartAnnotationResponse
     {
         public List<SmartAnnotationImageResult>? Results { get; set; }
+        public string? Error { get; set; }
     }
 }
