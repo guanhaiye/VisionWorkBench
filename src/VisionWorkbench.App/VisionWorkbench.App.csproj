@@ -22,6 +22,17 @@
     </None>
   </ItemGroup>
   <ItemGroup>
+    <Resource Include="..\..\assets\branding\visionworkbench-logo-v1.png">
+      <Link>Assets\Branding\visionworkbench-logo-v1.png</Link>
+    </Resource>
+    <SplashScreen Include="..\..\assets\branding\visionworkbench-logo-v1.png">
+      <Link>visionworkbench-logo-v1.png</Link>
+    </SplashScreen>
+    <ApplicationIcon Include="..\..\assets\branding\visionworkbench-logo-v1.ico">
+      <Link>Assets\Branding\visionworkbench-logo-v1.ico</Link>
+    </ApplicationIcon>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\VisionWorkbench.Application\VisionWorkbench.Application.csproj" />
     <ProjectReference Include="..\VisionWorkbench.Cameras.Files\VisionWorkbench.Cameras.Files.csproj" />
     <ProjectReference Include="..\VisionWorkbench.Cameras.Usb\VisionWorkbench.Cameras.Usb.csproj" />

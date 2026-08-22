@@ -4,6 +4,9 @@
         xmlns:local="clr-namespace:VisionWorkbench.App"
         Title="VisionWorkbench — AI 视觉工作台" Width="1280" Height="800"
         WindowStartupLocation="CenterScreen">
+    <Window.Icon>
+        <BitmapImage UriSource="/Assets/Branding/visionworkbench-logo-v1.png" />
+    </Window.Icon>
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="180" />
@@ -11,8 +14,11 @@
         </Grid.ColumnDefinitions>
         <Border Grid.Column="0" Background="#2B2B33">
             <StackPanel>
+                <Image Source="/Assets/Branding/visionworkbench-logo-v1.png"
+                       Width="76" Height="76" Stretch="Uniform" HorizontalAlignment="Center"
+                       Margin="0,14,0,2" />
                 <TextBlock Text="VisionWorkbench" Foreground="White" FontSize="16" FontWeight="Bold"
-                           Margin="12,16,12,12" />
+                           HorizontalAlignment="Center" Margin="8,2,8,12" />
                 <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0"
                          SelectionChanged="NavList_SelectionChanged" Margin="0,4">
                     <ListBoxItem Content="实时检测" Tag="live" Foreground="#E8E8E8" />
