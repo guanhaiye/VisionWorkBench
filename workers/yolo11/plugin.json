@@ -13,7 +13,7 @@
   },
   "capabilities": {
     "inputModes": ["single-image", "frame-stream"],
-    "outputs": ["detection", "segmentation", "metrics"],
+    "outputs": ["detection", "pose", "segmentation", "metrics"],
     "stateful": false,
     "realtime": true
   },

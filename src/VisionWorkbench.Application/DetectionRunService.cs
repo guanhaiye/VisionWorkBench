@@ -71,6 +71,7 @@ public sealed class DetectionRunService : IAsyncDisposable
     private string _projectId = "default";
     private string _evidenceDir = "";
     private volatile bool _paused;
+    private BehaviorEngine? _behaviorEngine;
 
     public event EventHandler<RecordCompletedEventArgs>? RecordCompleted;
     public event EventHandler<RunFaultedEventArgs>? Faulted;
@@ -128,6 +129,7 @@ public sealed class DetectionRunService : IAsyncDisposable
         _algorithm = algorithm;
         _routingStrategy = routingStrategy;
         BatchId = batchId;
+        _behaviorEngine = new BehaviorEngine(recipe.Behavior);
         _evidenceDir = Path.Combine(
             Path.GetDirectoryName(_tempStore.RootDirectory.TrimEnd(Path.DirectorySeparatorChar)) ?? ".",
             "evidence", DateTimeOffset.UtcNow.ToString("yyyyMMdd"));
@@ -540,6 +542,13 @@ public sealed class DetectionRunService : IAsyncDisposable
                 Roi = _recipe.Roi,
             }, CancellationToken.None); // 在途帧必须完成（Stop 只阻止取新帧，不打断推理）
 
+            var behavior = _behaviorEngine?.Process(
+                BehaviorFrame.FromAlgorithmOutput(_recipe.CameraDeviceId, output, frame.Sequence, frame.Timestamp));
+            if (behavior is { Events.Count: > 0 })
+            {
+                output = output with { Events = [.. output.Events, .. behavior.Events] };
+            }
+
             var decision = RuleEngine.Evaluate(output, _recipe.Rules, _recipe.Roi, _recipe.RoiPolicy);
             Counting.ApplyOutput(output);
             sw.Stop();
@@ -748,6 +757,21 @@ public sealed class DetectionRunService : IAsyncDisposable
         {
             // YOLO11 使用 settings.device 选择 PyTorch 推理设备。
             obj["device"] = recipe.ExecutionProvider;
+            if (recipe.TaskType == InspectionTaskType.BehaviorRecognition)
+            {
+                // 行为识别必须由 YOLO11-Pose 提取人体关键点。旧版本可能把
+                // 行为训练产生的 TorchScript best.pt 存进了主模型字段，
+                // 这里在运行前移除该错误路径，让插件回退到 yolo11n-pose.pt。
+                obj["task"] = "pose";
+                if (obj["modelPath"]?.GetValue<string>() is { } modelPath
+                    && modelPath.Contains("behavior-models", StringComparison.OrdinalIgnoreCase))
+                {
+                    obj.Remove("modelPath");
+                }
+            }
+            // 配置了行为区域时自动启用 Ultralytics ByteTrack；普通检测任务保持原模式。
+            obj["tracking"] = recipe.Behavior.Enabled
+                && (recipe.Behavior.Zones.Count > 0 || recipe.Behavior.Fall.Enabled);
         }
         return JsonSerializer.SerializeToElement(obj);
     }

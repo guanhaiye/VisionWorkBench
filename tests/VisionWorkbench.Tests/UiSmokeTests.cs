@@ -224,4 +224,44 @@ public sealed class UiSmokeTests
             }
         });
     }
+
+    [Fact]
+    public void SpcPage_CanBeInstantiated()
+    {
+        RunOnSta(() =>
+        {
+            var page = new SpcPage();
+            Assert.NotNull(page);
+        });
+    }
+
+    [Fact]
+    public void LogPage_CanBeInstantiated()
+    {
+        RunOnSta(() =>
+        {
+            var page = new LogPage();
+            Assert.NotNull(page);
+        });
+    }
+
+    [Fact]
+    public void SpcPage_Loaded_DoesNotRaiseDispatcherException()
+    {
+        RunOnSta(() =>
+        {
+            var errors = new List<Exception>();
+            Dispatcher.CurrentDispatcher.UnhandledException += (_, e) =>
+            {
+                errors.Add(e.Exception);
+                e.Handled = true;
+            };
+            var page = new SpcPage();
+            page.Measure(new Size(1000, 700));
+            page.Arrange(new Rect(0, 0, 1000, 700));
+            page.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+            Pump(12);
+            Assert.Empty(errors);
+        });
+    }
 }

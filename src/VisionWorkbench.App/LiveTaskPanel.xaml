@@ -1,0 +1,73 @@
+<UserControl x:Class="VisionWorkbench.App.LiveTaskPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="4" MinWidth="520" MinHeight="460">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,6">
+            <TextBlock Text="任务：" VerticalAlignment="Center" />
+            <ComboBox x:Name="TaskCombo" Width="220" DisplayMemberPath="Name" Margin="6,0,0,0"
+                      SelectionChanged="TaskCombo_SelectionChanged" />
+            <Button x:Name="StartButton" Content="开始" Click="Start_Click" Margin="8,0,0,0" Padding="10,3" />
+            <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False" Padding="10,3" />
+            <Button x:Name="SingleButton" Content="单次检测" Click="Single_Click" Padding="10,3" />
+            <Button x:Name="StopButton" Content="结束批次" Click="Stop_Click" IsEnabled="False" Padding="10,3" />
+            <Button x:Name="AdjustButton" Content="人工修正" Click="Adjust_Click" IsEnabled="False" Padding="10,3" />
+            <Button x:Name="ResetCountButton" Content="清零" Click="ResetCount_Click" IsEnabled="False" Padding="10,3" />
+            <Button x:Name="RemoveButton" Content="移除任务" Click="Remove_Click" Margin="8,0,0,0" Padding="10,3" />
+        </DockPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="260" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#111111" MinHeight="360">
+                <Grid SizeChanged="PreviewSurface_SizeChanged">
+                    <Image x:Name="PreviewImage" Stretch="Uniform" />
+                    <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False" />
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
+                <StackPanel>
+                    <GroupBox Header="当前判定">
+                        <StackPanel>
+                            <TextBlock x:Name="DecisionText" Text="-" FontSize="30" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,6" />
+                            <TextBlock x:Name="SummaryText" TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="4,0,4,6" />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="检测结果">
+                        <StackPanel>
+                            <TextBlock x:Name="CountText" Text="数量：-" FontSize="16" Margin="0,3" />
+                            <TextBlock x:Name="ElapsedText" Text="算法耗时：-" Margin="0,2" />
+                            <TextBlock x:Name="DetectionListText" TextWrapping="Wrap" FontSize="11" Foreground="#555" MaxHeight="120" />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="累计">
+                        <StackPanel>
+                            <TextBlock x:Name="VisibleText" Text="当前可见：0" Margin="0,2" />
+                            <TextBlock x:Name="TotalText" Text="累计：0" FontSize="20" Margin="0,3" />
+                            <TextBlock x:Name="ForwardText" Text="正向：0" Margin="0,2" />
+                            <TextBlock x:Name="ReverseText" Text="反向：0" Margin="0,2" />
+                            <TextBlock x:Name="BatchText" Text="批次：-" Margin="0,2" />
+                            <TextBlock x:Name="RecordStatsText" Text="OK 0 / NG 0 / 待确认 0" Margin="0,2" />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="NG / 待确认证据图">
+                        <Image x:Name="EvidenceImage" Stretch="Uniform" MaxHeight="140" />
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Border Grid.Row="2" BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,6,0,0">
+            <TextBlock x:Name="StatusText" Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接" TextWrapping="Wrap" />
+        </Border>
+    </Grid>
+</UserControl>

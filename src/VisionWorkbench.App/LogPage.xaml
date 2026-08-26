@@ -1,0 +1,61 @@
+<UserControl x:Class="VisionWorkbench.App.LogPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="日志管理" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" />
+            <Button Content="刷新日志" Click="Refresh_Click" Margin="18,0,0,0" Padding="14,4" />
+            <Button Content="打开日志目录" Click="OpenDirectory_Click" Margin="8,0,0,0" Padding="14,4" />
+            <Button Content="导出当前日志" Click="Export_Click" Margin="8,0,0,0" Padding="14,4" />
+        </DockPanel>
+
+        <Border Grid.Row="1" BorderBrush="#DDD" BorderThickness="0,1,0,1" Padding="6" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="等级：" VerticalAlignment="Center" />
+                <ComboBox x:Name="LevelFilter" Width="120" SelectionChanged="Filter_Changed">
+                    <ComboBoxItem Content="全部" Tag="all" IsSelected="True" />
+                    <ComboBoxItem Content="详细" Tag="debug" />
+                    <ComboBoxItem Content="一般" Tag="information" />
+                    <ComboBoxItem Content="警告" Tag="warning" />
+                    <ComboBoxItem Content="报错" Tag="error" />
+                    <ComboBoxItem Content="严重" Tag="critical" />
+                </ComboBox>
+                <TextBlock Text="关键词：" VerticalAlignment="Center" Margin="16,0,4,0" />
+                <TextBox x:Name="SearchText" Width="230" Height="25" VerticalContentAlignment="Center"
+                         TextChanged="Filter_Changed" />
+                <TextBlock x:Name="LogPathText" VerticalAlignment="Center" Foreground="#666"
+                           Margin="18,0,0,0" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Border>
+
+        <DataGrid x:Name="LogsGrid" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" SelectionMode="Single" HeadersVisibility="Column"
+                  PreviewMouseRightButtonDown="LogsGrid_PreviewMouseRightButtonDown">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="打开对应日志文件" Click="OpenSelectedFile_Click" />
+                    <Separator />
+                    <MenuItem Header="删除当前日志" Click="DeleteSelected_Click" />
+                    <Separator />
+                    <MenuItem Header="清除全部日志" Click="ClearAll_Click" />
+                </ContextMenu>
+            </DataGrid.ContextMenu>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="时间" Binding="{Binding Timestamp, StringFormat=yyyy-MM-dd HH:mm:ss.fff}" Width="165" />
+                <DataGridTextColumn Header="等级" Binding="{Binding Level}" Width="70" />
+                <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="150" />
+                <DataGridTextColumn Header="日志内容" Binding="{Binding Message}" Width="*" />
+                <DataGridTextColumn Header="文件" Binding="{Binding FileName}" Width="160" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <TextBlock x:Name="SummaryText" Grid.Row="3" Text="尚未加载日志" Foreground="#666" Margin="0,8,0,0" />
+    </Grid>
+</UserControl>

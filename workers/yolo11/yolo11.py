@@ -21,8 +21,10 @@ from typing import Any, Iterable
 import cv2
 import numpy as np
 
+from temporal_pose import TemporalPoseClassifier
 
-SUPPORTED_TASKS = {"detect", "instance", "semantic"}
+
+SUPPORTED_TASKS = {"detect", "pose", "instance", "semantic"}
 
 
 class Yolo11Settings:
@@ -34,10 +36,26 @@ class Yolo11Settings:
 
         model_path = str(source.get("modelPath", "")).strip()
         if not model_path:
-            model_path = "models/yolo11n.pt" if task == "detect" else "models/yolo11n-seg.pt"
+            model_path = (
+                "models/yolo11n-pose.pt" if task == "pose"
+                else "models/yolo11n.pt" if task == "detect"
+                else "models/yolo11n-seg.pt"
+            )
         resolved_model = Path(model_path)
         if not resolved_model.is_absolute():
             resolved_model = plugin_dir / resolved_model
+        # 行为训练生成的 best.pt 是 TorchScript 时序模型，不能交给
+        # ultralytics.YOLO 作为检测/姿态主模型。旧任务可能把它误存到了
+        # modelPath，这里做一次运行时兜底，避免任务启动直接失败。
+        if _is_behavior_model_path(resolved_model) or _is_legacy_behavior_model_path(resolved_model, plugin_dir):
+            fallback_name = (
+                "yolo11n-pose.pt" if task == "pose"
+                else "yolo11n.pt" if task == "detect"
+                else "yolo11n-seg.pt"
+            )
+            fallback = plugin_dir / "models" / fallback_name
+            if fallback.is_file():
+                resolved_model = fallback
         if not resolved_model.is_file():
             raise FileNotFoundError(f"YOLO11 模型文件不存在: {resolved_model}")
 
@@ -51,6 +69,16 @@ class Yolo11Settings:
         if self.device not in {"auto", "cpu", "cuda", "cuda:0", "cuda:1"}:
             raise ValueError("device 仅支持 auto、cpu、cuda、cuda:0 或 cuda:1")
         self.half = bool(source.get("half", False))
+        self.tracking = bool(source.get("tracking", False))
+        self.temporal_model_type = str(source.get("temporalModelType", "stgcn")).strip().lower()
+        if self.temporal_model_type not in {"stgcn", "posec3d"}:
+            raise ValueError("temporalModelType must be stgcn or posec3d")
+        self.temporal_sequence_length = _int_setting(source, "temporalSequenceLength", 30, 8, 300)
+        temporal_model_path = str(source.get("temporalModelPath", "")).strip()
+        resolved_temporal = Path(temporal_model_path) if temporal_model_path else None
+        if resolved_temporal is not None and not resolved_temporal.is_absolute():
+            resolved_temporal = plugin_dir / resolved_temporal
+        self.temporal_model_path = resolved_temporal
         self.save_masks = bool(source.get("saveMasks", False))
         mask_directory = Path(str(source.get("maskDirectory", "outputs/masks")))
         self.mask_directory = (
@@ -63,7 +91,6 @@ class Yolo11Settings:
             self.ignored_class_ids = {int(value) for value in ignored}
         except (TypeError, ValueError) as error:
             raise ValueError("ignoredClassIds 必须是整数数组") from error
-
     def as_dict(self) -> dict[str, Any]:
         return {
             "task": self.task,
@@ -74,10 +101,26 @@ class Yolo11Settings:
             "maxDetections": self.max_detections,
             "device": self.device,
             "half": self.half,
+            "tracking": self.tracking,
+            "temporalModelType": self.temporal_model_type,
+            "temporalSequenceLength": self.temporal_sequence_length,
+            "temporalModelPath": str(self.temporal_model_path) if self.temporal_model_path else "",
             "saveMasks": self.save_masks,
             "maskDirectory": str(self.mask_directory),
             "ignoredClassIds": sorted(self.ignored_class_ids),
         }
+
+
+def _is_behavior_model_path(path: Path) -> bool:
+    return any(part.lower() == "behavior-models" for part in path.parts)
+
+
+def _is_legacy_behavior_model_path(path: Path, plugin_dir: Path) -> bool:
+    # 旧版本曾把行为训练的 best.pt 复制到插件 models 目录。
+    return (
+        path.name.lower() == "best.pt"
+        and path.parent.resolve() == (plugin_dir / "models").resolve()
+    )
 
 
 class Yolo11Engine:
@@ -94,11 +137,18 @@ class Yolo11Engine:
 
         self.device = self._resolve_device(self.settings.device)
         self.model = YOLO(str(self.settings.model_path))
+        self.temporal_pose = TemporalPoseClassifier(
+            self.settings.temporal_model_type,
+            self.settings.temporal_model_path,
+            self.settings.temporal_sequence_length,
+        ) if self.settings.task == "pose" else None
         model_task = str(getattr(self.model, "task", "")).lower()
         if self.settings.task == "instance" and model_task not in {"segment", ""}:
             raise ValueError("instance 模式必须使用 YOLO11-seg 模型")
         if self.settings.task == "semantic" and model_task not in {"segment", "semantic", ""}:
             raise ValueError("semantic 模式需要 YOLO11-seg 或兼容 semantic_mask 的模型")
+        if self.settings.task == "pose" and model_task not in {"pose", ""}:
+            raise ValueError("pose 模式必须使用 YOLO11-pose 模型")
 
         # 把 CUDA 上下文、模型迁移和 Ultralytics 首次编译开销放到初始化阶段，
         # 避免连续检测的第一帧承担冷启动延迟。
@@ -140,7 +190,15 @@ class Yolo11Engine:
         image = _read_image(image_path)
         height, width = image.shape[:2]
         started = time.perf_counter()
-        results = self.model.predict(source=image, **self._predict_options())
+        if self.settings.tracking:
+            results = self.model.track(
+                source=image,
+                persist=True,
+                tracker="bytetrack.yaml",
+                **self._predict_options(),
+            )
+        else:
+            results = self.model.predict(source=image, **self._predict_options())
         if not results:
             result: Any = None
         else:
@@ -184,19 +242,35 @@ class Yolo11Engine:
         xyxy = _as_numpy(getattr(boxes, "xyxy", None))
         confidence = _as_numpy(getattr(boxes, "conf", None)).reshape(-1)
         class_ids = _as_numpy(getattr(boxes, "cls", None)).reshape(-1)
+        track_ids = _as_numpy(getattr(boxes, "id", None)).reshape(-1)
         detections: list[dict[str, Any]] = []
+        tracks: list[dict[str, Any]] = []
         for index, box in enumerate(xyxy.reshape((-1, 4)) if xyxy.size else []):
             class_id = int(class_ids[index]) if index < len(class_ids) else 0
             score = float(confidence[index]) if index < len(confidence) else 0.0
+            track_id = _track_id(track_ids, index)
+            normalized = _normalized_box(box, width, height)
             detections.append(
                 {
                     "classId": str(class_id),
                     "className": _class_name(names, class_id),
                     "confidence": round(score, 6),
-                    "box": _normalized_box(box, width, height),
+                    "box": normalized,
+                    **({"trackId": track_id} if track_id is not None else {}),
                 }
             )
+            if track_id is not None:
+                tracks.append(
+                    {
+                        "trackId": track_id,
+                        "classId": str(class_id),
+                        "box": normalized,
+                        "age": 1,
+                        "timeSinceUpdate": 0,
+                    }
+                )
 
+        keypoints = self._pose_keypoints(result, detections, width, height) if self.settings.task == "pose" else []
         segmentations: list[dict[str, Any]] = []
         if self.settings.task == "instance":
             segmentations = self._instance_segmentations(
@@ -209,12 +283,60 @@ class Yolo11Engine:
 
         return {
             "detections": detections,
+            "tracks": tracks,
+            "keypoints": keypoints,
             "segmentations": segmentations,
             "metrics": [
                 {"name": "count", "value": len(detections), "unit": "objects"},
                 {"name": "segmentationCount", "value": len(segmentations), "unit": "regions"},
             ],
         }
+
+    def _pose_keypoints(
+        self,
+        result: Any,
+        detections: list[dict[str, Any]],
+        width: int,
+        height: int,
+    ) -> list[dict[str, Any]]:
+        keypoints = getattr(result, "keypoints", None)
+        xy = _as_numpy(getattr(keypoints, "xy", None))
+        confidence = _as_numpy(getattr(keypoints, "conf", None))
+        if xy.ndim != 3:
+            return []
+        output: list[dict[str, Any]] = []
+        for person_index in range(min(len(detections), xy.shape[0])):
+            points: list[dict[str, float]] = []
+            for point_index, point in enumerate(xy[person_index]):
+                if len(point) < 2:
+                    continue
+                score = 1.0
+                if confidence.ndim >= 2 and person_index < confidence.shape[0] and point_index < confidence.shape[1]:
+                    score = float(confidence[person_index, point_index])
+                points.append(
+                    {
+                        "x": round(max(0.0, min(float(point[0]) / width, 1.0)), 8),
+                        "y": round(max(0.0, min(float(point[1]) / height, 1.0)), 8),
+                        "confidence": round(score, 6),
+                    }
+                )
+            if points:
+                track_id = detections[person_index].get("trackId")
+                temporal_pose = getattr(self, "temporal_pose", None)
+                temporal = temporal_pose.update(track_id, points) if temporal_pose else {
+                    "poseQuality": round(
+                        sum(point["confidence"] > 0.3 for point in points) / 17.0, 6
+                    )
+                }
+                output.append(
+                    {
+                        "trackId": track_id,
+                        "classId": detections[person_index]["classId"],
+                        "points": points,
+                        **temporal,
+                    }
+                )
+        return output
 
     def _instance_segmentations(
         self,
@@ -396,6 +518,18 @@ def _class_name(names: Any, class_id: int) -> str:
     if isinstance(names, (list, tuple)) and 0 <= class_id < len(names):
         return str(names[class_id])
     return str(class_id)
+
+
+def _track_id(values: np.ndarray, index: int) -> str | None:
+    if index >= len(values):
+        return None
+    try:
+        value = float(values[index])
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value):
+        return None
+    return str(int(value)) if value.is_integer() else str(value)
 
 
 def _normalized_box(box: Iterable[float], width: int, height: int) -> dict[str, float]:

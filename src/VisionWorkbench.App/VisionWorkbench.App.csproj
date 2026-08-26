@@ -8,6 +8,9 @@
     <AssemblyName>VisionWorkbench</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <Page Remove="Shell.xaml" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
@@ -25,8 +28,17 @@
     <Resource Include="..\..\assets\branding\visionworkbench-logo-v1.png">
       <Link>Assets\Branding\visionworkbench-logo-v1.png</Link>
     </Resource>
-    <ApplicationIcon Include="..\..\assets\branding\visionworkbench-logo-v1.ico">
+    <Resource Include="..\..\assets\branding\visionworkbench-logo-v1.ico">
       <Link>Assets\Branding\visionworkbench-logo-v1.ico</Link>
+    </Resource>
+    <Resource Include="..\..\assets\branding\visionworkbench-taskbar.png">
+      <Link>Assets\Branding\visionworkbench-taskbar.png</Link>
+    </Resource>
+    <Resource Include="..\..\assets\branding\visionworkbench-taskbar.ico">
+      <Link>Assets\Branding\visionworkbench-taskbar.ico</Link>
+    </Resource>
+    <ApplicationIcon Include="..\..\assets\branding\visionworkbench-taskbar.ico">
+      <Link>Assets\Branding\visionworkbench-taskbar.ico</Link>
     </ApplicationIcon>
   </ItemGroup>
   <ItemGroup>

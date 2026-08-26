@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace VisionWorkbench.Persistence;
 
@@ -169,6 +170,9 @@ public sealed class InspectionRecordEntity
     public string FinalResultJson { get; set; } = "{}";
 
     public bool WasCorrected { get; set; }
+
+    [NotMapped]
+    public bool HasEvidenceImage => !string.IsNullOrWhiteSpace(AnnotatedImagePath);
 }
 
 /// <summary>计数事件实体，表 CountingEvents（文档 §20.1；累计数据由事件产生）。</summary>

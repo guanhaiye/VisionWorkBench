@@ -1,0 +1,82 @@
+<UserControl x:Class="VisionWorkbench.App.BehaviorTrainingPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="行为识别训练平台" FontSize="20" FontWeight="Bold" />
+            <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Foreground="DarkGreen" VerticalAlignment="Center" />
+        </DockPanel>
+        <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1" Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="320" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="行为数据集" FontWeight="Bold" />
+                        <ComboBox x:Name="DatasetCombo" DisplayMemberPath="DisplayName" SelectionChanged="DatasetCombo_SelectionChanged" Margin="0,3,0,8" />
+                        <WrapPanel>
+                            <Button Content="刷新数据集" Click="RefreshDatasets_Click" Padding="10,4" />
+                            <Button Content="打开标注平台" Click="OpenAnnotation_Click" Margin="6,0,0,0" Padding="10,4" />
+                            <Button Content="打开本地目录" Click="OpenDirectory_Click" Margin="6,0,0,0" Padding="10,4" />
+                        </WrapPanel>
+                        <GroupBox Header="训练参数" Margin="0,12,0,0">
+                            <Grid Margin="8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <TextBlock Text="学习次数" Margin="0,4,8,4" />
+                                <TextBox x:Name="EpochsText" Grid.Column="1" Text="50" Margin="0,2" />
+                                <TextBlock Text="批大小" Grid.Row="1" Margin="0,4,8,4" />
+                                <ComboBox x:Name="BatchCombo" Grid.Row="1" Grid.Column="1" SelectedIndex="0" Margin="0,2">
+                                    <ComboBoxItem Content="1" Tag="1" /><ComboBoxItem Content="2" Tag="2" />
+                                    <ComboBoxItem Content="4" Tag="4" /><ComboBoxItem Content="8" Tag="8" />
+                                </ComboBox>
+                                <TextBlock Text="序列长度" Grid.Row="2" Margin="0,4,8,4" />
+                                <TextBox x:Name="SequenceLengthText" Grid.Row="2" Grid.Column="1" Text="30" Margin="0,2" />
+                                <TextBlock Text="设备" Grid.Row="3" Margin="0,4,8,4" />
+                                <ComboBox x:Name="DeviceCombo" Grid.Row="3" Grid.Column="1" Margin="0,2">
+                                    <ComboBoxItem Content="自动选择（GPU优先）" Tag="auto" IsSelected="True" />
+                                    <ComboBoxItem Content="CPU" Tag="cpu" /><ComboBoxItem Content="CUDA 0" Tag="0" />
+                                </ComboBox>
+                                <TextBlock Text="Pose基础模型" Grid.Row="4" Margin="0,4,8,4" />
+                                <DockPanel Grid.Row="4" Grid.Column="1">
+                                    <Button Content="浏览" DockPanel.Dock="Right" Click="BrowsePoseModel_Click" Margin="4,0,0,0" />
+                                    <TextBox x:Name="PoseModelText" TextWrapping="Wrap" />
+                                </DockPanel>
+                                <TextBlock Text="继续训练模型" Grid.Row="5" Margin="0,4,8,4" />
+                                <ComboBox x:Name="ResumeModelCombo" Grid.Row="5" Grid.Column="1" DisplayMemberPath="DisplayName" />
+                            </Grid>
+                        </GroupBox>
+                        <TextBlock x:Name="DatasetHintText" Foreground="#666" TextWrapping="Wrap" Margin="4,10,4,0" />
+                        <WrapPanel Margin="0,12,0,0">
+                            <Button x:Name="StartButton" Content="开始训练" Click="StartTraining_Click" Padding="14,6" />
+                            <Button x:Name="StopButton" Content="停止训练" Click="StopTraining_Click" IsEnabled="False" Margin="8,0,0,0" Padding="14,6" />
+                        </WrapPanel>
+                        <TextBlock x:Name="OutputPathText" Foreground="DarkGreen" TextWrapping="Wrap" Margin="4,10,4,0" />
+                    </StackPanel>
+                </ScrollViewer>
+                <Grid Grid.Column="1">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="260" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                        <TextBlock Text="Loss 曲线" FontSize="16" FontWeight="Bold" />
+                        <TextBlock x:Name="CurrentLossText" DockPanel.Dock="Right" Foreground="#555" />
+                    </DockPanel>
+                    <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1" Background="White">
+                        <Canvas x:Name="LossCanvas" SizeChanged="LossCanvas_SizeChanged" />
+                    </Border>
+                    <GroupBox Grid.Row="2" Header="训练日志" Margin="0,8,0,0">
+                        <ListBox x:Name="LogList" />
+                    </GroupBox>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

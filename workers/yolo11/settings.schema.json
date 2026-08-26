@@ -5,10 +5,10 @@
   "properties": {
     "task": {
       "type": "string",
-      "enum": ["detect", "instance", "semantic"],
+      "enum": ["detect", "pose", "instance", "semantic"],
       "default": "detect",
       "title": "任务类型",
-      "description": "detect=目标定位；instance=实例分割；semantic=语义区域"
+      "description": "detect=目标定位；pose=人体姿态；instance=实例分割；semantic=语义区域"
     },
     "modelPath": {
       "type": "string",
@@ -55,6 +55,32 @@
       "default": false,
       "title": "FP16",
       "description": "仅 CUDA 设备启用"
+    },
+    "tracking": {
+      "type": "boolean",
+      "default": false,
+      "title": "启用 ByteTrack",
+      "description": "行为识别区域任务自动启用；普通单帧检测默认关闭"
+    },
+    "temporalModelType": {
+      "type": "string",
+      "enum": ["stgcn", "posec3d"],
+      "default": "stgcn",
+      "title": "跌倒时序模型类型",
+      "description": "可加载 TorchScript 格式的 ST-GCN 或 PoseC3D 模型"
+    },
+    "temporalSequenceLength": {
+      "type": "integer",
+      "minimum": 8,
+      "maximum": 300,
+      "default": 30,
+      "title": "姿态序列长度"
+    },
+    "temporalModelPath": {
+      "type": "string",
+      "default": "",
+      "title": "跌倒时序模型路径",
+      "description": "相对于插件目录的 TorchScript 模型路径；为空时使用几何基线"
     },
     "saveMasks": {
       "type": "boolean",

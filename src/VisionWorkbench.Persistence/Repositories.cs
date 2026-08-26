@@ -179,6 +179,12 @@ public sealed class TaskRepository(IDbContextFactory<VisionDbContext> factory)
         }
         entity.UpdatedAt = DateTime.UtcNow;
         await using var db = factory.CreateDbContext();
+        var duplicateName = await db.Tasks.AnyAsync(
+            t => t.Id != entity.Id && t.Name == entity.Name, ct);
+        if (duplicateName)
+        {
+            throw new InvalidOperationException($"任务名称已存在：{entity.Name}。请使用其他名称。");
+        }
         if (entity.Id == 0)
         {
             entity.CreatedAt = DateTime.UtcNow;
@@ -441,6 +447,104 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
     {
         await using var db = factory.CreateDbContext();
         return await db.InspectionRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+    }
+
+    /// <summary>删除检测记录及其关联事件/纠错，并返回需要由应用层删除的本地证据文件路径。</summary>
+    public async Task<IReadOnlyList<string>> DeleteAsync(long id, CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var record = await db.InspectionRecords.FirstOrDefaultAsync(r => r.Id == id, ct)
+            ?? throw new InvalidOperationException($"检测记录不存在: {id}");
+
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddPath(record.OriginalImagePath);
+        AddPath(record.AnnotatedImagePath);
+
+        var countingPaths = await db.CountingEvents.AsNoTracking()
+            .Where(e => e.RecordId == id && e.EvidenceImagePath != null)
+            .Select(e => e.EvidenceImagePath!)
+            .ToListAsync(ct);
+        foreach (var path in countingPaths)
+        {
+            AddPath(path);
+        }
+
+        var visionPaths = await db.VisionEvents.AsNoTracking()
+            .Where(e => e.RecordId == id && e.EvidenceImagePath != null)
+            .Select(e => e.EvidenceImagePath!)
+            .ToListAsync(ct);
+        foreach (var path in visionPaths)
+        {
+            AddPath(path);
+        }
+
+        await db.Corrections.Where(c => c.RecordId == id).ExecuteDeleteAsync(ct);
+        await db.CountingEvents.Where(e => e.RecordId == id).ExecuteDeleteAsync(ct);
+        await db.VisionEvents.Where(e => e.RecordId == id).ExecuteDeleteAsync(ct);
+        db.InspectionRecords.Remove(record);
+        await db.SaveChangesAsync(ct);
+        return paths.ToArray();
+
+        void AddPath(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                paths.Add(path);
+            }
+        }
+    }
+
+    /// <summary>删除全部检测记录及其关联事件/纠错，并返回需要删除的本地证据文件路径。</summary>
+    public async Task<IReadOnlyList<string>> DeleteAllAsync(CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var recordPaths = await db.InspectionRecords.AsNoTracking()
+            .Select(r => new { r.OriginalImagePath, r.AnnotatedImagePath })
+            .ToListAsync(ct);
+        foreach (var item in recordPaths)
+        {
+            AddPath(item.OriginalImagePath);
+            AddPath(item.AnnotatedImagePath);
+        }
+
+        var countingPaths = await db.CountingEvents.AsNoTracking()
+            .Where(e => e.EvidenceImagePath != null)
+            .Select(e => e.EvidenceImagePath!)
+            .ToListAsync(ct);
+        foreach (var path in countingPaths)
+        {
+            AddPath(path);
+        }
+
+        var visionPaths = await db.VisionEvents.AsNoTracking()
+            .Where(e => e.EvidenceImagePath != null)
+            .Select(e => e.EvidenceImagePath!)
+            .ToListAsync(ct);
+        foreach (var path in visionPaths)
+        {
+            AddPath(path);
+        }
+
+        await db.Corrections.ExecuteDeleteAsync(ct);
+        await db.CountingEvents.ExecuteDeleteAsync(ct);
+        await db.VisionEvents.ExecuteDeleteAsync(ct);
+        await db.InspectionRecords.ExecuteDeleteAsync(ct);
+        return paths.ToArray();
+
+        void AddPath(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                paths.Add(path);
+            }
+        }
+    }
+
+    public async Task<int> CountAsync(CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        return await db.InspectionRecords.CountAsync(ct);
     }
 
     /// <summary>人工纠错：写 Corrections + 标记 WasCorrected（CNT-S-010/DAT）。</summary>

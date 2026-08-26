@@ -63,6 +63,32 @@ public sealed class PersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task Record_Delete_Returns_Evidence_Paths_And_Removes_Record()
+    {
+        var task = await new TaskRepository(_factory).SaveAsync(new TaskEntity
+        {
+            Name = "删除测试任务",
+            CameraProviderId = "image-folder",
+            CameraDeviceId = "images",
+            PluginId = "p",
+        });
+        var records = new RecordRepository(_factory);
+        var record = await records.AddAsync(new InspectionRecordEntity
+        {
+            TaskId = task.Id,
+            Status = "ng",
+            OriginalImagePath = "evidence/orig.png",
+            AnnotatedImagePath = "evidence/annotated.png",
+        });
+
+        var paths = await records.DeleteAsync(record.Id);
+
+        Assert.Contains("evidence/orig.png", paths);
+        Assert.Contains("evidence/annotated.png", paths);
+        Assert.Null(await records.FindAsync(record.Id));
+    }
+
+    [Fact]
     public async Task Record_With_Events_And_Paging()
     {
         var tasks = new TaskRepository(_factory);

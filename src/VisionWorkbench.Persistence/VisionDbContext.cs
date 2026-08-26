@@ -157,7 +157,7 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InspectionRecords_StationCode ON InspectionRecords (StationCode);");
 
         var defaultProjectId = Convert.ToInt64(db.Database.SqlQueryRaw<long>("SELECT Id AS Value FROM Projects WHERE ProjectCode = 'default' LIMIT 1").Single());
-        db.Database.ExecuteSqlRaw("INSERT INTO Stations (ProjectId, StationCode, Name, Enabled, IsArchived, TaskId, CameraProviderId, CameraDeviceId, CreatedAt, UpdatedAt) SELECT @p0, t.StationCode, t.Name, 1, 0, t.Id, t.CameraProviderId, t.CameraDeviceId, t.CreatedAt, t.UpdatedAt FROM Tasks t WHERE NOT EXISTS (SELECT 1 FROM Stations s WHERE s.TaskId = t.Id);", defaultProjectId);
+        db.Database.ExecuteSqlRaw("INSERT INTO Stations (ProjectId, StationCode, Name, Enabled, IsArchived, TaskId, CameraProviderId, CameraDeviceId, CreatedAt, UpdatedAt) SELECT @p0, t.StationCode, t.Name, 1, 0, t.Id, t.CameraProviderId, t.CameraDeviceId, t.CreatedAt, t.UpdatedAt FROM Tasks t WHERE NOT EXISTS (SELECT 1 FROM Stations s WHERE s.TaskId = t.Id) AND NOT EXISTS (SELECT 1 FROM Stations s WHERE s.ProjectId = @p0 AND lower(s.StationCode) = lower(t.StationCode));", defaultProjectId);
 
         var batchColumns = ReadColumns(db, "Batches");
         if (!batchColumns.Contains("ProjectId"))

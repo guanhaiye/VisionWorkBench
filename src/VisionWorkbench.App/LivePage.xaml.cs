@@ -1,712 +1,298 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Shapes;
-using System.Windows.Threading;
-using Microsoft.Extensions.Logging;
-using VisionWorkbench.Algorithms;
+
 using VisionWorkbench.Application;
-using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Domain;
-using VisionWorkbench.Persistence;
 
 namespace VisionWorkbench.App;
 
-/// <summary>实时检测页（文档 §8.2）：预览+叠加、结果面板、批次控制、人工修正。</summary>
 public partial class LivePage : UserControl
 {
-    private readonly PreviewRenderer _preview = new();
-    private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private DetectionRunService? _run;
-    private IAlgorithmSession? _algorithmSession;
-    private ICameraSession? _cameraSession;
-    private long _okCount;
-    private long _ngCount;
-    private long _reviewCount;
-    private DateTimeOffset _algoFpsWindow = DateTimeOffset.UtcNow;
-    private int _algoFpsFrames;
-    private double _algoFps;
-    private Recipe? _activeRecipe;
-    private AlgorithmOutput? _lastOutput;
-    private int _reconnectInProgress;
-    private int _singleFrameNextIndex;
-    private bool _singleFrameRun;
-    private bool _singleFrameReceived;
-    private bool _singleFrameBusy;
-    private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
+    private readonly List<LiveTaskPanel> _panels = [];
+    private LiveTaskItem[] _availableTasks = [];
+    private bool _loadingTasks;
+    // 兼容原有 UI 冒烟测试；正式运行时每个 LiveTaskPanel 使用自己的画布。
+    private Recipe? _activeRecipe = null;
+    private DetectionRunService? _run = null;
 
     public LivePage()
     {
         InitializeComponent();
-        _statusTimer.Tick += (_, _) => UpdateStatus();
-        _statusTimer.Start();
-        Loaded += (_, _) => LoadTasks();
+        LayoutCombo.SelectedIndex = 0;
+        ApplyLayout();
     }
 
-    public void OnShown() => LoadTasks();
-
-    private async void LoadTasks()
+    public void OnShown()
     {
+        _ = LoadTasksAsync();
+    }
+
+    private async void Page_Loaded(object sender, RoutedEventArgs e)
+    {
+        await LoadTasksAsync();
+    }
+
+    private async void Page_Unloaded(object sender, RoutedEventArgs e)
+    {
+        await ShutdownPanelsAsync();
+    }
+
+    private async Task LoadTasksAsync()
+    {
+        if (_loadingTasks)
+        {
+            return;
+        }
+
+        _loadingTasks = true;
         try
         {
             var tasks = await AppServices.Instance.Recipes.ListAsync();
-            TaskCombo.ItemsSource = tasks.Select(t => new TaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name)).ToArray();
-            if (TaskCombo.Items.Count > 0)
+            var items = tasks
+                .Select(t => new LiveTaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
+                .ToArray();
+            _availableTasks = items;
+            foreach (var panel in _panels)
             {
-                TaskCombo.SelectedIndex = 0;
-            }
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"加载任务失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private async void Start_Click(object sender, RoutedEventArgs e) => await StartRunAsync(singleFrame: false);
-
-    private async Task StartRunAsync(bool singleFrame)
-    {
-        if (TaskCombo.SelectedItem is not TaskItem item)
-        {
-            MessageBox.Show("请先在任务配置页创建任务", "提示");
-            return;
-        }
-        if (singleFrame && _singleFrameBusy)
-        {
-            return;
-        }
-        if (singleFrame)
-        {
-            _singleFrameBusy = true;
-            SetButtons(running: true);
-        }
-        var found = await AppServices.Instance.Recipes.FindAsync(item.Id);
-        if (found is not { } pair)
-        {
-            _singleFrameBusy = false;
-            SetButtons(running: false);
-            MessageBox.Show("任务数据无效", "错误");
-            return;
-        }
-        var (entity, recipe) = pair;
-        if (singleFrame && recipe.CameraProviderId is not ("image-folder" or "video-file"))
-        {
-            _singleFrameBusy = false;
-            SetButtons(running: false);
-            MessageBox.Show("当前输入源不是图片目录或视频文件。实时相机请先点击“开始”，再使用“单次检测”。", "单次检测", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-        _activeRecipe = recipe;
-        if (!singleFrame)
-        {
-            _singleFrameNextIndex = 0;
-        }
-        _singleFrameRun = singleFrame;
-        _singleFrameReceived = false;
-        if (singleFrame)
-        {
-            OverlayCanvas.Children.Clear();
-            StatusText.Text = "单次检测处理中，请稍候…";
-        }
-        var svcs = AppServices.Instance;
-        var logger = svcs.LoggerFactory.CreateLogger<LivePage>();
-
-        try
-        {
-            // 1. 相机会话（虚拟源参数：间隔 200ms）
-            _cameraSession = await OpenCameraAsync(recipe, CancellationToken.None, singleFrame);
-
-            // 2. 算法会话
-            _algorithmSession = await svcs.AlgorithmManager.CreateSessionAsync(
-                recipe.PluginId, CancellationToken.None);
-
-            // 3. 检测运行时 + 批次：优先恢复上次异常退出遗留的 running 批次
-            _run = new DetectionRunService(svcs.Records, svcs.TempImages,
-                svcs.LoggerFactory.CreateLogger<DetectionRunService>(), $"task-{entity.Id}", svcs.ResultPublisher);
-            var batch = await svcs.BatchService.ResumeOrStartAsync(
-                entity.Id, _run.Counting, svcs.Records);
-            _run.PreviewReceived += (_, frame) => RenderPreview(frame);
-            _run.RecordCompleted += OnRecordCompleted;
-            _run.Faulted += OnRunFaulted;
-            _run.SourceCompleted += async (_, _) => await Dispatcher.InvokeAsync(StopFromSourceEnd);
-            await _run.StartAsync(recipe, entity.Id, _cameraSession, _algorithmSession, batch.Id);
-
-            _okCount = _ngCount = _reviewCount = 0;
-            VisibleText.Text = "当前可见: 0";
-            TotalText.Text = "累计: 0";
-            ForwardText.Text = "正向: 0";
-            ReverseText.Text = "反向: 0";
-            BatchText.Text = $"批次: {batch.BatchNumber}";
-            StatusText.Text = singleFrame
-                ? "单次检测已启动：图片/视频源只处理一帧。"
-                : "批量检测已启动：图片/视频源将按顺序处理全部内容。";
-            SetButtons(running: true);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "开始检测失败");
-            MessageBox.Show($"开始检测失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-            await CleanupAsync();
-        }
-    }
-
-    private async void Pause_Click(object sender, RoutedEventArgs e)
-    {
-        if (_run is null)
-        {
-            return;
-        }
-        if (_run.State == DetectionRunState.Running)
-        {
-            await _run.PauseAsync();
-            PauseButton.Content = "继续";
-        }
-        else if (_run.State == DetectionRunState.Paused)
-        {
-            await _run.ResumeAsync();
-            PauseButton.Content = "暂停";
-        }
-    }
-
-    private async void Single_Click(object sender, RoutedEventArgs e)
-    {
-        if (_singleFrameBusy)
-        {
-            return;
-        }
-        if (_run is not null && _run.State is (DetectionRunState.Running or DetectionRunState.Paused))
-        {
-            if (_activeRecipe?.CameraProviderId is ("image-folder" or "video-file"))
-            {
-                _singleFrameBusy = true;
-                SetButtons(running: true);
-                _singleFrameRun = true;
-                _singleFrameReceived = false;
-                try
-                {
-                    _cameraSession = await OpenCameraAsync(_activeRecipe, CancellationToken.None, true);
-                    await _run.RestartCameraAsync(_cameraSession, CancellationToken.None);
-                    StatusText.Text = "\u5355\u6b21\u68c0\u6d4b\u5904\u7406\u4e2d\uff08\u5df2\u590d\u7528\u6a21\u578b\uff09\u2026";
-                }
-                catch (Exception ex)
-                {
-                    _singleFrameBusy = false;
-                    _singleFrameRun = false;
-                    SetButtons(running: true);
-                    StatusText.Text = $"\u5355\u6b21\u68c0\u6d4b\u542f\u52a8\u5931\u8d25\uff1a{ex.Message}";
-                    if (_cameraSession is not null)
-                    {
-                        await _cameraSession.DisposeAsync();
-                        _cameraSession = null;
-                    }
-                }
-                return;
+                panel.SetAvailableTasks(_availableTasks);
             }
 
-            var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
-            if (result is null)
-                StatusText.Text = "单次检测：等待帧超时或源已播完";
-            return;
-        }
-        await StartRunAsync(singleFrame: true);
-    }
-
-    private async void Stop_Click(object sender, RoutedEventArgs e) => await StopBatchAsync();
-
-    private async void Adjust_Click(object sender, RoutedEventArgs e)
-    {
-        if (_run is null)
-        {
-            return;
-        }
-        var dialog = new CorrectionDialog("人工修正计数") { Owner = Window.GetWindow(this) };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-        try
-        {
-            var adjustment = await _run.AdjustCountAsync(
-                dialog.Delta, dialog.Reason, AppServices.Instance.Settings.OperatorName);
-            TotalText.Text = $"累计: {adjustment.After}";
-        }
-        catch (ArgumentException ex)
-        {
-            MessageBox.Show(ex.Message, "校验失败");
-        }
-    }
-
-    /// <summary>计数清零（CNT-S-010 / CNT-L-012）：原因必填；流模式同步清 worker 跟踪记忆。</summary>
-    private async void ResetCount_Click(object sender, RoutedEventArgs e)
-    {
-        if (_run is null)
-        {
-            return;
-        }
-        var dialog = new CorrectionDialog("计数清零", hideDelta: true) { Owner = Window.GetWindow(this) };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-        try
-        {
-            var adjustment = await _run.ResetCountAsync(
-                dialog.Reason, AppServices.Instance.Settings.OperatorName);
-            TotalText.Text = $"累计: {adjustment.After}";
-        }
-        catch (ArgumentException ex)
-        {
-            MessageBox.Show(ex.Message, "校验失败");
-        }
-    }
-
-    private async Task StopBatchAsync()
-    {
-        if (_run is null)
-        {
-            return;
-        }
-        var total = _run.Counting.State.CurrentTotal;
-        await _run.StopAsync();
-        await AppServices.Instance.BatchService.EndAsync(total);
-        await CleanupAsync();
-        BatchText.Text = "批次: 已结束";
-    }
-
-    private async Task StopFromSourceEnd()
-    {
-        // 先等待已进入调度器的帧处理完成，避免单帧模式在源结束时丢失唯一图片。
-        if (_run is not null)
-        {
-            try
+            if (_panels.Count == 0)
             {
-                await _run.WaitForCompletionAsync(TimeSpan.FromSeconds(30));
-            }
-            catch (TimeoutException)
-            {
-                StatusText.Text = "输入源已结束，但等待最后一帧处理超时。";
-            }
-        }
-        // 有限源（图片目录/视频）播完：自动结束批次
-        if (_singleFrameRun)
-        {
-            if (_singleFrameReceived)
-            {
-                _singleFrameNextIndex++;
-                StatusText.Text = "\u5355\u6b21\u68c0\u6d4b\u5df2\u5b8c\u6210\uff0c\u53ef\u7ee7\u7eed\u70b9\u51fb\u5355\u6b21\u68c0\u6d4b\uff08\u6a21\u578b\u5df2\u590d\u7528\uff09";
+                AddTaskPanel();
             }
             else
             {
-                StatusText.Text = "\u56fe\u7247\u6e90\u5df2\u5904\u7406\u5b8c\u6bd5";
-            }
-            _singleFrameRun = false;
-            _singleFrameReceived = false;
-            _singleFrameBusy = false;
-            SetButtons(running: true);
-            return;
-        }
-
-        if (_singleFrameRun && _singleFrameReceived)
-        {
-            _singleFrameNextIndex++;
-        }
-        _singleFrameRun = false;
-        _singleFrameReceived = false;
-        await StopBatchAsync();
-    }
-
-    private async Task CleanupAsync()
-    {
-        if (_run is not null)
-        {
-            _run.RecordCompleted -= OnRecordCompleted;
-            _run.Faulted -= OnRunFaulted;
-            await _run.DisposeAsync();
-            _run = null;
-        }
-        if (_algorithmSession is not null)
-        {
-            await _algorithmSession.DisposeAsync();
-            _algorithmSession = null;
-        }
-        if (_cameraSession is not null)
-        {
-            await _cameraSession.DisposeAsync();
-            _cameraSession = null;
-        }
-        _singleFrameBusy = false;
-        _singleFrameRun = false;
-        _singleFrameReceived = false;
-        await Dispatcher.InvokeAsync(() => SetButtons(running: false));
-    }
-
-    private async void OnRunFaulted(object? sender, RunFaultedEventArgs e)
-    {
-        await Dispatcher.InvokeAsync(() =>
-        {
-            StatusText.Text = $"故障[{e.Source}] {e.Code}: {e.Message}";
-            if (e.Source == "camera"
-                && e.Code == CameraErrorCodes.DeviceDisconnected
-                && _run is not null
-                && _activeRecipe is not null
-                && Interlocked.Exchange(ref _reconnectInProgress, 1) == 0)
-            {
-                _ = ReconnectCameraAfterFaultAsync();
-                return;
-            }
-            SetButtons(running: false);
-        });
-    }
-
-    private async Task ReconnectCameraAfterFaultAsync()
-    {
-        try
-        {
-            await Dispatcher.InvokeAsync(() => StatusText.Text = "相机断线，正在自动重连…");
-            var replacement = await _run!.ReconnectCameraAsync(
-                ct => OpenCameraAsync(_activeRecipe!, ct),
-                maxAttempts: 5,
-                retryDelay: TimeSpan.FromSeconds(1));
-            if (replacement is not null)
-            {
-                _cameraSession = replacement;
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    StatusText.Text = "相机已重连，检测继续";
-                    SetButtons(running: true);
-                });
-                return;
+                UpdateWorkspaceStatus();
             }
         }
         catch (Exception ex)
         {
-            AppServices.Instance.LoggerFactory.CreateLogger<LivePage>()
-                .LogError(ex, "相机自动重连失败");
+            WorkspaceStatusText.Text = $"加载任务失败：{ex.Message}";
         }
         finally
         {
-            Interlocked.Exchange(ref _reconnectInProgress, 0);
+            _loadingTasks = false;
+        }
+    }
+
+    private void AddTask_Click(object sender, RoutedEventArgs e)
+    {
+        if (_availableTasks.Length == 0)
+        {
+            WorkspaceStatusText.Text = "暂无可添加的任务，请先在任务配置中创建任务。";
+            return;
         }
 
-        await CleanupAsync();
+        AddTaskPanel();
     }
 
-    private async Task<ICameraSession> OpenCameraAsync(
-        Recipe recipe, CancellationToken cancellationToken, bool singleFrame = false)
+    private void AddTaskPanel()
     {
-        var descriptor = new CameraDescriptor
-        {
-            ProviderId = recipe.CameraProviderId,
-            DeviceId = recipe.CameraDeviceId,
-            DisplayName = recipe.CameraDeviceId,
-        };
-        var options = singleFrame && recipe.CameraProviderId is ("image-folder" or "video-file")
-            ? _cameraOptions with { MaxFrames = 1, StartFrameIndex = _singleFrameNextIndex }
-            : _cameraOptions;
-        var session = await AppServices.Instance.Cameras.OpenSessionAsync(
-            descriptor, options, cancellationToken);
-        await session.OpenAsync(options, cancellationToken);
-        return session;
+        var panel = new LiveTaskPanel(_availableTasks);
+        panel.RemoveRequested += Panel_RemoveRequested;
+        panel.TaskSelectionChanged += Panel_TaskSelectionChanged;
+        _panels.Add(panel);
+        PanelsHost.Items.Add(panel);
+        ApplyLayout();
+        UpdateWorkspaceStatus();
     }
 
-    // ---- 渲染回调（DetectionRunService 从相机线程调用）----
-
-    private void RenderPreview(VideoFrame frame)
+    private void Panel_TaskSelectionChanged(object? sender, EventArgs e)
     {
-        Dispatcher.BeginInvoke(() =>
+        if (sender is not LiveTaskPanel panel || panel.TaskId == 0)
         {
-            _preview.Render(PreviewImage, frame);
-        });
+            UpdateWorkspaceStatus();
+            return;
+        }
+
+        var duplicate = _panels.Any(other => !ReferenceEquals(other, panel)
+            && other.TaskId == panel.TaskId);
+        if (duplicate)
+        {
+            panel.ClearTaskSelection();
+            WorkspaceStatusText.Text = $"任务 {panel.SelectedTaskName} 已经被其他检测面板使用，请选择其他任务。";
+            return;
+        }
+
+        UpdateWorkspaceStatus();
     }
 
-    // ---- 检测完成（后台线程）→ UI 编组 ----
+    private async void Panel_RemoveRequested(object? sender, EventArgs e)
+    {
+        if (sender is not LiveTaskPanel panel)
+        {
+            return;
+        }
+
+        panel.RemoveRequested -= Panel_RemoveRequested;
+        panel.TaskSelectionChanged -= Panel_TaskSelectionChanged;
+        await panel.ShutdownAsync();
+        _panels.Remove(panel);
+        PanelsHost.Items.Remove(panel);
+        UpdateWorkspaceStatus();
+    }
+
+    private async void RefreshTasks_Click(object sender, RoutedEventArgs e)
+    {
+        await LoadTasksAsync();
+    }
+
+    private void LayoutCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsInitialized)
+        {
+            ApplyLayout();
+        }
+    }
+
+    private void ApplyLayout()
+    {
+        if (PanelsHost is null || LayoutCombo is null)
+        {
+            return;
+        }
+
+        FrameworkElementFactory factory;
+        switch ((LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString())
+        {
+            case "vertical":
+                factory = new FrameworkElementFactory(typeof(StackPanel));
+                factory.SetValue(StackPanel.OrientationProperty, Orientation.Vertical);
+                break;
+            case "horizontal":
+                factory = new FrameworkElementFactory(typeof(StackPanel));
+                factory.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+                break;
+            default:
+                factory = new FrameworkElementFactory(typeof(UniformGrid));
+                factory.SetValue(UniformGrid.ColumnsProperty, 2);
+                break;
+        }
+
+        PanelsHost.ItemsPanel = new ItemsPanelTemplate(factory);
+    }
+
+    private void UpdateWorkspaceStatus()
+    {
+        if (_panels.Count == 0)
+        {
+            WorkspaceStatusText.Text = "请选择任务并点击“添加任务”。每个任务拥有独立的预览、结果和控制按钮。";
+            return;
+        }
+
+        WorkspaceStatusText.Text = $"当前工作区已添加 {_panels.Count} 个任务；可以在每个任务面板中独立开始、暂停、单次检测或结束批次。";
+    }
+
+    private async Task ShutdownPanelsAsync()
+    {
+        foreach (var panel in _panels.ToArray())
+        {
+            try
+            {
+                await panel.ShutdownAsync();
+            }
+            catch
+            {
+                // 页面切换时尽力释放每个任务的资源，单个任务失败不影响其余任务。
+            }
+        }
+    }
 
     private void OnRecordCompleted(object? sender, RecordCompletedEventArgs e)
     {
-        if (_singleFrameRun)
-        {
-            _singleFrameReceived = true;
-        }
-        _algoFpsFrames++;
-        var now = DateTimeOffset.UtcNow;
-        if (now - _algoFpsWindow >= TimeSpan.FromSeconds(1))
-        {
-            _algoFps = _algoFpsFrames / (now - _algoFpsWindow).TotalSeconds;
-            _algoFpsWindow = now;
-            _algoFpsFrames = 0;
-        }
-
         Dispatcher.BeginInvoke(() =>
         {
-            _lastOutput = e.Output;
-            var (text, color) = e.Decision.Status switch
-            {
-                DecisionStatus.Ok => ("OK", Brushes.Green),
-                DecisionStatus.Ng => ("NG", Brushes.Red),
-                DecisionStatus.ReviewRequired => ("待确认", Brushes.Orange),
-                _ => ("错误", Brushes.Gray),
-            };
-            DecisionText.Text = text;
-            DecisionText.Foreground = color;
-            SummaryText.Text = $"工位 {e.StationCode} · {e.Decision.Summary}";
-            CountText.Text = $"数量: {e.Output.GetCount()}";
-            ElapsedText.Text = $"算法耗时: {e.Output.Performance?.TotalMs ?? 0:0.#} ms";
-            DetectionListText.Text = string.Join("\n", e.Output.Detections.Take(8)
-                .Select(d => $"{d.ClassName} {d.Confidence:0.00}"));
-            TotalText.Text = $"累计: {e.CountAfter}";
             VisibleText.Text = $"当前可见: {e.Output.GetCount()}";
+            TotalText.Text = $"累计: {e.CountAfter}";
             var state = _run?.Counting.State;
             ForwardText.Text = $"正向: {state?.ForwardTotal ?? 0}";
             ReverseText.Text = $"反向: {state?.ReverseTotal ?? 0}";
-            switch (e.Decision.Status)
-            {
-                case DecisionStatus.Ok: _okCount++; break;
-                case DecisionStatus.Ng: _ngCount++; break;
-                case DecisionStatus.ReviewRequired: _reviewCount++; break;
-            }
-            RecordStatsText.Text = $"OK {_okCount} / NG {_ngCount} / 待确认 {_reviewCount}";
-
-            // 结果必须绘制在本次推理对应的原始帧上，避免批量处理时错叠到下一张图片。
-            if (e.Frame is not null)
-            {
-                _preview.Render(PreviewImage, e.Frame, force: true);
-            }
-            DrawOverlay(e.Output);
-            if (e.Decision.Status is DecisionStatus.Ng or DecisionStatus.ReviewRequired
-                && e.Record.AnnotatedImagePath is { } path && File.Exists(path))
-            {
-                try
-                {
-                    EvidenceImage.Source = new System.Windows.Media.Imaging.BitmapImage(new Uri(path));
-                }
-                catch (IOException)
-                {
-                    // 图片被清理时忽略
-                }
-            }
+            DrawCompatibilityOverlay(e.Output);
         });
     }
 
-    /// <summary>归一化检测框 → 像素叠加（按预览控件实际尺寸）。</summary>
-    private void DrawOverlay(AlgorithmOutput output)
+    private void DrawCompatibilityOverlay(AlgorithmOutput output)
     {
         OverlayCanvas.Children.Clear();
-        if (PreviewImage.Source is null)
+        if (PreviewImage.Source is null || OverlayCanvas.ActualWidth <= 0 || OverlayCanvas.ActualHeight <= 0)
         {
             return;
         }
-        // Stretch=Uniform 的实际显示区域
-        var canvasW = OverlayCanvas.ActualWidth;
-        var canvasH = OverlayCanvas.ActualHeight;
-        if (canvasW <= 0 || canvasH <= 0)
-        {
-            return;
-        }
+
         var srcW = PreviewImage.Source.Width;
         var srcH = PreviewImage.Source.Height;
-        var scale = Math.Min(canvasW / srcW, canvasH / srcH);
+        var scale = Math.Min(OverlayCanvas.ActualWidth / srcW, OverlayCanvas.ActualHeight / srcH);
         var drawW = srcW * scale;
         var drawH = srcH * scale;
-        var offsetX = (canvasW - drawW) / 2;
-        var offsetY = (canvasH - drawH) / 2;
+        var offsetX = (OverlayCanvas.ActualWidth - drawW) / 2;
+        var offsetY = (OverlayCanvas.ActualHeight - drawH) / 2;
+        double Px(double x) => offsetX + x * drawW;
+        double Py(double y) => offsetY + y * drawH;
 
-        // YOLO11 instance/semantic segmentation overlays.
-        foreach (var segmentation in output.Segmentations)
+        if (_activeRecipe?.CountingLine is { } line)
         {
-            foreach (var contour in segmentation.Contours)
+            OverlayCanvas.Children.Add(new Line
             {
-                if (contour.Count < 3)
-                {
-                    continue;
-                }
-                var semantic = segmentation.Mode.Equals("semantic", StringComparison.OrdinalIgnoreCase);
-                var polygon = new Polygon
-                {
-                    Fill = semantic
-                        ? new SolidColorBrush(Color.FromArgb(48, 255, 165, 0))
-                        : new SolidColorBrush(Color.FromArgb(56, 0, 191, 255)),
-                    Stroke = semantic ? Brushes.Orange : Brushes.DeepSkyBlue,
-                    StrokeThickness = 1.2,
-                };
-                foreach (var point in contour)
-                {
-                    polygon.Points.Add(new System.Windows.Point(
-                        offsetX + point.X * drawW,
-                        offsetY + point.Y * drawH));
-                }
-                OverlayCanvas.Children.Add(polygon);
-            }
-        }
-
-        // 流水模式有轨迹输出：Track 框/ID/Trail 取代裸检测框（含丢失中的轨迹）
-        if (output.Tracks.Count > 0)
-        {
-            foreach (var track in output.Tracks)
-            {
-                var rect = new System.Windows.Rect(
-                    offsetX + track.Box.X * drawW,
-                    offsetY + track.Box.Y * drawH,
-                    track.Box.Width * drawW,
-                    track.Box.Height * drawH);
-                var box = new Rectangle
-                {
-                    Width = Math.Max(1, rect.Width),
-                    Height = Math.Max(1, rect.Height),
-                    Stroke = track.TimeSinceUpdate > 0 ? Brushes.DarkCyan : Brushes.Cyan,
-                    StrokeThickness = 1.4,
-                };
-                Canvas.SetLeft(box, rect.X);
-                Canvas.SetTop(box, rect.Y);
-                OverlayCanvas.Children.Add(box);
-
-                var label = new TextBlock
-                {
-                    Text = $"#{track.TrackId}",
-                    Foreground = Brushes.Cyan,
-                    FontSize = 11,
-                };
-                Canvas.SetLeft(label, rect.X);
-                Canvas.SetTop(label, Math.Max(0, rect.Y - 16));
-                OverlayCanvas.Children.Add(label);
-
-                if (track.Trail.Count > 1)
-                {
-                    var trail = new Polyline { Stroke = Brushes.Orange, StrokeThickness = 1.4 };
-                    foreach (var p in track.Trail)
-                    {
-                        trail.Points.Add(new System.Windows.Point(
-                            offsetX + p.X * drawW, offsetY + p.Y * drawH));
-                    }
-                    OverlayCanvas.Children.Add(trail);
-                }
-            }
-        }
-        else
-        {
-            foreach (var detection in output.Detections)
-            {
-                var rect = new System.Windows.Rect(
-                    offsetX + detection.Box.X * drawW,
-                    offsetY + detection.Box.Y * drawH,
-                    detection.Box.Width * drawW,
-                    detection.Box.Height * drawH);
-                var box = new Rectangle
-                {
-                    Width = Math.Max(1, rect.Width),
-                    Height = Math.Max(1, rect.Height),
-                    Stroke = Brushes.Lime,
-                    StrokeThickness = 1.6,
-                };
-                Canvas.SetLeft(box, rect.X);
-                Canvas.SetTop(box, rect.Y);
-                OverlayCanvas.Children.Add(box);
-
-                var label = new TextBlock
-                {
-                    Text = $"{detection.ClassName} {detection.Confidence:0.00}",
-                    Foreground = Brushes.Lime,
-                    FontSize = 11,
-                };
-                Canvas.SetLeft(label, rect.X);
-                Canvas.SetTop(label, Math.Max(0, rect.Y - 16));
-                OverlayCanvas.Children.Add(label);
-            }
-        }
-
-        // ROI 框（配置了 ROI 时显示）
-        if (_activeRecipe?.Roi is { } roi)
-        {
-            var roiRect = new System.Windows.Rect(
-                offsetX + roi.X * drawW, offsetY + roi.Y * drawH,
-                roi.Width * drawW, roi.Height * drawH);
-            var box = new Rectangle
-            {
-                Width = Math.Max(1, roiRect.Width),
-                Height = Math.Max(1, roiRect.Height),
-                Stroke = Brushes.DodgerBlue,
-                StrokeThickness = 1.2,
-                StrokeDashArray = [4, 2],
-            };
-            Canvas.SetLeft(box, roiRect.X);
-            Canvas.SetTop(box, roiRect.Y);
-            OverlayCanvas.Children.Add(box);
-        }
-
-        // 检测线（实线）+ 滞回带边界（虚线）：LineCrossing 模式；未配置时按插件默认竖直中线
-        CountingLineConfig? line = _activeRecipe?.CountingLine;
-        if (_activeRecipe?.CountingMode == CountingMode.LineCrossing)
-        {
-            line ??= new CountingLineConfig
-            {
-                A = new NormalizedPoint { X = 0.5, Y = 0.1 },
-                B = new NormalizedPoint { X = 0.5, Y = 0.9 },
-            };
-        }
-        if (line is { } cfg)
-        {
-            double Px(double nx) => offsetX + nx * drawW;
-            double Py(double ny) => offsetY + ny * drawH;
-            var main = new Line
-            {
-                X1 = Px(cfg.A.X), Y1 = Py(cfg.A.Y),
-                X2 = Px(cfg.B.X), Y2 = Py(cfg.B.Y),
+                X1 = Px(line.A.X), Y1 = Py(line.A.Y),
+                X2 = Px(line.B.X), Y2 = Py(line.B.Y),
                 Stroke = Brushes.Yellow, StrokeThickness = 2,
-            };
-            OverlayCanvas.Children.Add(main);
-            // 带边界 = 法向偏移 hysteresis（归一化空间法向，按轴缩放到像素）
-            var dx = cfg.B.X - cfg.A.X;
-            var dy = cfg.B.Y - cfg.A.Y;
-            var len = Math.Sqrt(dx * dx + dy * dy);
-            if (len > 1e-6 && cfg.Hysteresis > 0)
+            });
+            var dx = line.B.X - line.A.X;
+            var dy = line.B.Y - line.A.Y;
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            if (length > 1e-6 && line.Hysteresis > 0)
             {
-                var nx = dy / len;
-                var ny = -dx / len;
+                var nx = dy / length;
+                var ny = -dx / length;
                 foreach (var sign in new[] { 1.0, -1.0 })
                 {
-                    var edge = new Line
+                    OverlayCanvas.Children.Add(new Line
                     {
-                        X1 = Px(cfg.A.X + sign * nx * cfg.Hysteresis),
-                        Y1 = Py(cfg.A.Y + sign * ny * cfg.Hysteresis),
-                        X2 = Px(cfg.B.X + sign * nx * cfg.Hysteresis),
-                        Y2 = Py(cfg.B.Y + sign * ny * cfg.Hysteresis),
+                        X1 = Px(line.A.X + sign * nx * line.Hysteresis),
+                        Y1 = Py(line.A.Y + sign * ny * line.Hysteresis),
+                        X2 = Px(line.B.X + sign * nx * line.Hysteresis),
+                        Y2 = Py(line.B.Y + sign * ny * line.Hysteresis),
                         Stroke = Brushes.Goldenrod,
                         StrokeThickness = 1,
                         StrokeDashArray = [4, 3],
-                        Opacity = 0.8,
-                    };
-                    OverlayCanvas.Children.Add(edge);
+                    });
                 }
             }
         }
-    }
 
-    private void UpdateStatus()
-    {
-        var svcs = AppServices.Instance;
-        var provider = _activeRecipe?.ExecutionProvider ?? svcs.Settings.ExecutionProvider;
-        StatusText.Text =
-            $"相机 FPS: {_preview.Fps:0.#} | 算法 FPS: {_algoFps:0.#} | 后端: {provider}"
-            + $" | 数据库: {System.IO.Path.Combine(svcs.Settings.DataDirectory, "visionworkbench.db")}"
-            + (_run is null ? "" : $" | 丢帧: {_run.Scheduler.DroppedFrameCount}");
-    }
+        foreach (var track in output.Tracks)
+        {
+            var rect = new Rect(Px(track.Box.X), Py(track.Box.Y), track.Box.Width * drawW, track.Box.Height * drawH);
+            var box = new Rectangle
+            {
+                Width = Math.Max(1, rect.Width),
+                Height = Math.Max(1, rect.Height),
+                Stroke = Brushes.Cyan,
+                StrokeThickness = 1.4,
+            };
+            Canvas.SetLeft(box, rect.X);
+            Canvas.SetTop(box, rect.Y);
+            OverlayCanvas.Children.Add(box);
 
-    private void SetButtons(bool running)
-    {
-        StartButton.IsEnabled = !running;
-        PauseButton.IsEnabled = running;
-        PauseButton.Content = "暂停";
-        SingleButton.IsEnabled = !_singleFrameBusy;
-        StopButton.IsEnabled = running;
-        AdjustButton.IsEnabled = running;
-        ResetCountButton.IsEnabled = running;
-        TaskCombo.IsEnabled = !running;
-    }
+            var label = new TextBlock { Text = $"#{track.TrackId}", Foreground = Brushes.Cyan, FontSize = 11 };
+            Canvas.SetLeft(label, rect.X);
+            Canvas.SetTop(label, Math.Max(0, rect.Y - 16));
+            OverlayCanvas.Children.Add(label);
 
-    private sealed record TaskItem(long Id, string StationCode, string TaskName)
-    {
-        public long Id { get; } = Id;
-        public string Name { get; } = $"[{StationCode}] {TaskName}";
+            if (track.Trail.Count > 1)
+            {
+                var trail = new Polyline { Stroke = Brushes.Orange, StrokeThickness = 1.4 };
+                foreach (var point in track.Trail)
+                {
+                    trail.Points.Add(new Point(Px(point.X), Py(point.Y)));
+                }
+                OverlayCanvas.Children.Add(trail);
+            }
+        }
     }
 }

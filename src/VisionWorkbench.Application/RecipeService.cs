@@ -92,7 +92,9 @@ public sealed class RecipeService(TaskRepository tasks)
         var hasRegions = recipe.Roi is not null
             || recipe.CountingLine is not null
             || recipe.CountingMode != CountingMode.Snapshot
-            || recipe.ExecutionProvider != "cpu";
+            || recipe.ExecutionProvider != "cpu"
+            || recipe.Behavior.Enabled
+            || recipe.Behavior.Zones.Count > 0;
         entity.RegionsJson = hasRegions
             ? JsonSerializer.Serialize(new
             {
@@ -101,6 +103,7 @@ public sealed class RecipeService(TaskRepository tasks)
                 Mode = recipe.CountingMode.ToString(),
                 Line = recipe.CountingLine,
                 ExecutionProvider = recipe.ExecutionProvider,
+                Behavior = recipe.Behavior,
             }, JsonOptions)
             : null;
         return await tasks.SaveAsync(entity, ct);
@@ -124,6 +127,7 @@ public sealed class RecipeService(TaskRepository tasks)
         var mode = CountingMode.Snapshot;
         CountingLineConfig? line = null;
         var executionProvider = "cpu";
+        var behavior = new BehaviorRecognitionConfig();
         if (!string.IsNullOrWhiteSpace(entity.RegionsJson))
         {
             try
@@ -140,6 +144,7 @@ public sealed class RecipeService(TaskRepository tasks)
                 }
                 line = doc?.Line;
                 executionProvider = doc?.ExecutionProvider is "cuda" ? "cuda" : "cpu";
+                behavior = doc?.Behavior ?? new BehaviorRecognitionConfig();
             }
             catch (JsonException)
             {
@@ -161,6 +166,7 @@ public sealed class RecipeService(TaskRepository tasks)
             RoiPolicy = policy,
             CountingMode = mode,
             CountingLine = line,
+            Behavior = behavior,
             Rules = rules,
         };
     }
@@ -170,7 +176,8 @@ public sealed class RecipeService(TaskRepository tasks)
         string? Policy,
         CountingMode? Mode,
         CountingLineConfig? Line,
-        string? ExecutionProvider);
+        string? ExecutionProvider,
+        BehaviorRecognitionConfig? Behavior);
 
     private static void ValidateSettingsJson(string settingsJson)
     {
@@ -199,6 +206,7 @@ public sealed class RecipeService(TaskRepository tasks)
         }
         if (recipe.CountingLine is not { } line)
         {
+            ValidateBehavior(recipe.Behavior);
             return;
         }
         if (!IsValidPoint(line.A) || !IsValidPoint(line.B)
@@ -206,6 +214,35 @@ public sealed class RecipeService(TaskRepository tasks)
             || line.Hysteresis < 0 || line.Hysteresis > 0.2)
         {
             throw new ArgumentException("检测线端点必须位于 0~1、两端不能重合，滞回宽度须为 0~0.2（CFG-006）");
+        }
+        ValidateBehavior(recipe.Behavior);
+    }
+
+    private static void ValidateBehavior(BehaviorRecognitionConfig behavior)
+    {
+        foreach (var zone in behavior.Zones)
+        {
+            if (string.IsNullOrWhiteSpace(zone.Id) || zone.Polygon.Count < 3
+                || zone.Polygon.Any(point => !IsValidPoint(point)))
+            {
+                throw new ArgumentException("行为识别区域必须包含至少 3 个、且位于 0~1 的多边形点（CFG-006）。");
+            }
+        }
+
+        foreach (var settings in new[] { behavior.Intrusion, behavior.Loitering, behavior.Crowding, behavior.Fall })
+        {
+            if (settings.MinimumConfidence is < 0 or > 1
+                || settings.ConfirmingSeconds < 0
+                || settings.RecoverySeconds < 0
+                || settings.CooldownSeconds < 0
+                || settings.WarningSeconds < 0
+                || settings.AlarmSeconds < 0
+                || settings.WarningCount < 1
+                || settings.AlarmCount < 1
+                || settings.MaximumMissingSeconds < 0)
+            {
+                throw new ArgumentException("行为识别阈值必须为有效的非负数，置信度必须在 0~1 之间（CFG-006）。");
+            }
         }
     }
 

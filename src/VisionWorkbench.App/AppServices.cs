@@ -71,6 +71,7 @@ public sealed class AppServices
     public DatasetCatalogService Datasets { get; private set; } = null!;
     public SmartAnnotationService SmartAnnotations { get; private set; } = null!;
     public Yolo11TrainingService Yolo11Training { get; private set; } = null!;
+    public BehaviorTrainingService BehaviorTraining { get; private set; } = null!;
     public string SettingsFile { get; private set; } = "";
 
     private AppServices() { }
@@ -161,6 +162,7 @@ public sealed class AppServices
             Settings.YoloeModelPath,
             Settings.Sam3ModelPath);
         Yolo11Training = new Yolo11TrainingService(pluginsRoot, Settings.PythonExecutable);
+        BehaviorTraining = new BehaviorTrainingService(pluginsRoot, Settings.PythonExecutable);
         AlgorithmManager = new AlgorithmManager(new AlgorithmManagerOptions
         {
             PluginsRoot = pluginsRoot,
@@ -204,12 +206,11 @@ public sealed class AppServices
     private static string? FindVenvPython(string pluginsRoot)
     {
         // workers/.venv/Scripts/python.exe（开发态默认，宿主可配置覆盖）
-        var parent = Directory.GetParent(pluginsRoot)?.FullName;
-        if (parent is null)
+        var candidates = new[]
         {
-            return null;
-        }
-        var venv = Path.Combine(parent, ".venv", "Scripts", "python.exe");
-        return File.Exists(venv) ? venv : null;
+            Path.Combine(pluginsRoot, ".venv", "Scripts", "python.exe"),
+            Path.Combine(Directory.GetParent(pluginsRoot)?.FullName ?? "", ".venv", "Scripts", "python.exe"),
+        };
+        return candidates.FirstOrDefault(File.Exists);
     }
 }

@@ -1,10 +1,14 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Application;
 using VisionWorkbench.Domain;
 
@@ -15,6 +19,16 @@ public partial class TasksPage : UserControl
 {
     private readonly ObservableCollection<RuleRow> _rules = [];
     private long? _editingId;
+    private string? _lastInputProviderId;
+    private bool _suppressInputSourceChange;
+    private readonly PreviewRenderer _cameraPreview = new();
+    private readonly SemaphoreSlim _cameraPreviewGate = new(1, 1);
+    private ICameraSession? _cameraPreviewSession;
+    private CancellationTokenSource? _cameraPreviewCts;
+    private readonly Dictionary<string, CheckBox> _customBehaviorChecks = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _customBehaviorClasses = [];
+
+    private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId);
 
     private sealed record TaskRow(long Id, string StationCode, string TaskName)
     {
@@ -36,8 +50,18 @@ public partial class TasksPage : UserControl
     public TasksPage()
     {
         InitializeComponent();
+        if (!YoloTaskCombo.Items.OfType<ComboBoxItem>().Any(item => string.Equals(item.Tag as string, "pose", StringComparison.OrdinalIgnoreCase)))
+        {
+            YoloTaskCombo.Items.Add(new ComboBoxItem { Content = "人体姿态（Pose）", Tag = "pose" });
+        }
         RulesGrid.ItemsSource = _rules;
         Loaded += (_, _) => Refresh();
+        Unloaded += TasksPage_Unloaded;
+    }
+
+    private async void TasksPage_Unloaded(object sender, RoutedEventArgs e)
+    {
+        await StopCameraPreviewAsync();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => Refresh();
@@ -52,7 +76,9 @@ public partial class TasksPage : UserControl
                 .Where(p => p.Status == Contracts.Plugins.PluginStatus.Valid && p.Manifest is not null)
                 .Select(p => p.Manifest!.Id)
                 .ToArray();
+            await RefreshInputSourcesAsync();
             ApplyRolePolicy();
+            UpdateTaskTypeVisibility();
         }
         catch (Exception ex)
         {
@@ -76,8 +102,13 @@ public partial class TasksPage : UserControl
         StationCodeText.Text = recipe.StationCode;
         NameText.Text = recipe.Name;
         DescriptionText.Text = recipe.Description;
-        ProviderText.Text = recipe.CameraProviderId;
+        SelectTaskType(recipe.TaskType == InspectionTaskType.Counting
+            && recipe.Behavior.Enabled
+            && recipe.Behavior.Zones.Count > 0
+            ? InspectionTaskType.BehaviorRecognition
+            : recipe.TaskType);
         DeviceText.Text = recipe.CameraDeviceId;
+        SelectInputSource(recipe.CameraProviderId, recipe.CameraDeviceId);
         UpdateDevicePreview();
         PluginCombo.SelectedItem = recipe.PluginId;
         if (PluginCombo.SelectedItem is null)
@@ -102,6 +133,7 @@ public partial class TasksPage : UserControl
         LineBxText.Text = (recipe.CountingLine?.B.X ?? 0.5).ToString("0.###");
         LineByText.Text = (recipe.CountingLine?.B.Y ?? 0.9).ToString("0.###");
         HysteresisText.Text = (recipe.CountingLine?.Hysteresis ?? 0.02).ToString("0.###");
+        LoadBehavior(recipe.Behavior);
         _rules.Clear();
         foreach (var rule in recipe.Rules)
         {
@@ -129,10 +161,11 @@ public partial class TasksPage : UserControl
         TaskList.SelectedItem = null;
         _editingId = null;
         StationCodeText.Text = NextStationCode();
-        NameText.Text = "新任务";
+        NameText.Text = NextTaskName();
         DescriptionText.Text = "";
-        ProviderText.Text = "image-folder";
+        SelectTaskType(null);
         DeviceText.Text = "";
+        SelectInputSource("image-folder", "");
         UpdateDevicePreview();
         PluginCombo.SelectedIndex = PluginCombo.Items.Count > 0 ? 0 : -1;
         SelectExecutionProvider(AppServices.Instance.Settings.ExecutionProvider);
@@ -146,6 +179,7 @@ public partial class TasksPage : UserControl
         LineBxText.Text = "0.5";
         LineByText.Text = "0.9";
         HysteresisText.Text = "0.02";
+        LoadBehavior(new BehaviorRecognitionConfig());
         _rules.Clear();
         _rules.Add(new RuleRow { RuleId = "count-check", Kind = nameof(RuleKind.CountEquals), ExpectedCount = 1 });
         EditorPanel.IsEnabled = true;
@@ -198,6 +232,13 @@ public partial class TasksPage : UserControl
             DowngradeToReview = r.DowngradeToReview,
         }).ToArray();
 
+        if (!HasTaskTypeSelection())
+        {
+            MessageBox.Show("请先选择任务类型，再配置对应参数。", "任务配置", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var taskType = SelectedTaskType();
+
         var policy = (RoiPolicyCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "CenterInside";
         var mode = SelectedCountingMode();
         CountingLineConfig? line = null;
@@ -228,20 +269,33 @@ public partial class TasksPage : UserControl
             return;
         }
 
+        BehaviorRecognitionConfig behavior;
+        try
+        {
+            behavior = BuildBehavior();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"行为识别配置无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         var recipe = new Recipe
         {
             StationCode = StationCodeText.Text.Trim(),
             Name = NameText.Text.Trim(),
             Description = DescriptionText.Text,
-            CameraProviderId = ProviderText.Text.Trim(),
-            CameraDeviceId = DeviceText.Text.Trim(),
+            CameraProviderId = SelectedProviderId(),
+            CameraDeviceId = SelectedDeviceId(),
             PluginId = PluginCombo.SelectedItem as string ?? PluginCombo.Text.Trim(),
             ExecutionProvider = SelectedExecutionProvider(),
+            TaskType = taskType,
             SettingsJson = settingsJson,
             Roi = roi,
             RoiPolicy = Enum.TryParse<RoiBoundaryPolicy>(policy, out var p) ? p : RoiBoundaryPolicy.CenterInside,
             CountingMode = mode,
             CountingLine = line,
+            Behavior = behavior,
             Rules = rules,
         };
         try
@@ -252,7 +306,10 @@ public partial class TasksPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"保存失败: {ex.Message}", "校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            var detail = ex is DbUpdateException && ex.InnerException is not null
+                ? ex.InnerException.Message
+                : ex.Message;
+            MessageBox.Show($"保存失败：{detail}", "任务配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -271,6 +328,27 @@ public partial class TasksPage : UserControl
         }
     }
 
+    private string NextTaskName()
+    {
+        var used = TaskList.Items.OfType<TaskRow>()
+            .Select(x => x.TaskName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        const string baseName = "新任务";
+        if (!used.Contains(baseName))
+        {
+            return baseName;
+        }
+
+        for (var number = 2; ; number++)
+        {
+            var candidate = $"{baseName} {number}";
+            if (!used.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
     private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (LinePanel is null)
@@ -278,6 +356,49 @@ public partial class TasksPage : UserControl
             return; // XAML 初始化期回调，控件尚未就绪
         }
         LinePanel.IsEnabled = SelectedCountingMode() == CountingMode.LineCrossing;
+    }
+
+    private void TaskTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateTaskTypeVisibility();
+    }
+
+    private bool HasTaskTypeSelection() =>
+        Enum.TryParse<InspectionTaskType>((TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string, out _);
+
+    private InspectionTaskType SelectedTaskType()
+    {
+        var tag = (TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+        return Enum.TryParse<InspectionTaskType>(tag, out var type)
+            ? type
+            : InspectionTaskType.Counting;
+    }
+
+    private void SelectTaskType(InspectionTaskType? type)
+    {
+        if (TaskTypeCombo is null)
+        {
+            return;
+        }
+        var tag = type?.ToString() ?? "";
+        TaskTypeCombo.SelectedItem = TaskTypeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, tag, StringComparison.OrdinalIgnoreCase))
+            ?? TaskTypeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        UpdateTaskTypeVisibility();
+    }
+
+    private void UpdateTaskTypeVisibility()
+    {
+        if (TaskTypeCombo is null || ModeCombo is null || RoiXText is null || RulesGrid is null || BehaviorGroup is null)
+        {
+            return;
+        }
+        var isCounting = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.Counting;
+        var isBehavior = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.BehaviorRecognition;
+        SetGroupVisibility(ModeCombo, isCounting);
+        SetGroupVisibility(RoiXText, isCounting);
+        SetGroupVisibility(RulesGrid, isCounting);
+        UpdateTaskParameterVisibility();
     }
 
     private void BrowseDevice_Click(object sender, RoutedEventArgs e)
@@ -320,6 +441,283 @@ public partial class TasksPage : UserControl
             return;
         }
         LoadModelChoices();
+        UpdateTaskParameterVisibility();
+    }
+
+    private async Task RefreshInputSourcesAsync()
+    {
+        var sources = new List<InputSourceOption>
+        {
+            new("离线图片目录（image-folder）", "image-folder", ""),
+            new("视频文件（video-file）", "video-file", ""),
+        };
+        try
+        {
+            var cameras = await AppServices.Instance.Cameras.DiscoverAllAsync(CancellationToken.None);
+            sources.AddRange(cameras
+                .Select(camera => new InputSourceOption(
+                    $"{camera.DisplayName}（{camera.ProviderId}/{camera.DeviceId}）",
+                    camera.ProviderId,
+                    camera.DeviceId))
+                .DistinctBy(source => $"{source.ProviderId}/{source.DeviceId}", StringComparer.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            // 相机扫描失败时保留离线输入源，避免任务配置页不可用。
+        }
+        ProviderCombo.ItemsSource = sources;
+        if (ProviderCombo.SelectedItem is null)
+        {
+            ProviderCombo.SelectedIndex = 0;
+        }
+    }
+
+    private void SelectInputSource(string providerId, string deviceId)
+    {
+        var options = ProviderCombo.ItemsSource is IEnumerable<InputSourceOption> existing
+            ? existing.ToList()
+            : [];
+        var selected = options.FirstOrDefault(source =>
+            string.Equals(source.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(source.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+        if (selected is null)
+        {
+            selected = new InputSourceOption(
+                $"未发现设备（{providerId}/{deviceId}）", providerId, deviceId);
+            options.Add(selected);
+            ProviderCombo.ItemsSource = options;
+        }
+        _suppressInputSourceChange = true;
+        try
+        {
+            ProviderCombo.SelectedItem = selected;
+        }
+        finally
+        {
+            _suppressInputSourceChange = false;
+        }
+        _lastInputProviderId = providerId;
+        if (string.Equals(providerId, "usb", StringComparison.OrdinalIgnoreCase))
+        {
+            DeviceText.Text = deviceId;
+        }
+        UpdateInputSourceFields();
+    }
+
+    private void ProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressInputSourceChange || ProviderCombo.SelectedItem is not InputSourceOption source)
+        {
+            return;
+        }
+        if (!IsPathInputSource(source.ProviderId))
+        {
+            DeviceText.Text = source.DeviceId;
+        }
+        else if (_lastInputProviderId is not null && !IsPathInputSource(_lastInputProviderId))
+        {
+            DeviceText.Text = "";
+        }
+        _lastInputProviderId = source.ProviderId;
+        UpdateDevicePreview();
+    }
+
+    private string SelectedProviderId() =>
+        (ProviderCombo.SelectedItem as InputSourceOption)?.ProviderId ?? "image-folder";
+
+    private static bool IsPathInputSource(string providerId) =>
+        string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(providerId, "video-file", StringComparison.OrdinalIgnoreCase);
+
+    private string SelectedDeviceId()
+    {
+        var source = ProviderCombo.SelectedItem as InputSourceOption;
+        return source is not null && !IsPathInputSource(source.ProviderId)
+            ? source.DeviceId
+            : DeviceText.Text.Trim();
+    }
+
+    private void UpdateInputSourceFields()
+    {
+        var providerId = SelectedProviderId();
+        var isPathSource = IsPathInputSource(providerId);
+        DeviceText.Visibility = isPathSource ? Visibility.Visible : Visibility.Collapsed;
+        BrowseDeviceButton.Visibility = string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        CameraPreviewPanel.Visibility = isPathSource ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void RequestCameraPreviewRefresh() => _ = RefreshCameraPreviewAsync();
+
+    private async Task RefreshCameraPreviewAsync()
+    {
+        var cts = new CancellationTokenSource();
+        var previous = _cameraPreviewCts;
+        _cameraPreviewCts = cts;
+        previous?.Cancel();
+        var cancellationToken = cts.Token;
+
+        try
+        {
+            await _cameraPreviewGate.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            cts.Dispose();
+            return;
+        }
+
+        ICameraSession? session = null;
+        try
+        {
+            await DisposeCameraPreviewSessionAsync();
+            var providerId = SelectedProviderId();
+            if (IsPathInputSource(providerId) || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var deviceId = SelectedDeviceId();
+            CameraPreviewStatusText.Visibility = Visibility.Visible;
+            CameraPreviewStatusText.Text = string.IsNullOrWhiteSpace(deviceId)
+                ? "未选择相机"
+                : "正在打开相机...";
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                return;
+            }
+
+            var descriptor = new CameraDescriptor
+            {
+                ProviderId = providerId,
+                DeviceId = deviceId,
+                DisplayName = deviceId,
+            };
+            session = await AppServices.Instance.Cameras.OpenSessionAsync(
+                descriptor, new CameraOpenOptions { DesiredFps = 15 }, cancellationToken);
+            _cameraPreviewSession = session;
+            session.Faulted += (_, args) => Dispatcher.BeginInvoke(() =>
+            {
+                if (ReferenceEquals(_cameraPreviewSession, session))
+                {
+                    CameraPreviewStatusText.Visibility = Visibility.Visible;
+                    CameraPreviewStatusText.Text = $"相机预览失败：{args.Fault.Message}";
+                }
+            });
+            session.FrameReceived += (_, args) => Dispatcher.BeginInvoke(() =>
+            {
+                if (!ReferenceEquals(_cameraPreviewSession, session) || cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                _cameraPreview.Render(CameraPreviewImage, args.Frame, maxFps: 15);
+                CameraPreviewStatusText.Visibility = Visibility.Collapsed;
+            });
+            await session.OpenAsync(new CameraOpenOptions { DesiredFps = 15 }, cancellationToken);
+            if (session.State == CameraSessionState.Faulted)
+            {
+                return;
+            }
+            await session.StartAsync(cancellationToken);
+            CameraPreviewStatusText.Text = "等待相机画面...";
+        }
+        catch (OperationCanceledException)
+        {
+            // 切换输入源或离开页面时，正常取消当前预览。
+        }
+        catch (Exception ex)
+        {
+            CameraPreviewStatusText.Visibility = Visibility.Visible;
+            CameraPreviewStatusText.Text = $"相机预览失败：{ex.Message}";
+            if (ReferenceEquals(_cameraPreviewSession, session))
+            {
+                await DisposeCameraPreviewSessionAsync();
+            }
+        }
+        finally
+        {
+            _cameraPreviewGate.Release();
+            if (ReferenceEquals(_cameraPreviewCts, cts))
+            {
+                _cameraPreviewCts = null;
+            }
+            cts.Dispose();
+        }
+    }
+
+    private async Task StopCameraPreviewAsync()
+    {
+        _cameraPreviewCts?.Cancel();
+        await _cameraPreviewGate.WaitAsync();
+        try
+        {
+            await DisposeCameraPreviewSessionAsync();
+        }
+        finally
+        {
+            _cameraPreviewGate.Release();
+        }
+    }
+
+    private async Task DisposeCameraPreviewSessionAsync()
+    {
+        var session = _cameraPreviewSession;
+        _cameraPreviewSession = null;
+        if (session is null)
+        {
+            return;
+        }
+        try
+        {
+            await session.StopAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // 即使停止失败也继续释放底层采集资源。
+        }
+        try
+        {
+            await session.DisposeAsync();
+        }
+        catch
+        {
+            // 预览关闭不应阻塞任务配置页。
+        }
+    }
+
+    private void ImportTemporalModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RolePolicy.CanEditRecipe)
+        {
+            return;
+        }
+        var plugin = SelectedPlugin();
+        if (plugin is null)
+        {
+            MessageBox.Show("请先选择有效的 YOLO11 插件。", "时序模型导入");
+            return;
+        }
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择 ST-GCN / PoseC3D TorchScript 模型",
+            Filter = "时序模型 (*.pt;*.ts;*.torchscript)|*.pt;*.ts;*.torchscript|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+        try
+        {
+            TemporalModelPathText.Text = Path.GetFullPath(dialog.FileName);
+            RefreshCustomBehaviorClasses();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"时序模型导入失败：{ex.Message}", "时序模型导入", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void ImportModel_Click(object sender, RoutedEventArgs e)
@@ -348,18 +746,18 @@ public partial class TasksPage : UserControl
         }
         try
         {
-            var modelsDirectory = Path.Combine(plugin.Directory, "models");
-            Directory.CreateDirectory(modelsDirectory);
-            var fileName = Path.GetFileName(dialog.FileName);
-            var destination = Path.Combine(modelsDirectory, fileName);
-            File.Copy(dialog.FileName, destination, overwrite: true);
-            var relative = $"models/{fileName}";
-            if (!ModelCombo.Items.Contains(relative))
+            var absolutePath = Path.GetFullPath(dialog.FileName);
+            if (IsBehaviorModelPath(absolutePath))
             {
-                ModelCombo.Items.Add(relative);
+                MessageBox.Show("这是行为时序模型，不能作为顶部 YOLO11 主模型使用。请在行为识别区域的‘行为时序模型’位置导入。", "模型类型不匹配", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
             }
-            ModelCombo.SelectedItem = relative;
-            ModelStatusText.Text = $"已导入：{relative}";
+            if (!ModelCombo.Items.Contains(absolutePath))
+            {
+                ModelCombo.Items.Add(absolutePath);
+            }
+            ModelCombo.SelectedItem = absolutePath;
+            ModelStatusText.Text = $"已导入：{absolutePath}";
         }
         catch (Exception ex)
         {
@@ -373,7 +771,10 @@ public partial class TasksPage : UserControl
         {
             return;
         }
-        if (!string.Equals(ProviderText.Text.Trim(), "image-folder", StringComparison.OrdinalIgnoreCase))
+        var providerId = SelectedProviderId();
+        UpdateInputSourceFields();
+        RequestCameraPreviewRefresh();
+        if (!string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase))
         {
             DevicePreviewText.Text = "当前输入源不是离线图片目录";
             BrowseDeviceButton.IsEnabled = false;
@@ -410,6 +811,7 @@ public partial class TasksPage : UserControl
             return;
         }
         ModelGroup.Visibility = IsYoloPlugin ? Visibility.Visible : Visibility.Collapsed;
+        UpdateTaskParameterVisibility();
         if (!IsYoloPlugin)
         {
             return;
@@ -422,20 +824,97 @@ public partial class TasksPage : UserControl
             YoloTaskCombo.SelectedItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
                 .FirstOrDefault(item => string.Equals(item.Tag as string, task, StringComparison.OrdinalIgnoreCase));
             LoadModelChoices();
+            UpdateTaskParameterVisibility();
             var modelPath = settings?["modelPath"]?.GetValue<string>();
             if (!string.IsNullOrWhiteSpace(modelPath))
             {
-                if (!ModelCombo.Items.Contains(modelPath))
+                var absoluteModelPath = ToAbsoluteModelPath(modelPath);
+                if (IsBehaviorModelPath(absoluteModelPath))
                 {
-                    ModelCombo.Items.Add(modelPath);
+                    var defaultModel = PreferredYoloModelPath();
+                    ModelCombo.SelectedItem = defaultModel;
+                    ModelStatusText.Text = $"已忽略行为时序模型；YOLO11 主模型已切换为：{defaultModel ?? "未找到 YOLO11 模型"}。行为模型请放在下方‘行为时序模型’。";
                 }
-                ModelCombo.SelectedItem = modelPath;
+                else
+                {
+                    if (!ModelCombo.Items.Contains(absoluteModelPath))
+                    {
+                        ModelCombo.Items.Add(absoluteModelPath);
+                    }
+                    ModelCombo.SelectedItem = absoluteModelPath;
+                }
             }
         }
         catch
         {
             ModelStatusText.Text = "专家参数不是有效 JSON，请检查后再保存";
         }
+    }
+
+    private void UpdateTaskParameterVisibility()
+    {
+        if (YoloTaskCombo is null)
+        {
+            return;
+        }
+
+        var task = IsYoloPlugin
+            ? (YoloTaskCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "detect"
+            : "detect";
+        var isDetection = string.Equals(task, "detect", StringComparison.OrdinalIgnoreCase);
+        var isPose = string.Equals(task, "pose", StringComparison.OrdinalIgnoreCase);
+        var isSegmentation = string.Equals(task, "instance", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(task, "semantic", StringComparison.OrdinalIgnoreCase);
+        var isCountingTask = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.Counting;
+        var isBehaviorTask = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.BehaviorRecognition;
+
+        // 行为识别必须取得人体关键点；用户选择行为任务后自动切换到 YOLO11 Pose，避免
+        // 仍停留在 detect 导致时序模型没有输入。
+        if (isBehaviorTask && IsYoloPlugin && !isPose)
+        {
+            var poseItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, "pose", StringComparison.OrdinalIgnoreCase));
+            if (poseItem is not null)
+            {
+                YoloTaskCombo.SelectedItem = poseItem;
+                return;
+            }
+        }
+
+        SetGroupVisibility(ModeCombo, isDetection && isCountingTask);
+        SetGroupVisibility(RoiXText, isCountingTask);
+        SetGroupVisibility(RulesGrid, isDetection && isCountingTask);
+        BehaviorGroup.Visibility = isBehaviorTask && (isDetection || isPose)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        if (isSegmentation)
+        {
+            BehaviorEnabledCheck.IsChecked = false;
+        }
+    }
+
+    private static void SetGroupVisibility(FrameworkElement child, bool visible)
+    {
+        var group = FindParent<GroupBox>(child);
+        if (group is not null)
+        {
+            group.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
+    {
+        var parent = VisualTreeHelper.GetParent(child);
+        while (parent is not null)
+        {
+            if (parent is T match)
+            {
+                return match;
+            }
+            parent = VisualTreeHelper.GetParent(parent);
+        }
+        return null;
     }
 
     private void LoadModelChoices()
@@ -445,6 +924,10 @@ public partial class TasksPage : UserControl
             return;
         }
         var selected = ModelCombo.SelectedItem as string;
+        if (IsBehaviorModelPath(selected))
+        {
+            selected = null;
+        }
         ModelCombo.Items.Clear();
         var plugin = SelectedPlugin();
         if (plugin is not null)
@@ -457,13 +940,17 @@ public partial class TasksPage : UserControl
                                  || Path.GetExtension(file).Equals(".onnx", StringComparison.OrdinalIgnoreCase))
                              .OrderBy(file => file, StringComparer.OrdinalIgnoreCase))
                 {
-                    ModelCombo.Items.Add($"models/{Path.GetFileName(file)}");
+                    ModelCombo.Items.Add(Path.GetFullPath(file));
                 }
             }
         }
         if (selected is not null && ModelCombo.Items.Contains(selected))
         {
             ModelCombo.SelectedItem = selected;
+        }
+        else if (PreferredYoloModelPath() is { } preferred)
+        {
+            ModelCombo.SelectedItem = preferred;
         }
         else if (ModelCombo.Items.Count > 0)
         {
@@ -472,6 +959,48 @@ public partial class TasksPage : UserControl
         ModelStatusText.Text = ModelCombo.SelectedItem is string path
             ? $"可用模型：{path}"
             : "尚未导入模型文件";
+    }
+
+    private string ToAbsoluteModelPath(string modelPath)
+    {
+        if (Path.IsPathRooted(modelPath)) return Path.GetFullPath(modelPath);
+        var plugin = SelectedPlugin();
+        return plugin is null
+            ? Path.GetFullPath(modelPath)
+            : Path.GetFullPath(Path.Combine(plugin.Directory, modelPath));
+    }
+
+    private string? PreferredYoloModelPath()
+    {
+        var task = (YoloTaskCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "detect";
+        var expectedName = task switch
+        {
+            "pose" => "yolo11n-pose.pt",
+            "instance" or "semantic" => "yolo11n-seg.pt",
+            _ => "yolo11n.pt",
+        };
+        return ModelCombo.Items.OfType<string>()
+            .FirstOrDefault(path => string.Equals(Path.GetFileName(path), expectedName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsBehaviorModelPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var parts = fullPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return parts.Any(part => string.Equals(part, BehaviorDatasetStore.ModelsDirectoryName, StringComparison.OrdinalIgnoreCase))
+                || (string.Equals(Path.GetFileName(fullPath), "best.pt", StringComparison.OrdinalIgnoreCase)
+                    && parts.Length >= 3
+                    && string.Equals(parts[^2], "models", StringComparison.OrdinalIgnoreCase)
+                    && parts.Skip(Math.Max(0, parts.Length - 4))
+                        .Any(part => string.Equals(part, "yolo11", StringComparison.OrdinalIgnoreCase)));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private string BuildSettingsJson()
@@ -486,9 +1015,192 @@ public partial class TasksPage : UserControl
         settings["task"] = task;
         if (ModelCombo.SelectedItem is string modelPath && !string.IsNullOrWhiteSpace(modelPath))
         {
-            settings["modelPath"] = modelPath;
+            settings["modelPath"] = IsBehaviorModelPath(modelPath)
+                ? PreferredYoloModelPath() ?? modelPath
+                : modelPath;
         }
+        settings["temporalModelType"] = (TemporalModelTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "stgcn";
+        settings["temporalSequenceLength"] = 30;
+        var temporalModelPath = ResolveTemporalModelPath(TemporalModelPathText.Text.Trim()) ?? "";
+        settings["temporalModelPath"] = temporalModelPath;
+        settings["temporalBehaviorClasses"] = JsonSerializer.SerializeToNode(_customBehaviorClasses.ToArray());
         return settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private void LoadTemporalSettings()
+    {
+        if (!IsYoloPlugin || TemporalModelTypeCombo is null)
+        {
+            return;
+        }
+        try
+        {
+            var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(SettingsText.Text) ? "{}" : SettingsText.Text)
+                as JsonObject;
+            var type = settings?["temporalModelType"]?.GetValue<string>() ?? "stgcn";
+            TemporalModelTypeCombo.SelectedItem = TemporalModelTypeCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, type, StringComparison.OrdinalIgnoreCase))
+                ?? TemporalModelTypeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+            var savedPath = settings?["temporalModelPath"]?.GetValue<string>() ?? "";
+            if (HasTaskTypeSelection()
+                && SelectedTaskType() == InspectionTaskType.BehaviorRecognition
+                && (string.IsNullOrWhiteSpace(savedPath)
+                    || !File.Exists(ResolveTemporalModelPath(savedPath))))
+            {
+                savedPath = FindLatestCustomBehaviorModel() ?? savedPath;
+            }
+            TemporalModelPathText.Text = savedPath;
+            if (string.IsNullOrWhiteSpace(savedPath))
+            {
+                LoadSavedBehaviorClasses(settings);
+            }
+            RefreshCustomBehaviorClasses();
+        }
+        catch
+        {
+            TemporalModelTypeCombo.SelectedIndex = 0;
+            TemporalModelPathText.Text = "";
+            _customBehaviorClasses = [];
+            RefreshCustomBehaviorClasses();
+        }
+    }
+
+    private void TemporalModelPathText_TextChanged(object sender, TextChangedEventArgs e) => RefreshCustomBehaviorClasses();
+
+    private void RefreshCustomBehaviorClasses()
+    {
+        if (CustomBehaviorClassesPanel is null) return;
+        _customBehaviorChecks.Clear();
+        CustomBehaviorClassesPanel.Children.Clear();
+        _customBehaviorClasses = [];
+
+        var modelPath = TemporalModelPathText.Text.Trim();
+        var modelFile = ResolveTemporalModelPath(modelPath);
+        if (modelFile is null || !File.Exists(modelFile))
+        {
+            CustomBehaviorModelStatusText.Text = "未加载自定义行为模型，当前显示的是内置规则。请导入行为训练生成的 best.pt（同目录需要 classes.json）。";
+            CustomBehaviorModelStatusText.Foreground = Brushes.DarkOrange;
+            CustomBehaviorModelStatusText.Visibility = Visibility.Visible;
+            CustomBehaviorClassesPanel.Visibility = Visibility.Collapsed;
+            BuiltInBehaviorRulesTitle.Visibility = Visibility.Visible;
+            BuiltInBehaviorRulesPanel.Visibility = Visibility.Visible;
+            return;
+        }
+
+        var classes = ReadBehaviorClasses(modelFile);
+        if (classes.Count == 0)
+        {
+            CustomBehaviorModelStatusText.Text = $"已加载时序模型，但未找到类别文件：{modelFile}";
+            CustomBehaviorModelStatusText.Foreground = Brushes.DarkOrange;
+            CustomBehaviorModelStatusText.Visibility = Visibility.Visible;
+            CustomBehaviorClassesPanel.Visibility = Visibility.Collapsed;
+            BuiltInBehaviorRulesTitle.Visibility = Visibility.Visible;
+            BuiltInBehaviorRulesPanel.Visibility = Visibility.Visible;
+            return;
+        }
+
+        _customBehaviorClasses = classes;
+        CustomBehaviorModelStatusText.Text = $"自定义行为模型：{modelFile}{Environment.NewLine}类别（来自同目录 classes.json）：";
+        CustomBehaviorModelStatusText.Foreground = Brushes.DarkGreen;
+        CustomBehaviorModelStatusText.Visibility = Visibility.Visible;
+        foreach (var label in classes)
+        {
+            var check = new CheckBox { Content = label, IsChecked = true, Margin = new Thickness(0, 0, 12, 0) };
+            _customBehaviorChecks[label] = check;
+            CustomBehaviorClassesPanel.Children.Add(check);
+        }
+        CustomBehaviorClassesPanel.Visibility = Visibility.Visible;
+        BuiltInBehaviorRulesTitle.Visibility = Visibility.Collapsed;
+        BuiltInBehaviorRulesPanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void LoadSavedBehaviorClasses(JsonObject? settings)
+    {
+        if (settings?["temporalBehaviorClasses"] is not JsonArray array)
+        {
+            return;
+        }
+
+        _customBehaviorClasses = array
+            .Select(item => item?.GetValue<string>())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private string? FindLatestCustomBehaviorModel()
+    {
+        var candidates = new List<string>();
+        foreach (var root in AppServices.Instance.Datasets.List()
+                     .Select(dataset => dataset.RootDirectory)
+                     .Where(Directory.Exists)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!BehaviorDatasetStore.TryLoadFromRoot(root, out var behaviorDataset) || behaviorDataset is null)
+            {
+                continue;
+            }
+
+            var modelsDirectory = BehaviorDatasetStore.GetModelsDirectory(behaviorDataset.RootDirectory);
+            if (!Directory.Exists(modelsDirectory))
+            {
+                continue;
+            }
+
+            foreach (var model in Directory.EnumerateFiles(modelsDirectory, "best.pt", SearchOption.AllDirectories))
+            {
+                if (ReadBehaviorClasses(model).Count > 0)
+                {
+                    candidates.Add(model);
+                }
+            }
+        }
+
+        return candidates
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(path => File.GetLastWriteTimeUtc(path))
+            .FirstOrDefault();
+    }
+
+    private string? ResolveTemporalModelPath(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (Path.IsPathRooted(value)) return Path.GetFullPath(value);
+        var plugin = SelectedPlugin();
+        return plugin is null ? Path.GetFullPath(value) : Path.GetFullPath(Path.Combine(plugin.Directory, value));
+    }
+
+    private static List<string> ReadBehaviorClasses(string modelPath)
+    {
+        var candidates = new[]
+        {
+            Path.ChangeExtension(modelPath, ".json"),
+            Path.Combine(Path.GetDirectoryName(modelPath) ?? string.Empty, "classes.json"),
+        };
+        foreach (var path in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var node = JsonNode.Parse(File.ReadAllText(path));
+                var values = node is JsonArray array
+                    ? array.Select(item => item?.GetValue<string>())
+                    : node?["classes"] is JsonArray objectArray
+                        ? objectArray.Select(item => item?.GetValue<string>())
+                        : [];
+                var labels = values.Where(label => !string.IsNullOrWhiteSpace(label))
+                    .Select(label => label!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (labels.Count > 0) return labels;
+            }
+            catch
+            {
+                // Ignore an invalid sidecar and try the next supported location.
+            }
+        }
+        return [];
     }
 
     private void ApplyRolePolicy()
@@ -501,10 +1213,113 @@ public partial class TasksPage : UserControl
             ? "专家可直接编辑插件 JSON；YOLO11 的任务类型和模型文件可在上方配置。"
             : "当前角色只能查看专家参数；如需修改请切换到专家模式。";
         SaveButton.IsEnabled = canEdit;
+        ProviderCombo.IsEnabled = canEdit;
         BrowseDeviceButton.IsEnabled = canEdit;
         ImportModelButton.IsEnabled = canEdit;
+        BrowseTemporalModelButton.IsEnabled = canEdit;
         UpdateDevicePreview();
     }
+
+    private void LoadBehavior(BehaviorRecognitionConfig behavior)
+    {
+        var zone = behavior.Zones.FirstOrDefault();
+        BehaviorEnabledCheck.IsChecked = behavior.Enabled && zone is not null;
+        BehaviorPolygonText.Text = zone is null
+            ? "0.1,0.1;0.9,0.1;0.9,0.9;0.1,0.9"
+            : string.Join(";", zone.Polygon.Select(point =>
+                $"{point.X.ToString("0.###", CultureInfo.InvariantCulture)},{point.Y.ToString("0.###", CultureInfo.InvariantCulture)}"));
+        IntrusionEnabledCheck.IsChecked = behavior.Intrusion.Enabled;
+        LoiteringEnabledCheck.IsChecked = behavior.Loitering.Enabled;
+        CrowdingEnabledCheck.IsChecked = behavior.Crowding.Enabled;
+        FallEnabledCheck.IsChecked = behavior.Fall.Enabled;
+        BehaviorConfirmingSecondsText.Text = behavior.Intrusion.ConfirmingSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        BehaviorLoiterWarningSecondsText.Text = behavior.Loitering.WarningSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        BehaviorLoiterAlarmSecondsText.Text = behavior.Loitering.AlarmSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        BehaviorCrowdWarningCountText.Text = behavior.Crowding.WarningCount.ToString(CultureInfo.InvariantCulture);
+        BehaviorCrowdAlarmCountText.Text = behavior.Crowding.AlarmCount.ToString(CultureInfo.InvariantCulture);
+        BehaviorConfidenceText.Text = behavior.Intrusion.MinimumConfidence.ToString("0.###", CultureInfo.InvariantCulture);
+        LoadTemporalSettings();
+    }
+
+    private BehaviorRecognitionConfig BuildBehavior()
+    {
+        var enabled = BehaviorEnabledCheck.IsChecked == true;
+        var polygon = ParseBehaviorPolygon(BehaviorPolygonText.Text);
+        if (enabled && polygon.Count < 3)
+        {
+            throw new ArgumentException("启用行为识别时，监控区域至少需要 3 个点。", nameof(BehaviorPolygonText));
+        }
+
+        var confirmingSeconds = ParseBehaviorDouble(BehaviorConfirmingSecondsText.Text, "确认秒数");
+        var warningSeconds = ParseBehaviorDouble(BehaviorLoiterWarningSecondsText.Text, "徘徊预警秒数");
+        var alarmSeconds = ParseBehaviorDouble(BehaviorLoiterAlarmSecondsText.Text, "徘徊报警秒数");
+        var confidence = ParseBehaviorDouble(BehaviorConfidenceText.Text, "最低置信度");
+        var warningCount = ParseBehaviorInt(BehaviorCrowdWarningCountText.Text, "聚集预警人数");
+        var alarmCount = ParseBehaviorInt(BehaviorCrowdAlarmCountText.Text, "聚集报警人数");
+        if (confidence is < 0 or > 1)
+        {
+            throw new ArgumentException("最低置信度必须在 0~1 之间。", nameof(BehaviorConfidenceText));
+        }
+
+        var common = new BehaviorRuleSettings
+        {
+            MinimumConfidence = confidence,
+            ConfirmingSeconds = confirmingSeconds,
+            RecoverySeconds = 1,
+            CooldownSeconds = 10,
+            MaximumMissingSeconds = 2,
+        };
+        var hasCustomBehaviorModel = _customBehaviorClasses.Count > 0;
+        return new BehaviorRecognitionConfig
+        {
+            Enabled = enabled,
+            Zones = enabled
+                ? [new BehaviorZone { Id = "behavior-zone-1", Name = "行为识别区域", Polygon = polygon }]
+                : [],
+            Intrusion = common with { Enabled = !hasCustomBehaviorModel && IntrusionEnabledCheck.IsChecked == true },
+            Loitering = common with
+            {
+                Enabled = !hasCustomBehaviorModel && LoiteringEnabledCheck.IsChecked == true,
+                WarningSeconds = warningSeconds,
+                AlarmSeconds = alarmSeconds,
+            },
+            Crowding = common with
+            {
+                Enabled = !hasCustomBehaviorModel && CrowdingEnabledCheck.IsChecked == true,
+                WarningCount = warningCount,
+                AlarmCount = alarmCount,
+            },
+            Fall = common with { Enabled = !hasCustomBehaviorModel && FallEnabledCheck.IsChecked == true },
+        };
+    }
+
+    private static IReadOnlyList<Contracts.Results.NormalizedPoint> ParseBehaviorPolygon(string text)
+    {
+        var points = new List<Contracts.Results.NormalizedPoint>();
+        foreach (var item in text.Split([';', '；'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var values = item.Split([',', '，'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (values.Length != 2
+                || !double.TryParse(values[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
+                || !double.TryParse(values[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+                || x is < 0 or > 1 || y is < 0 or > 1)
+            {
+                throw new ArgumentException($"区域点“{item}”格式无效，应为 0~1 范围内的 x,y。", nameof(BehaviorPolygonText));
+            }
+            points.Add(new Contracts.Results.NormalizedPoint { X = x, Y = y });
+        }
+        return points;
+    }
+
+    private static double ParseBehaviorDouble(string text, string name) =>
+        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value >= 0
+            ? value
+            : throw new ArgumentException($"{name}必须是非负数字。", name);
+
+    private static int ParseBehaviorInt(string text, string name) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value >= 1
+            ? value
+            : throw new ArgumentException($"{name}必须是大于 0 的整数。", name);
 
     private CountingMode SelectedCountingMode()
     {

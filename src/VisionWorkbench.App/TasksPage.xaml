@@ -26,6 +26,15 @@
                         <TextBlock Text="工位编号（项目内唯一，随结果输出）" />
                         <TextBox x:Name="StationCodeText" Margin="0,2,0,8" MaxLength="64" />
                         <TextBox x:Name="NameText" Margin="0,2,0,8" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="任务类型：" VerticalAlignment="Center" />
+                            <ComboBox x:Name="TaskTypeCombo" Width="180" Margin="8,0,0,0"
+                                      SelectionChanged="TaskTypeCombo_SelectionChanged">
+                                <ComboBoxItem Content="请选择任务类型" Tag="" IsSelected="True" />
+                                <ComboBoxItem Content="目标计数与判定" Tag="Counting" />
+                                <ComboBoxItem Content="行为识别" Tag="BehaviorRecognition" />
+                            </ComboBox>
+                        </StackPanel>
                         <TextBlock Text="说明" />
                         <TextBox x:Name="DescriptionText" Margin="0,2,0,8" />
                     </StackPanel>
@@ -41,15 +50,26 @@
                             <RowDefinition />
                             <RowDefinition />
                             <RowDefinition />
+                            <RowDefinition Height="230" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Provider ID：" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="0" Grid.Column="1" x:Name="ProviderText" Margin="0,2,0,6"
-                                 Text="image-folder" TextChanged="InputSourceTextChanged" />
+                        <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ProviderCombo" Margin="0,2,0,6"
+                                  DisplayMemberPath="DisplayName" SelectionChanged="ProviderCombo_SelectionChanged" />
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="图片目录：" VerticalAlignment="Center" />
                         <TextBox Grid.Row="1" Grid.Column="1" x:Name="DeviceText" Margin="0,2,4,6"
                                  TextChanged="InputSourceTextChanged" />
                         <Button Grid.Row="1" Grid.Column="2" x:Name="BrowseDeviceButton"
                                 Content="选择目录..." Click="BrowseDevice_Click" Margin="0,2,0,6" />
+                        <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" x:Name="CameraPreviewPanel"
+                                Visibility="Collapsed" Background="#111" BorderBrush="#555" BorderThickness="1"
+                                Margin="0,4,0,8">
+                            <Grid>
+                                <Image x:Name="CameraPreviewImage" Stretch="Uniform" />
+                                <TextBlock x:Name="CameraPreviewStatusText" Text="正在准备相机预览..."
+                                           Foreground="White" Background="#99000000" Padding="8"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+                        </Border>
                         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="DevicePreviewText"
                                    Foreground="#666" Text="尚未选择图片目录" Margin="0,0,0,6" />
                     </Grid>
@@ -177,6 +197,59 @@
                             <DataGridCheckBoxColumn Header="失败转待确认" Binding="{Binding DowngradeToReview}" Width="90" />
                         </DataGrid.Columns>
                     </DataGrid>
+                </GroupBox>
+                <GroupBox x:Name="BehaviorGroup" Header="行为识别（自定义模型/规则）">
+                    <StackPanel>
+                        <CheckBox x:Name="BehaviorEnabledCheck" Content="启用行为识别" IsChecked="False" />
+                        <TextBlock x:Name="CustomBehaviorModelStatusText" Foreground="DarkGreen" TextWrapping="Wrap" Margin="0,4,0,2" Visibility="Collapsed" />
+                        <WrapPanel x:Name="CustomBehaviorClassesPanel" Margin="0,2,0,4" Visibility="Collapsed" />
+                        <TextBlock Text="监控区域多边形（归一化坐标，点格式 x,y；点之间用分号分隔）" Margin="0,6,0,2" TextWrapping="Wrap" />
+                        <TextBox x:Name="BehaviorPolygonText" Text="0.1,0.1;0.9,0.1;0.9,0.9;0.1,0.9" />
+                        <TextBlock x:Name="BuiltInBehaviorRulesTitle" Text="启用内置规则" Margin="0,6,0,2" />
+                        <StackPanel x:Name="BuiltInBehaviorRulesPanel" Orientation="Horizontal">
+                            <CheckBox x:Name="IntrusionEnabledCheck" Content="侵入" IsChecked="True" Margin="0,0,12,0" />
+                            <CheckBox x:Name="LoiteringEnabledCheck" Content="徘徊" IsChecked="True" Margin="0,0,12,0" />
+                            <CheckBox x:Name="CrowdingEnabledCheck" Content="聚集" IsChecked="True" Margin="0,0,12,0" />
+                            <CheckBox x:Name="FallEnabledCheck" Content="跌倒（需 Pose）" IsChecked="False" />
+                        </StackPanel>
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="72" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="72" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="72" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition />
+                                <RowDefinition />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="确认秒数" VerticalAlignment="Center" />
+                            <TextBox x:Name="BehaviorConfirmingSecondsText" Grid.Row="0" Grid.Column="1" Text="0.5" Margin="4,2,8,2" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="徘徊预警秒数" VerticalAlignment="Center" />
+                            <TextBox x:Name="BehaviorLoiterWarningSecondsText" Grid.Row="0" Grid.Column="3" Text="30" Margin="4,2,8,2" />
+                            <TextBlock Grid.Row="0" Grid.Column="4" Text="徘徊报警秒数" VerticalAlignment="Center" />
+                            <TextBox x:Name="BehaviorLoiterAlarmSecondsText" Grid.Row="0" Grid.Column="5" Text="60" Margin="4,2,0,2" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="聚集预警人数" VerticalAlignment="Center" />
+                            <TextBox x:Name="BehaviorCrowdWarningCountText" Grid.Row="1" Grid.Column="1" Text="5" Margin="4,2,8,2" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="聚集报警人数" VerticalAlignment="Center" />
+                            <TextBox x:Name="BehaviorCrowdAlarmCountText" Grid.Row="1" Grid.Column="3" Text="8" Margin="4,2,8,2" />
+                            <TextBlock Grid.Row="1" Grid.Column="4" Text="最低置信度" VerticalAlignment="Center" />
+                            <TextBox x:Name="BehaviorConfidenceText" Grid.Row="1" Grid.Column="5" Text="0.5" Margin="4,2,0,2" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <TextBlock Text="行为时序模型" VerticalAlignment="Center" />
+                            <ComboBox x:Name="TemporalModelTypeCombo" Width="100" Margin="6,0,8,0">
+                                <ComboBoxItem Content="ST-GCN" Tag="stgcn" IsSelected="True" />
+                                <ComboBoxItem Content="PoseC3D" Tag="posec3d" />
+                            </ComboBox>
+                            <TextBlock Text="模型路径" VerticalAlignment="Center" />
+                            <TextBox x:Name="TemporalModelPathText" Width="420" Margin="6,0,6,0" TextChanged="TemporalModelPathText_TextChanged" />
+                            <Button x:Name="BrowseTemporalModelButton" Content="导入行为模型..." Click="ImportTemporalModel_Click" />
+                        </StackPanel>
+                        <TextBlock Text="行为任务使用顶部 YOLO11-Pose 模型提取人体关键点，再使用下方行为时序模型进行自定义行为识别。模型目录应同时包含 classes.json；未加载自定义模型时才使用内置规则。" Foreground="#666" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    </StackPanel>
                 </GroupBox>
                 <StackPanel Orientation="Horizontal" Margin="0,8">
                     <Button x:Name="SaveButton" Content="保存" Click="Save_Click" MinWidth="96" />

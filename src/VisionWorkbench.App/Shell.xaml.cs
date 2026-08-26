@@ -15,8 +15,13 @@ public partial class Shell : Window
         _pages["tasks"] = () => new TasksPage();
         _pages["datasets"] = () => new DatasetAnnotationPage();
         _pages["training"] = () => new TrainingPage();
+        _pages["behavior-annotation"] = () => new BehaviorAnnotationPage();
+        _pages["behavior-collection"] = () => new BehaviorCollectionPage();
+        _pages["behavior-training"] = () => new BehaviorTrainingPage();
         _pages["stations"] = () => new ProjectStationsPage();
         _pages["history"] = () => new HistoryPage();
+        _pages["logs"] = () => new LogPage();
+        _pages["spc"] = () => new SpcPage();
         _pages["plugins"] = () => new PluginsPage();
         _pages["devices"] = () => new DevicesPage();
         _pages["settings"] = () => new SettingsPage();
@@ -25,7 +30,7 @@ public partial class Shell : Window
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (NavList.SelectedItem is ListBoxItem item && item.Tag is string key)
+        if (e.AddedItems.OfType<ListBoxItem>().FirstOrDefault() is { Tag: string key })
         {
             ShowPage(key);
         }

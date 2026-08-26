@@ -80,6 +80,8 @@ public sealed class AlgorithmManager
                     WorkingDirectory = plugin.Directory,
                 },
                 LogSetup.CreatePluginLogger(_options.LogsDirectory, manifest.Id));
+            process.StderrLine += (_, line) =>
+                _logger.LogWarning("Worker {Plugin} stderr: {Line}", manifest.Id, line);
 
             try
             {

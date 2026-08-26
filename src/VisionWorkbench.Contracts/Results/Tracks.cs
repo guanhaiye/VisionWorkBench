@@ -48,4 +48,9 @@ public sealed record KeypointResult
     public string? TrackId { get; init; }
     public string ClassId { get; init; } = "";
     public IReadOnlyList<Keypoint> Points { get; init; } = [];
+    public double PoseQuality { get; init; }
+    public double? FallProbability { get; init; }
+    public string? TemporalModel { get; init; }
+    public string? BehaviorClass { get; init; }
+    public double? BehaviorProbability { get; init; }
 }

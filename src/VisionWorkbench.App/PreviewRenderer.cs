@@ -43,8 +43,8 @@ public sealed class PreviewRenderer
         {
             _bitmap = new WriteableBitmap(
                 frame.Width, frame.Height, 96, 96, PixelFormats.Bgr32, null);
-            image.Source = _bitmap;
         }
+        if (!ReferenceEquals(image.Source, _bitmap)) image.Source = _bitmap;
 
         // BGR24 → BGR32（补 1 字节 alpha/x）
         var needed = frame.Width * frame.Height * 4;

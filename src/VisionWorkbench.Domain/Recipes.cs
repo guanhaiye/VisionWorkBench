@@ -91,6 +91,14 @@ public enum CountingMode
     LineCrossing,
 }
 
+/// <summary>任务配置类型，用于决定任务配置页显示的专业参数。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum InspectionTaskType
+{
+    Counting,
+    BehaviorRecognition,
+}
+
 /// <summary>检测线配置（LineCrossing 模式，归一化坐标）。</summary>
 public sealed record CountingLineConfig
 {
@@ -119,6 +127,9 @@ public sealed record Recipe
     /// <summary>推理设备：cpu 或 cuda。</summary>
     public string ExecutionProvider { get; init; } = "cpu";
 
+    /// <summary>任务类型：目标计数与判定，或行为识别。</summary>
+    public InspectionTaskType TaskType { get; init; } = InspectionTaskType.Counting;
+
     /// <summary>插件设置（透传 initialize.settings）。</summary>
     public string SettingsJson { get; init; } = "{}";
 
@@ -132,6 +143,9 @@ public sealed record Recipe
 
     /// <summary>检测线（LineCrossing 模式）；null = 用插件默认竖直中线。</summary>
     public CountingLineConfig? CountingLine { get; init; }
+
+    /// <summary>首期行为识别配置：区域闯入、滞留、聚集及后续跌倒模型参数。</summary>
+    public BehaviorRecognitionConfig Behavior { get; init; } = new();
 
     public IReadOnlyList<InspectionRule> Rules { get; init; } = [];
 }
