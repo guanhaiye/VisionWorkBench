@@ -32,15 +32,20 @@ public sealed class Yolo11TrainingService : IDisposable
 {
     private readonly string _scriptPath;
     private readonly string _python;
+    private readonly string _workingDirectory;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Process? _process;
 
     public Yolo11TrainingService(string workersRoot, string? configuredPython)
     {
         var yoloDirectory = Path.Combine(workersRoot, "yolo11");
+        _workingDirectory = yoloDirectory;
         _scriptPath = Path.Combine(yoloDirectory, "train_worker.py");
         _python = ResolvePython(configuredPython, yoloDirectory, workersRoot);
     }
+
+    public bool IsModelAvailable(string modelPath) =>
+        File.Exists(Path.IsPathRooted(modelPath) ? modelPath : Path.Combine(_workingDirectory, modelPath));
 
     public bool IsRunning => _process is { HasExited: false };
 

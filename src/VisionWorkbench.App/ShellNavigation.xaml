@@ -1,55 +1,165 @@
 <Window x:Class="VisionWorkbench.App.Shell"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="VisionWorkbench &#x2014; AI &#x89C6;&#x89C9;&#x5DE5;&#x4F5C;&#x53F0;" Width="1280" Height="800"
-        WindowStartupLocation="CenterScreen">
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="VisionWorkbench &#x2014; AI &#x89C6;&#x89C9;&#x5DE5;&#x4F5C;&#x53F0;" Width="1360" Height="860"
+        MinWidth="1100" MinHeight="700" WindowStartupLocation="CenterScreen"
+        WindowStyle="None" Background="{DynamicResource WindowBrush}">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
     <Window.Icon>
         <BitmapImage UriSource="/Assets/Branding/visionworkbench-taskbar.ico" />
     </Window.Icon>
     <Window.Resources>
         <Style TargetType="Expander">
-            <Setter Property="Foreground" Value="#DCE8FF" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="Margin" Value="0,2,0,0" />
+            <Setter Property="Foreground" Value="#9FB0CA" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="10,4,10,0" />
+            <Setter Property="Padding" Value="4,5" />
         </Style>
         <Style TargetType="ListBox">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
         </Style>
+        <Style x:Key="UserHeaderButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="UserChrome" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="UserChrome" Property="Background" Value="#1E3150"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="UserChrome" Property="Background" Value="#294267"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="UserSecondaryButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#172033"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#D9E1EC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="Margin" Value="4,2"/>
+            <Setter Property="MinWidth" Value="76"/>
+        </Style>
         <Style x:Key="SidebarListBoxItem" TargetType="ListBoxItem">
-            <Setter Property="Foreground" Value="#E8E8E8" />
-            <Setter Property="Padding" Value="12,6" />
-            <Setter Property="Margin" Value="0,1" />
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="NavItem_PreviewMouseLeftButtonDown" />
+            <Setter Property="Foreground" Value="#DCE6F5" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Margin" Value="0,2" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#3A3D49" />
+                    <Setter Property="Background" Value="#1E3150" />
                 </Trigger>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#1769AA" />
+                    <Setter Property="Background" Value="#2563EB" />
                     <Setter Property="Foreground" Value="White" />
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="TitleBarButton" TargetType="Button">
+            <Setter Property="Width" Value="48"/>
+            <Setter Property="Height" Value="46"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="TitleChrome" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="TitleChrome" Property="Background" Value="{DynamicResource AccentSoftBrush}"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="TitleChrome" Property="Opacity" Value="0.72"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="46"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="230" />
+            <ColumnDefinition Width="248" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
-        <Border Grid.Column="0" Background="#292A32">
+        <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                        <Image Source="/Assets/Branding/visionworkbench-taskbar.png" Width="25" Height="25" Stretch="Uniform"/>
+                        <TextBlock Text="VisionWorkbench" FontWeight="SemiBold" FontSize="13" Margin="10,0,0,0" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="  ·  AI 视觉工作台" FontSize="12" Foreground="{DynamicResource MutedTextBrush}"/>
+                    </StackPanel>
+                </Border>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="MinimizeButton" Style="{StaticResource TitleBarButton}" shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="最小化" Click="MinimizeWindow_Click">
+                        <Path Data="M 1,8 L 11,8" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.4"/>
+                    </Button>
+                    <Button x:Name="MaximizeButton" Style="{StaticResource TitleBarButton}" shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="最大化" Click="MaximizeWindow_Click">
+                        <Path x:Name="MaximizeIcon" Data="M 1,1 L 11,1 11,11 1,11 Z" Fill="Transparent"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2"/>
+                    </Button>
+                    <Button shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="关闭" Click="CloseWindow_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TitleBarButton}">
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#E81123"/><Setter Property="Foreground" Value="White"/></Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <Path Data="M 2,2 L 10,10 M 10,2 L 2,10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+        <Border Grid.Row="1" Grid.Column="0" Background="#0F1B2D">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <StackPanel Grid.Row="0">
-                    <Image Source="/Assets/Branding/visionworkbench-logo-v1.png"
-                           Width="82" Height="82" Stretch="Uniform" HorizontalAlignment="Center"
-                           Margin="0,14,0,2" />
-                    <TextBlock Text="VisionWorkbench" Foreground="White" FontSize="18" FontWeight="Bold"
-                               HorizontalAlignment="Center" Margin="8,2,8,14" />
-                </StackPanel>
+                <Border Grid.Row="0" BorderBrush="#243550" BorderThickness="0,0,0,1" Padding="10,11">
+                    <Button x:Name="UserMenuButton" Style="{StaticResource UserHeaderButton}" Click="UserMenu_Click" ToolTip="用户管理">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/></Grid.ColumnDefinitions>
+                            <Border Width="44" Height="44" CornerRadius="22" Background="#2563EB" VerticalAlignment="Center">
+                                <TextBlock x:Name="UserAvatarText" Text="用" Foreground="White" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="11,0,0,0">
+                                <TextBlock x:Name="CurrentUserText" Text="用户管理" Foreground="White" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="CurrentRoleText" Text="点击登录或设置个人信息" Foreground="#8FA4C2" FontSize="10" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <TextBlock Grid.Column="2" Text="⌄" Foreground="#8FA4C2" FontSize="16" HorizontalAlignment="Center"/>
+                        </Grid>
+                    </Button>
+                </Border>
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
                         <Expander Header="&#x5DE5;&#x4F5C;&#x53F0;" IsExpanded="False">
@@ -61,7 +171,8 @@
                         </Expander>
                         <Expander Header="&#x6570;&#x636E;&#x4E0E;&#x6A21;&#x578B;" IsExpanded="False">
                             <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
-                                <ListBoxItem Content="&#x56FE;&#x7247;&#x6807;&#x6CE8;&#x4E0E;&#x6570;&#x636E;&#x96C6;" Tag="datasets" IsSelected="True" />
+                                <ListBoxItem Content="&#x76EE;&#x6807;&#x68C0;&#x6D4B;&#x6807;&#x6CE8;" Tag="detection-annotation" />
+                                <ListBoxItem Content="&#x5206;&#x5272;&#x6807;&#x6CE8;" Tag="segmentation-annotation" />
                                 <ListBoxItem Content="YOLO11 &#x8BAD;&#x7EC3;&#x5E73;&#x53F0;" Tag="training" />
                                 <ListBoxItem Content="&#x884C;&#x4E3A;&#x6570;&#x636E;&#x91C7;&#x96C6;" Tag="behavior-collection" />
                                 <ListBoxItem Content="&#x884C;&#x4E3A;&#x6807;&#x6CE8;&#x5E73;&#x53F0;" Tag="behavior-annotation" />
@@ -75,6 +186,11 @@
                                 <ListBoxItem Content="&#x65E5;&#x5FD7;&#x7BA1;&#x7406;" Tag="logs" />
                             </ListBox>
                         </Expander>
+                        <Expander Header="&#x901A;&#x8BAF;&#x7BA1;&#x7406;" IsExpanded="False">
+                            <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
+                                <ListBoxItem Content="TCP/IP &#x901A;&#x8BAF;" Tag="communication" />
+                            </ListBox>
+                        </Expander>
                         <Expander Header="&#x7CFB;&#x7EDF;&#x7BA1;&#x7406;" IsExpanded="False">
                             <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x7B97;&#x6CD5;&#x7BA1;&#x7406;" Tag="plugins" />
@@ -84,8 +200,40 @@
                         </Expander>
                     </StackPanel>
                 </ScrollViewer>
+                <Border Grid.Row="2" BorderBrush="#243550" BorderThickness="0,1,0,0" Padding="18,11">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="8" Height="8" Fill="#22C55E" Margin="0,0,8,0"/>
+                        <TextBlock Text="系统就绪" Foreground="#AFC0D8" FontSize="11"/>
+                        <TextBlock Text="  ·  单实例运行" Foreground="#607796" FontSize="11"/>
+                    </StackPanel>
+                </Border>
             </Grid>
         </Border>
-        <ContentControl x:Name="PageHost" Grid.Column="1" />
+        <Border Grid.Row="1" Grid.Column="1" Margin="14" Background="{DynamicResource SurfaceBrush}" CornerRadius="10" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+            <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.10" Color="#334155"/></Border.Effect>
+            <ContentControl x:Name="PageHost" Margin="1"/>
+        </Border>
+        <Popup x:Name="UserMenuPopup" PlacementTarget="{Binding ElementName=UserMenuButton}" Placement="Right"
+               HorizontalOffset="8" VerticalOffset="0" StaysOpen="False" AllowsTransparency="True">
+            <Border Width="330" Background="White" BorderBrush="#D9E1EC" BorderThickness="1" CornerRadius="10" Padding="18">
+                <Border.Effect><DropShadowEffect BlurRadius="22" ShadowDepth="4" Opacity="0.22" Color="#334155"/></Border.Effect>
+                <StackPanel>
+                    <TextBlock Text="用户管理" FontSize="18" FontWeight="Bold"/>
+                    <TextBlock Text="登录信息仅保存在当前电脑" Foreground="#64748B" FontSize="11" Margin="0,3,0,14"/>
+                    <TextBlock Text="姓名"/><TextBox x:Name="UserNameText" Margin="0,5,0,10"/>
+                    <TextBlock Text="角色"/>
+                    <ComboBox x:Name="UserRoleCombo" Margin="0,5,0,12">
+                        <ComboBoxItem Content="操作员" Tag="operator"/>
+                        <ComboBoxItem Content="工程师" Tag="engineer"/>
+                        <ComboBoxItem Content="专家" Tag="expert"/>
+                    </ComboBox>
+                    <TextBlock Text="操作员可执行任务；工程师可编辑任务；专家可修改高级参数。" Foreground="#64748B" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="退出登录" Click="Logout_Click" Style="{StaticResource UserSecondaryButton}"/>
+                        <Button Content="登录 / 保存" Click="SaveUser_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Popup>
     </Grid>
 </Window>

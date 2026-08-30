@@ -166,8 +166,8 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         }
         if (!batchColumns.Contains("StationCode"))
         {
-            db.Database.ExecuteSqlRaw("ALTER TABLE Batches ADD COLUMN StationCode TEXT NOT NULL DEFAULT '';" );
-            db.Database.ExecuteSqlRaw("UPDATE Batches SET StationCode = COALESCE((SELECT StationCode FROM Tasks WHERE Tasks.Id = Batches.TaskId), printf('ST-%03d', TaskId)) WHERE StationCode = '';" );
+            db.Database.ExecuteSqlRaw("ALTER TABLE Batches ADD COLUMN StationCode TEXT NOT NULL DEFAULT '';");
+            db.Database.ExecuteSqlRaw("UPDATE Batches SET StationCode = COALESCE((SELECT StationCode FROM Tasks WHERE Tasks.Id = Batches.TaskId), printf('ST-%03d', TaskId)) WHERE StationCode = '';");
         }
 
         var updatedRecordColumns = ReadColumns(db, "InspectionRecords");

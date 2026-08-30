@@ -62,4 +62,51 @@ public sealed class DatasetCatalogTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void Exports_InstanceSegmentation_PolygonLabel()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"vw-seg-{Guid.NewGuid():N}");
+        var catalogRoot = Path.Combine(root, "catalog");
+        var exportRoot = Path.Combine(root, "export");
+        Directory.CreateDirectory(root);
+        File.WriteAllBytes(Path.Combine(root, "sample.png"), [1, 2, 3]);
+        try
+        {
+            var service = new DatasetCatalogService(catalogRoot);
+            var dataset = service.Save(new DatasetDefinition
+            {
+                Name = "segmentation",
+                TaskType = "instance_segmentation",
+                RootDirectory = root,
+                Classes = ["part"],
+                ImageSplits = new Dictionary<string, string> { ["sample.png"] = "train" },
+            });
+            service.SaveAnnotation(dataset, new DatasetAnnotation
+            {
+                ImageRelativePath = "sample.png",
+                Objects =
+                [new DatasetAnnotationObject
+                {
+                    ClassName = "part",
+                    Shape = "polygon",
+                    Polygon =
+                    [
+                        new DatasetPoint { X = 0.1, Y = 0.2 },
+                        new DatasetPoint { X = 0.6, Y = 0.2 },
+                        new DatasetPoint { X = 0.6, Y = 0.8 },
+                        new DatasetPoint { X = 0.1, Y = 0.8 },
+                    ],
+                }],
+            });
+
+            service.ExportYolo(dataset, exportRoot);
+            var label = Directory.EnumerateFiles(Path.Combine(exportRoot, "labels"), "*.txt", SearchOption.AllDirectories).Single();
+            Assert.Equal("0 0.1 0.2 0.6 0.2 0.6 0.8 0.1 0.8", File.ReadAllText(label).Trim());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
 }

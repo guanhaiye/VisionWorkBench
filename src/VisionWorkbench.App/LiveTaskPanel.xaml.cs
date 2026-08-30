@@ -717,9 +717,12 @@ public partial class LiveTaskPanel : UserControl
             double Py(double ny) => offsetY + ny * drawH;
             var main = new Line
             {
-                X1 = Px(cfg.A.X), Y1 = Py(cfg.A.Y),
-                X2 = Px(cfg.B.X), Y2 = Py(cfg.B.Y),
-                Stroke = Brushes.Yellow, StrokeThickness = 2,
+                X1 = Px(cfg.A.X),
+                Y1 = Py(cfg.A.Y),
+                X2 = Px(cfg.B.X),
+                Y2 = Py(cfg.B.Y),
+                Stroke = Brushes.Yellow,
+                StrokeThickness = 2,
             };
             OverlayCanvas.Children.Add(main);
             // 带边界 = 法向偏移 hysteresis（归一化空间法向，按轴缩放到像素）

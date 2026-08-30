@@ -6,21 +6,49 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using VisionWorkbench.Application;
 
 namespace VisionWorkbench.App;
 
-/// <summary>离线图片数据集管理与矩形框标注页面。</summary>
+public enum AnnotationPlatform
+{
+    Detection,
+    Segmentation,
+}
+
+/// <summary>离线图片数据集标注页面，按目标检测与分割两个平台隔离展示。</summary>
 public partial class DatasetAnnotationPage : UserControl
 {
+    private readonly AnnotationPlatform _platform;
     private DatasetDefinition? _dataset;
     private DatasetImageItem? _image;
     private DatasetAnnotation? _annotation;
     private Point _dragStart;
     private Rectangle? _draft;
     private bool _dragging;
-    private bool _sam3ClickMode;
+    private bool _sam1ClickMode;
+    private bool _manualDrawMode = true;
+    private bool _eraserMode;
+    private bool _eraserDragging;
+    private double _eraserDiameter = 36;
+    private Point? _eraserCursorPoint;
+    private Point _eraserLastPoint;
+    private bool _eraserChanged;
+    private bool _refreshingImageList;
+    private readonly List<Point> _eraserStrokePoints = [];
+    private Polyline? _eraserStrokeVisual;
+    private Ellipse? _eraserCursorVisual;
+    private readonly List<Sam1Prompt> _sam1Prompts = [];
+    private int _sam1ResultIndex = -1;
+    private int _sam1PromptVersion;
+    private readonly DispatcherTimer _sam1HoverTimer;
+    private Point? _sam1HoverPoint;
+    private SmartAnnotationObjectResult? _sam1HoverPreview;
+    private int _sam1HoverVersion;
+    private bool _sam1HoverBusy;
+    private double _zoom = 1;
     private readonly List<Point> _polygonPoints = [];
     private Polyline? _polygonDraft;
     private int _editingIndex = -1;
@@ -42,15 +70,35 @@ public partial class DatasetAnnotationPage : UserControl
         BottomRight,
     }
 
-    public DatasetAnnotationPage()
+    public DatasetAnnotationPage() : this(AnnotationPlatform.Detection)
     {
+    }
+
+    public DatasetAnnotationPage(AnnotationPlatform platform)
+    {
+        _platform = platform;
         InitializeComponent();
+        PlatformTitleText.Text = platform == AnnotationPlatform.Detection
+            ? "目标检测标注平台"
+            : "分割标注平台";
+        ExportDatasetButton.Content = platform == AnnotationPlatform.Detection
+            ? "导出 YOLO 检测数据集"
+            : "导出分割数据集";
+        Sam1Button.Visibility = platform == AnnotationPlatform.Segmentation
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        // Submit the latest hover position at roughly one display frame instead of
+        // waiting for the pointer to become stationary.
+        _sam1HoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        _sam1HoverTimer.Tick += Sam1HoverTimer_Tick;
         Loaded += (_, _) => RefreshDatasets();
     }
 
     private void RefreshDatasets(string? selectId = null)
     {
-        var datasets = AppServices.Instance.Datasets.List();
+        var datasets = AppServices.Instance.Datasets.List()
+            .Where(IsDatasetForCurrentPlatform)
+            .ToList();
         DatasetList.ItemsSource = datasets;
         if (selectId is not null)
         {
@@ -65,12 +113,21 @@ public partial class DatasetAnnotationPage : UserControl
     private void NewDataset_Click(object sender, RoutedEventArgs e)
     {
         if (!RolePolicy.CanEditRecipe) return;
-        var typeDialog = new DatasetTypeDialog { Owner = Window.GetWindow(this) };
-        if (typeDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(typeDialog.SelectedTaskType)) return;
+        string taskType;
+        if (_platform == AnnotationPlatform.Detection)
+        {
+            taskType = "detection";
+        }
+        else
+        {
+            var typeDialog = new DatasetTypeDialog(segmentationOnly: true) { Owner = Window.GetWindow(this) };
+            if (typeDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(typeDialog.SelectedTaskType)) return;
+            taskType = typeDialog.SelectedTaskType;
+        }
         _dataset = new DatasetDefinition
         {
             Name = $"dataset-{DateTime.Now:MMddHHmmss}",
-            TaskType = typeDialog.SelectedTaskType,
+            TaskType = taskType,
             Classes = ["object"],
         };
         DatasetNameText.Text = _dataset.Name;
@@ -98,6 +155,11 @@ public partial class DatasetAnnotationPage : UserControl
             .FirstOrDefault(dataset => PathsEqual(dataset.RootDirectory, rootDirectory));
         if (existing is not null)
         {
+            if (!IsDatasetForCurrentPlatform(existing))
+            {
+                ShowWrongPlatform(existing.TaskType);
+                return;
+            }
             RefreshDatasets(existing.Id);
             StatusText.Text = $"数据集已在列表中：{existing.Name}";
             return;
@@ -107,6 +169,11 @@ public partial class DatasetAnnotationPage : UserControl
         {
             var directory = new DirectoryInfo(rootDirectory);
             var inferred = InferDatasetMetadata(rootDirectory);
+            if (!IsTaskTypeForCurrentPlatform(inferred.TaskType))
+            {
+                ShowWrongPlatform(inferred.TaskType);
+                return;
+            }
             var dataset = AppServices.Instance.Datasets.Save(new DatasetDefinition
             {
                 Name = directory.Name,
@@ -154,6 +221,23 @@ public partial class DatasetAnnotationPage : UserControl
                 ? "instance_segmentation"
                 : "detection";
         return (taskType, classes.ToList());
+    }
+
+    private bool IsDatasetForCurrentPlatform(DatasetDefinition dataset) =>
+        IsTaskTypeForCurrentPlatform(dataset.TaskType);
+
+    private bool IsTaskTypeForCurrentPlatform(string? taskType) => _platform switch
+    {
+        AnnotationPlatform.Detection => taskType == "detection",
+        AnnotationPlatform.Segmentation => taskType is "semantic_segmentation" or "instance_segmentation",
+        _ => false,
+    };
+
+    private void ShowWrongPlatform(string? taskType)
+    {
+        var target = taskType == "detection" ? "目标检测标注平台" : "分割标注平台";
+        MessageBox.Show($"该数据集属于{target}，请从左侧进入对应平台后再加载。",
+            "标注平台不匹配", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void BrowseRoot_Click(object sender, RoutedEventArgs e)
@@ -243,7 +327,13 @@ public partial class DatasetAnnotationPage : UserControl
         try
         {
             var output = AppServices.Instance.Datasets.ExportYolo(_dataset, dialog.FolderName);
-            StatusText.Text = $"YOLO 数据集已导出：{output}（包含 data.yaml、images 和 labels）";
+            var exportType = _dataset.TaskType switch
+            {
+                "instance_segmentation" => "YOLO11-seg 实例分割",
+                "semantic_segmentation" => "多边形分割",
+                _ => "YOLO 目标检测",
+            };
+            StatusText.Text = $"{exportType}数据集已导出：{output}（包含 data.yaml、images 和 labels）";
         }
         catch (Exception ex)
         {
@@ -312,13 +402,25 @@ public partial class DatasetAnnotationPage : UserControl
         }
     }
 
-    private void RefreshImageList(string? selectedRelativePath = null)
+    private void RefreshImageList(string? selectedRelativePath = null, bool suppressSelectionChanged = false)
     {
         if (_dataset is null) return;
         var images = AppServices.Instance.Datasets.ListImages(_dataset);
-        ImageList.ItemsSource = images;
-        if (selectedRelativePath is not null)
-            ImageList.SelectedItem = images.FirstOrDefault(x => x.RelativePath == selectedRelativePath);
+        if (suppressSelectionChanged) _refreshingImageList = true;
+        try
+        {
+            ImageList.ItemsSource = images;
+            if (selectedRelativePath is not null)
+            {
+                var selected = images.FirstOrDefault(x => x.RelativePath == selectedRelativePath);
+                ImageList.SelectedItem = selected;
+                if (suppressSelectionChanged && selected is not null) _image = selected;
+            }
+        }
+        finally
+        {
+            if (suppressSelectionChanged) _refreshingImageList = false;
+        }
     }
 
     private void DatasetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -432,16 +534,33 @@ public partial class DatasetAnnotationPage : UserControl
 
     private async void ImageList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_refreshingImageList) return;
         if (_dataset is null || ImageList.SelectedItem is not DatasetImageItem image) return;
+        var keepSam1Active = _sam1ClickMode;
+        ResetSam1ImageState();
+        ResetZoom();
         _image = image;
         _annotation = AppServices.Instance.Datasets.LoadAnnotation(_dataset, image.RelativePath);
+        RefreshImageList(image.RelativePath, suppressSelectionChanged: true);
         AnnotationList.ItemsSource = _annotation.Objects;
         AnnotationList.SelectedIndex = -1;
         try
         {
             AnnotationImage.Source = await Task.Run(() => LoadBitmap(image.FullPath));
+            ResetZoom();
             RenderAnnotations();
-            StatusText.Text = $"当前图片：{image.RelativePath}，{_annotation.Objects.Count} 个标注。可在图片上绘制{(IsPolygonMode() ? "多边形" : "矩形框")}。";
+            if (keepSam1Active)
+            {
+                _sam1ClickMode = true;
+                Sam1Button.Content = "完成 SAM1 标注";
+                StatusText.Text = $"已切换图片：{image.RelativePath}。SAM1 仍处于开启状态，移动鼠标即可预览。";
+                if (AnnotationCanvas.IsMouseOver)
+                    ScheduleSam1Hover(Mouse.GetPosition(AnnotationCanvas));
+            }
+            else
+            {
+                StatusText.Text = $"当前图片：{image.RelativePath}，{_annotation.Objects.Count} 个标注。可在图片上绘制{(IsPolygonMode() ? "多边形" : "矩形框")}。";
+            }
         }
         catch (Exception ex)
         {
@@ -457,14 +576,41 @@ public partial class DatasetAnnotationPage : UserControl
             StatusText.Text = "请选择数据集、图片和标注类别。";
             return;
         }
-        if (_sam3ClickMode)
+        if (_sam1ClickMode)
         {
-            _sam3ClickMode = false;
             e.Handled = true;
-            _ = RunSam3ClickAsync(e.GetPosition(AnnotationCanvas));
+            _ = AddSam1PromptAsync(e.GetPosition(AnnotationCanvas), label: 1);
             return;
         }
         var point = e.GetPosition(AnnotationCanvas);
+        if (_eraserMode && IsPolygonMode())
+        {
+            _eraserDragging = true;
+            _eraserChanged = false;
+            _eraserLastPoint = point;
+            _eraserCursorPoint = point;
+            _eraserStrokePoints.Clear();
+            _eraserStrokePoints.Add(point);
+            AnnotationCanvas.CaptureMouse();
+            UpdateEraserVisuals();
+            e.Handled = true;
+            return;
+        }
+        if (_manualDrawMode && IsPolygonMode())
+        {
+            _polygonPoints.Add(point);
+            if (e.ClickCount >= 2 && _polygonPoints.Count >= 3)
+            {
+                _polygonPoints.RemoveAt(_polygonPoints.Count - 1);
+                FinishPolygon();
+            }
+            else
+            {
+                RenderPolygonDraft();
+            }
+            e.Handled = true;
+            return;
+        }
         var hitIndex = HitTestAnnotation(point);
         if (hitIndex >= 0)
         {
@@ -482,20 +628,7 @@ public partial class DatasetAnnotationPage : UserControl
             e.Handled = true;
             return;
         }
-        if (IsPolygonMode())
-        {
-            _polygonPoints.Add(point);
-            if (e.ClickCount >= 2 && _polygonPoints.Count >= 3)
-            {
-                _polygonPoints.RemoveAt(_polygonPoints.Count - 1);
-                FinishPolygon();
-            }
-            else
-            {
-                RenderPolygonDraft();
-            }
-            return;
-        }
+        if (IsPolygonMode()) return;
         _dragging = true;
         _dragStart = e.GetPosition(AnnotationCanvas);
         _draft = new Rectangle { Stroke = Brushes.Yellow, StrokeThickness = 2, StrokeDashArray = [4, 2] };
@@ -505,6 +638,30 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_eraserMode)
+        {
+            var point = e.GetPosition(AnnotationCanvas);
+            _eraserCursorPoint = point;
+            if (_eraserDragging && e.LeftButton == MouseButtonState.Pressed)
+            {
+                if ((point - _eraserLastPoint).Length >= 2)
+                {
+                    _eraserStrokePoints.Add(point);
+                    _eraserLastPoint = point;
+                }
+                UpdateEraserVisuals();
+            }
+            else
+            {
+                UpdateEraserVisuals();
+            }
+            return;
+        }
+        if (_sam1ClickMode && _sam1Prompts.Count == 0)
+        {
+            ScheduleSam1Hover(e.GetPosition(AnnotationCanvas));
+            return;
+        }
         if (_editingIndex >= 0 && _annotation is not null)
         {
             UpdateEditedAnnotation(e.GetPosition(AnnotationCanvas));
@@ -520,8 +677,47 @@ public partial class DatasetAnnotationPage : UserControl
         UpdateRectangle(_draft, _dragStart, e.GetPosition(AnnotationCanvas));
     }
 
+    private void AnnotationCanvas_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (_eraserMode)
+        {
+            _eraserCursorPoint = e.GetPosition(AnnotationCanvas);
+            RenderAnnotations();
+            return;
+        }
+        if (_sam1ClickMode && _sam1Prompts.Count == 0)
+            ScheduleSam1Hover(e.GetPosition(AnnotationCanvas));
+    }
+
+    private void AnnotationCanvas_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_eraserMode)
+        {
+            _eraserCursorPoint = null;
+            RenderAnnotations();
+            return;
+        }
+        if (!_sam1ClickMode || _sam1Prompts.Count > 0) return;
+        _sam1HoverTimer.Stop();
+        _sam1HoverPoint = null;
+        _sam1HoverPreview = null;
+        _sam1HoverVersion++;
+        RenderAnnotations();
+    }
+
     private void AnnotationCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_eraserMode && _eraserDragging)
+        {
+            _eraserDragging = false;
+            AnnotationCanvas.ReleaseMouseCapture();
+            EraseStroke(_eraserStrokePoints);
+            _eraserStrokePoints.Clear();
+            if (_eraserChanged) AutoSaveAnnotation("橡皮擦轨迹");
+            RenderAnnotations();
+            e.Handled = true;
+            return;
+        }
         if (_editingIndex >= 0)
         {
             _dragging = false;
@@ -569,10 +765,15 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (_sam1ClickMode)
+        {
+            e.Handled = true;
+            _ = AddSam1PromptAsync(e.GetPosition(AnnotationCanvas), label: 0);
+            return;
+        }
         var index = HitTestAnnotation(e.GetPosition(AnnotationCanvas));
-        if (index < 0) return;
-        AnnotationList.SelectedIndex = index;
-        ShowAnnotationContextMenu(index, AnnotationCanvas);
+        if (index >= 0) AnnotationList.SelectedIndex = index;
+        ShowAnnotationContextMenu(index >= 0 ? index : null, AnnotationCanvas);
         e.Handled = true;
     }
 
@@ -602,21 +803,38 @@ public partial class DatasetAnnotationPage : UserControl
             : null;
     }
 
-    private void ShowAnnotationContextMenu(int index, FrameworkElement placementTarget)
+    private void ShowAnnotationContextMenu(int? index, FrameworkElement placementTarget)
     {
-        if (_dataset is null || _annotation is null || index < 0 || index >= _annotation.Objects.Count) return;
         var menu = new ContextMenu { PlacementTarget = placementTarget };
-        foreach (var className in _dataset.Classes)
+        var fit = new MenuItem { Header = "图像自适应窗口" };
+        fit.Click += FitImageToWindow_Click;
+        menu.Items.Add(fit);
+
+        if (_dataset is not null && _annotation is not null &&
+            index is >= 0 && index.Value < _annotation.Objects.Count)
         {
-            var item = new MenuItem { Header = $"切换类别：{className}", Tag = className };
-            item.Click += ChangeAnnotationClass_Click;
-            menu.Items.Add(item);
+            menu.Items.Add(new Separator());
+            foreach (var className in _dataset.Classes)
+            {
+                var item = new MenuItem { Header = $"切换类别：{className}", Tag = className };
+                item.Click += ChangeAnnotationClass_Click;
+                menu.Items.Add(item);
+            }
+            if (_dataset.Classes.Count > 0) menu.Items.Add(new Separator());
+            var delete = new MenuItem { Header = "删除标注", Tag = index.Value };
+            delete.Click += DeleteAnnotationMenu_Click;
+            menu.Items.Add(delete);
         }
-        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
-        var delete = new MenuItem { Header = "删除标注", Tag = index };
-        delete.Click += DeleteAnnotationMenu_Click;
-        menu.Items.Add(delete);
         menu.IsOpen = true;
+    }
+
+    private void FitImageToWindow_Click(object sender, RoutedEventArgs e)
+    {
+        ResetZoom();
+        AnnotationScrollViewer.UpdateLayout();
+        AnnotationScrollViewer.ScrollToHorizontalOffset(0);
+        AnnotationScrollViewer.ScrollToVerticalOffset(0);
+        StatusText.Text = "图像已自适应标注窗口。";
     }
 
     private void ChangeAnnotationClass_Click(object sender, RoutedEventArgs e)
@@ -697,6 +915,85 @@ public partial class DatasetAnnotationPage : UserControl
         AutoSaveAnnotation("删除标注");
     }
 
+    private void EraseStroke(IReadOnlyList<Point> stroke)
+    {
+        if (_annotation is null || stroke.Count == 0 || AnnotationCanvas.ActualWidth < 1 || AnnotationCanvas.ActualHeight < 1) return;
+        var rasterWidth = Math.Clamp((int)Math.Round(AnnotationCanvas.ActualWidth), 64, 2048);
+        var rasterHeight = Math.Clamp((int)Math.Round(AnnotationCanvas.ActualHeight), 64, 2048);
+        var rasterStroke = stroke.Select(point => new OpenCvSharp.Point(
+            Math.Clamp((int)Math.Round(point.X / AnnotationCanvas.ActualWidth * rasterWidth), 0, rasterWidth - 1),
+            Math.Clamp((int)Math.Round(point.Y / AnnotationCanvas.ActualHeight * rasterHeight), 0, rasterHeight - 1))).ToArray();
+        var thickness = Math.Max(2, (int)Math.Round(_eraserDiameter / AnnotationCanvas.ActualWidth * rasterWidth));
+
+        var changed = false;
+        for (var index = _annotation.Objects.Count - 1; index >= 0; index--)
+        {
+            var source = _annotation.Objects[index];
+            if (!source.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) || source.Polygon.Count < 3) continue;
+            using var mask = new OpenCvSharp.Mat(rasterHeight, rasterWidth, OpenCvSharp.MatType.CV_8UC1, OpenCvSharp.Scalar.Black);
+            var polygon = source.Polygon.Select(point => new OpenCvSharp.Point(
+                Math.Clamp((int)Math.Round(point.X * (rasterWidth - 1)), 0, rasterWidth - 1),
+                Math.Clamp((int)Math.Round(point.Y * (rasterHeight - 1)), 0, rasterHeight - 1))).ToArray();
+            OpenCvSharp.Cv2.FillPoly(mask, [polygon], OpenCvSharp.Scalar.White);
+            var areaBefore = OpenCvSharp.Cv2.CountNonZero(mask);
+            if (rasterStroke.Length == 1)
+            {
+                OpenCvSharp.Cv2.Circle(mask, rasterStroke[0], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.Black, -1);
+            }
+            else
+            {
+                OpenCvSharp.Cv2.Polylines(mask, [rasterStroke], false, OpenCvSharp.Scalar.Black,
+                    thickness, OpenCvSharp.LineTypes.AntiAlias);
+                OpenCvSharp.Cv2.Circle(mask, rasterStroke[0], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.Black, -1);
+                OpenCvSharp.Cv2.Circle(mask, rasterStroke[^1], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.Black, -1);
+            }
+            var areaAfter = OpenCvSharp.Cv2.CountNonZero(mask);
+            if (areaAfter == areaBefore) continue;
+
+            OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
+                OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
+            var replacements = contours
+                .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
+                .Select(contour => BuildPolygonFromContour(source.ClassName, contour, rasterWidth, rasterHeight))
+                .ToList();
+            _annotation.Objects.RemoveAt(index);
+            _annotation.Objects.InsertRange(index, replacements);
+            changed = true;
+        }
+
+        if (!changed) return;
+        _eraserChanged = true;
+        AnnotationList.ItemsSource = null;
+        AnnotationList.ItemsSource = _annotation.Objects;
+        RenderAnnotations();
+        StatusText.Text = $"正在擦除；橡皮擦直径 {_eraserDiameter:0} 像素。松开左键后自动保存。";
+    }
+
+    private static DatasetAnnotationObject BuildPolygonFromContour(
+        string className, OpenCvSharp.Point[] contour, int width, int height)
+    {
+        var simplified = OpenCvSharp.Cv2.ApproxPolyDP(contour, 1.0, true);
+        var points = simplified.Select(point => new DatasetPoint
+        {
+            X = Math.Clamp(point.X / (double)Math.Max(1, width - 1), 0, 1),
+            Y = Math.Clamp(point.Y / (double)Math.Max(1, height - 1), 0, 1),
+        }).ToList();
+        var minX = points.Min(point => point.X);
+        var minY = points.Min(point => point.Y);
+        var maxX = points.Max(point => point.X);
+        var maxY = points.Max(point => point.Y);
+        return new DatasetAnnotationObject
+        {
+            ClassName = className,
+            Shape = "polygon",
+            X = minX,
+            Y = minY,
+            Width = maxX - minX,
+            Height = maxY - minY,
+            Polygon = points,
+        };
+    }
+
     private void SaveAnnotation_Click(object sender, RoutedEventArgs e)
     {
         if (_dataset is null || _image is null || _annotation is null) return;
@@ -718,10 +1015,77 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RenderAnnotations();
 
+    private void AnnotationScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (Math.Abs(_zoom - 1) < 0.001) UpdateAnnotationSurfaceSize();
+    }
+
+    private void AnnotationScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (AnnotationImage.Source is null) return;
+        if (_eraserMode)
+        {
+            e.Handled = true;
+            _eraserDiameter = Math.Clamp(_eraserDiameter + (e.Delta > 0 ? 6 : -6), 8, 240);
+            _eraserCursorPoint = Mouse.GetPosition(AnnotationCanvas);
+            RenderAnnotations();
+            StatusText.Text = $"橡皮擦直径：{_eraserDiameter:0} 像素；按住左键拖动擦除。";
+            return;
+        }
+        e.Handled = true;
+        var oldZoom = _zoom;
+        var factor = e.Delta > 0 ? 1.15 : 1 / 1.15;
+        _zoom = Math.Clamp(_zoom * factor, 0.25, 8);
+        if (Math.Abs(_zoom - oldZoom) < 0.001) return;
+
+        var mouse = e.GetPosition(AnnotationScrollViewer);
+        var contentX = (AnnotationScrollViewer.HorizontalOffset + mouse.X) / oldZoom;
+        var contentY = (AnnotationScrollViewer.VerticalOffset + mouse.Y) / oldZoom;
+        UpdateAnnotationSurfaceSize();
+        AnnotationScrollViewer.UpdateLayout();
+        AnnotationScrollViewer.ScrollToHorizontalOffset(contentX * _zoom - mouse.X);
+        AnnotationScrollViewer.ScrollToVerticalOffset(contentY * _zoom - mouse.Y);
+        ZoomText.Text = $"缩放：{_zoom:P0}";
+    }
+
+    private void ResetZoom()
+    {
+        _zoom = 1;
+        if (ZoomText is not null) ZoomText.Text = "缩放：100%";
+        if (AnnotationScrollViewer is null || AnnotationSurface is null) return;
+        UpdateAnnotationSurfaceSize();
+        AnnotationScrollViewer.ScrollToHome();
+    }
+
+    private void UpdateAnnotationSurfaceSize()
+    {
+        if (AnnotationScrollViewer is null || AnnotationSurface is null) return;
+        var availableWidth = Math.Max(1, AnnotationScrollViewer.ViewportWidth > 0
+            ? AnnotationScrollViewer.ViewportWidth
+            : AnnotationScrollViewer.ActualWidth);
+        var availableHeight = Math.Max(1, AnnotationScrollViewer.ViewportHeight > 0
+            ? AnnotationScrollViewer.ViewportHeight
+            : AnnotationScrollViewer.ActualHeight);
+        var imageWidth = AnnotationImage.Source?.Width ?? availableWidth;
+        var imageHeight = AnnotationImage.Source?.Height ?? availableHeight;
+        var imageRatio = imageWidth / Math.Max(1, imageHeight);
+        var viewportRatio = availableWidth / availableHeight;
+        var fittedWidth = viewportRatio > imageRatio
+            ? availableHeight * imageRatio
+            : availableWidth;
+        var fittedHeight = viewportRatio > imageRatio
+            ? availableHeight
+            : availableWidth / imageRatio;
+        AnnotationSurface.Width = Math.Max(1, fittedWidth * _zoom);
+        AnnotationSurface.Height = Math.Max(1, fittedHeight * _zoom);
+    }
+
     private void RenderAnnotations()
     {
         if (AnnotationCanvas is null) return;
         AnnotationCanvas.Children.Clear();
+        _eraserStrokeVisual = null;
+        _eraserCursorVisual = null;
         if (_annotation is null) return;
         var selected = AnnotationList.SelectedIndex;
         for (var i = 0; i < _annotation.Objects.Count; i++)
@@ -763,13 +1127,100 @@ public partial class DatasetAnnotationPage : UserControl
                 AnnotationCanvas.Children.Add(polygon);
             }
         }
+        if (_sam1HoverPreview is { Polygon.Count: >= 3 } preview)
+        {
+            AnnotationCanvas.Children.Add(new Polygon
+            {
+                Points = new PointCollection(preview.Polygon.Select(point =>
+                    new Point(point.X * AnnotationCanvas.ActualWidth, point.Y * AnnotationCanvas.ActualHeight))),
+                Stroke = Brushes.Cyan,
+                StrokeThickness = 2,
+                StrokeDashArray = [5, 3],
+                Fill = new SolidColorBrush(Color.FromArgb(65, 0, 220, 255)),
+                IsHitTestVisible = false,
+            });
+        }
+        if (_sam1ClickMode && _sam1Prompts.Count == 0 && _sam1HoverPoint is { } hoverPoint)
+        {
+            var hoverMarker = new Ellipse
+            {
+                Width = 10,
+                Height = 10,
+                Fill = Brushes.Cyan,
+                Stroke = Brushes.White,
+                StrokeThickness = 2,
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(hoverMarker, hoverPoint.X - hoverMarker.Width / 2);
+            Canvas.SetTop(hoverMarker, hoverPoint.Y - hoverMarker.Height / 2);
+            AnnotationCanvas.Children.Add(hoverMarker);
+        }
+        foreach (var prompt in _sam1Prompts)
+        {
+            var marker = new Ellipse
+            {
+                Width = 12,
+                Height = 12,
+                Fill = prompt.Label == 1 ? Brushes.LimeGreen : Brushes.Red,
+                Stroke = Brushes.White,
+                StrokeThickness = 2,
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(marker, prompt.X * AnnotationCanvas.ActualWidth - marker.Width / 2);
+            Canvas.SetTop(marker, prompt.Y * AnnotationCanvas.ActualHeight - marker.Height / 2);
+            AnnotationCanvas.Children.Add(marker);
+        }
+        if (_eraserMode && _eraserCursorPoint is { } eraserPoint)
+        {
+            _eraserStrokeVisual = new Polyline
+            {
+                Points = new PointCollection(_eraserStrokePoints),
+                Stroke = new SolidColorBrush(Color.FromArgb(150, 20, 20, 20)),
+                StrokeThickness = _eraserDiameter,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                IsHitTestVisible = false,
+            };
+            AnnotationCanvas.Children.Add(_eraserStrokeVisual);
+            _eraserCursorVisual = new Ellipse
+            {
+                Width = _eraserDiameter,
+                Height = _eraserDiameter,
+                Stroke = Brushes.White,
+                StrokeThickness = 2,
+                StrokeDashArray = [3, 2],
+                Fill = new SolidColorBrush(Color.FromArgb(45, 255, 255, 255)),
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(_eraserCursorVisual, eraserPoint.X - _eraserCursorVisual.Width / 2);
+            Canvas.SetTop(_eraserCursorVisual, eraserPoint.Y - _eraserCursorVisual.Height / 2);
+            AnnotationCanvas.Children.Add(_eraserCursorVisual);
+        }
+    }
+
+    private void UpdateEraserVisuals()
+    {
+        if (!_eraserMode || _eraserCursorPoint is not { } point) return;
+        if (_eraserStrokeVisual is null || _eraserCursorVisual is null)
+        {
+            RenderAnnotations();
+            return;
+        }
+        _eraserStrokeVisual.Points = new PointCollection(_eraserStrokePoints);
+        _eraserStrokeVisual.StrokeThickness = _eraserDiameter;
+        _eraserCursorVisual.Width = _eraserDiameter;
+        _eraserCursorVisual.Height = _eraserDiameter;
+        Canvas.SetLeft(_eraserCursorVisual, point.X - _eraserDiameter / 2);
+        Canvas.SetTop(_eraserCursorVisual, point.Y - _eraserDiameter / 2);
     }
 
     private void ClearImageView()
     {
+        ResetZoom();
         _image = null;
         _annotation = null;
-        _sam3ClickMode = false;
+        ResetSam1Interaction();
         _editingIndex = -1;
         _editMode = EditMode.None;
         _editOriginal = null;
@@ -786,9 +1237,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (_dataset is null || _image is null || _annotation is null) return;
         AppServices.Instance.Datasets.SaveAnnotation(_dataset, _annotation);
         var relativePath = _image.RelativePath;
-        var images = AppServices.Instance.Datasets.ListImages(_dataset);
-        ImageList.ItemsSource = images;
-        ImageList.SelectedItem = images.FirstOrDefault(x => x.RelativePath == relativePath);
+        RefreshImageList(relativePath, suppressSelectionChanged: true);
         StatusText.Text = $"{reason}已自动保存。";
     }
 
@@ -804,6 +1253,11 @@ public partial class DatasetAnnotationPage : UserControl
         for (var index = _annotation.Objects.Count - 1; index >= 0; index--)
         {
             var obj = _annotation.Objects[index];
+            if (obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3)
+            {
+                if (IsPointInsidePolygon(x, y, obj.Polygon)) return index;
+                continue;
+            }
             if (x >= obj.X - toleranceX && x <= obj.X + obj.Width + toleranceX &&
                 y >= obj.Y - toleranceY && y <= obj.Y + obj.Height + toleranceY)
             {
@@ -811,6 +1265,22 @@ public partial class DatasetAnnotationPage : UserControl
             }
         }
         return -1;
+    }
+
+    private static bool IsPointInsidePolygon(double x, double y, IReadOnlyList<DatasetPoint> polygon)
+    {
+        var inside = false;
+        for (var i = 0; i < polygon.Count; i++)
+        {
+            var current = polygon[i];
+            var previous = polygon[(i + polygon.Count - 1) % polygon.Count];
+            if ((current.Y > y) != (previous.Y > y) &&
+                x < ((previous.X - current.X) * (y - current.Y) / (previous.Y - current.Y)) + current.X)
+            {
+                inside = !inside;
+            }
+        }
+        return inside;
     }
 
     private EditMode GetEditMode(Point point, DatasetAnnotationObject obj)
@@ -907,6 +1377,47 @@ public partial class DatasetAnnotationPage : UserControl
     private bool IsPolygonMode() =>
         _dataset?.TaskType is "semantic_segmentation" or "instance_segmentation";
 
+    private void ManualDraw_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsPolygonMode()) return;
+        ResetSam1Interaction();
+        _manualDrawMode = true;
+        _eraserMode = false;
+        _eraserDragging = false;
+        _eraserCursorPoint = null;
+        AnnotationCanvas.ReleaseMouseCapture();
+        CancelPolygonDraft();
+        UpdateTaskTypeUi();
+        RenderAnnotations();
+        StatusText.Text = "手动绘制已开启：依次单击添加轮廓点，双击完成并保存分割区域。";
+    }
+
+    private void Eraser_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsPolygonMode()) return;
+        ResetSam1Interaction();
+        _manualDrawMode = false;
+        _eraserMode = true;
+        _eraserDragging = false;
+        _eraserCursorPoint = null;
+        CancelPolygonDraft();
+        UpdateTaskTypeUi();
+        RenderAnnotations();
+        StatusText.Text = $"橡皮擦已开启：按住左键拖动擦除，滚轮调节大小；当前直径 {_eraserDiameter:0} 像素。";
+    }
+
+    private void CancelPolygonDraft()
+    {
+        _polygonPoints.Clear();
+        _polygonDraft = null;
+    }
+
+    private void UpdateToolButtons()
+    {
+        ManualDrawButton.Content = _manualDrawMode ? "手动绘制 ✓" : "手动绘制";
+        EraserButton.Content = _eraserMode ? "橡皮擦 ✓" : "橡皮擦";
+    }
+
     private void UpdateTaskTypeUi()
     {
         var taskType = _dataset?.TaskType;
@@ -923,12 +1434,31 @@ public partial class DatasetAnnotationPage : UserControl
             "instance_segmentation" => "实例分割",
             _ => "未选择",
         };
-        var shapeName = isDetection ? "矩形框" : isSegmentation ? "多边形" : "未选择";
+        var shapeName = isDetection ? "矩形框" : taskType == "instance_segmentation" ? "多边形（YOLO11-seg）" : isSegmentation ? "多边形" : "未选择";
         DatasetTaskTypeText.Text = $"标注类型：{typeName}";
         AnnotationShapeText.Text = $"形状：{shapeName}";
         YoloeButton.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
-        Sam3Button.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
-        if (!isSegmentation) _sam3ClickMode = false;
+        ManualDrawButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
+        EraserButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
+        Sam1Button.Visibility = _platform == AnnotationPlatform.Segmentation
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        Sam1Button.Content = _dataset is null
+            ? "SAM1 智能标注"
+            : taskType == "instance_segmentation"
+                ? "SAM1 点击生成实例掩膜"
+                : "SAM1 点击分割";
+        if (!isSegmentation)
+        {
+            _sam1ClickMode = false;
+            _manualDrawMode = false;
+            _eraserMode = false;
+        }
+        else if (!_sam1ClickMode && !_manualDrawMode && !_eraserMode)
+        {
+            _manualDrawMode = true;
+        }
+        UpdateToolButtons();
     }
 
     private async void YoloeCurrent_Click(object sender, RoutedEventArgs e)
@@ -973,46 +1503,258 @@ public partial class DatasetAnnotationPage : UserControl
         }
     }
 
-    private void Sam3ClickMode_Click(object sender, RoutedEventArgs e)
+    private void Sam1ClickMode_Click(object sender, RoutedEventArgs e)
     {
-        if (_dataset?.TaskType is not ("semantic_segmentation" or "instance_segmentation")) return;
+        if (_dataset?.TaskType is not ("semantic_segmentation" or "instance_segmentation"))
+        {
+            StatusText.Text = "请先在左侧新建或选择一个语义分割/实例分割数据集。";
+            return;
+        }
         if (_dataset is null || _image is null || _annotation is null || ClassCombo.SelectedItem is not string)
         {
             StatusText.Text = "请先选择数据集、图片和标注类别。";
             return;
         }
-        _sam3ClickMode = true;
-        StatusText.Text = $"{AppServices.Instance.SmartAnnotations.DescribeSam3Availability()}；请在图片上点击目标。";
+        if (_sam1ClickMode)
+        {
+            var selectedPath = _image?.RelativePath;
+            ClearSam1HoverPreview();
+            _sam1ClickMode = false;
+            _manualDrawMode = true;
+            _eraserMode = false;
+            _sam1Prompts.Clear();
+            _sam1ResultIndex = -1;
+            UpdateTaskTypeUi();
+            if (selectedPath is not null) RefreshImageList(selectedPath);
+            RenderAnnotations();
+            StatusText.Text = "SAM1 本轮智能标注已完成。";
+            return;
+        }
+        _sam1ClickMode = true;
+        _manualDrawMode = false;
+        _eraserMode = false;
+        CancelPolygonDraft();
+        _sam1Prompts.Clear();
+        _sam1ResultIndex = -1;
+        ClearSam1HoverPreview();
+        Sam1Button.Content = "完成 SAM1 标注";
+        UpdateToolButtons();
+        StatusText.Text = $"{AppServices.Instance.SmartAnnotations.DescribeSam1Availability()}；移动鼠标可预览，左键添加目标点，右键添加排除点。";
+        if (AnnotationCanvas.IsMouseOver)
+            ScheduleSam1Hover(Mouse.GetPosition(AnnotationCanvas));
     }
 
-    private async Task RunSam3ClickAsync(Point canvasPoint)
+    private async Task AddSam1PromptAsync(Point canvasPoint, int label)
     {
         if (_image is null || _annotation is null || ClassCombo.SelectedItem is not string className) return;
-        var point = new DatasetPoint
+        if (label == 0 && _sam1Prompts.All(point => point.Label == 0))
         {
-            X = Math.Clamp(canvasPoint.X / Math.Max(1, AnnotationCanvas.ActualWidth), 0, 1),
-            Y = Math.Clamp(canvasPoint.Y / Math.Max(1, AnnotationCanvas.ActualHeight), 0, 1),
-        };
+            StatusText.Text = "请先用左键点击需要保留的目标，再用右键排除多余区域。";
+            return;
+        }
+        ClearSam1HoverPreview();
+        _sam1Prompts.Add(new Sam1Prompt(
+            Math.Clamp(canvasPoint.X / Math.Max(1, AnnotationCanvas.ActualWidth), 0, 1),
+            Math.Clamp(canvasPoint.Y / Math.Max(1, AnnotationCanvas.ActualHeight), 0, 1),
+            label));
+        var promptVersion = ++_sam1PromptVersion;
+        var image = _image;
+        RenderAnnotations();
         try
         {
-            StatusText.Text = "SAM3 正在根据点击生成分割掩码，请稍候……";
-            var result = await AppServices.Instance.SmartAnnotations.RunSam3ClickAsync(
-                _image.FullPath, point, className);
+            var positive = _sam1Prompts.Count(point => point.Label == 1);
+            var negative = _sam1Prompts.Count - positive;
+            StatusText.Text = $"SAM1 正在计算：{positive} 个目标点，{negative} 个排除点……";
+            var result = await AppServices.Instance.SmartAnnotations.RunSam1ClickAsync(
+                image.FullPath, _sam1Prompts.ToArray(), className);
+            if (promptVersion != _sam1PromptVersion || !ReferenceEquals(image, _image)) return;
             if (result is null)
             {
-                StatusText.Text = "SAM3 没有返回有效分割区域。";
+                StatusText.Text = "SAM1 没有返回有效分割区域。";
                 return;
             }
-            _annotation.Objects.Add(ToDatasetObject(result));
-            RefreshAnnotationList(_annotation.Objects.Count - 1);
+            var datasetObject = ToDatasetObject(result);
+            if (_sam1ResultIndex >= 0 && _sam1ResultIndex < _annotation.Objects.Count)
+                _annotation.Objects[_sam1ResultIndex] = datasetObject;
+            else
+            {
+                _annotation.Objects.Add(datasetObject);
+                _sam1ResultIndex = _annotation.Objects.Count - 1;
+            }
+            RefreshAnnotationList(_sam1ResultIndex);
+            RenderAnnotations();
             AppServices.Instance.Datasets.SaveAnnotation(_dataset!, _annotation);
-            ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset!);
-            StatusText.Text = $"SAM3 点击分割已生成并保存：{_image.RelativePath}。";
+            StatusText.Text = $"SAM1 掩膜已更新：左键继续保留，右键继续排除；目标点 {positive}，排除点 {negative}。";
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"SAM3 点击分割失败：{ex.Message}";
+            StatusText.Text = $"SAM1 点击分割失败：{ex.Message}";
         }
+    }
+
+    private async void DatasetAnnotationPage_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_sam1ClickMode || e.Key != Key.Z ||
+            (Keyboard.Modifiers & ModifierKeys.Control) == 0)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await UndoLastSam1PromptAsync();
+    }
+
+    private async Task UndoLastSam1PromptAsync()
+    {
+        if (_image is null || _annotation is null || _dataset is null ||
+            ClassCombo.SelectedItem is not string className)
+        {
+            return;
+        }
+        if (_sam1Prompts.Count == 0)
+        {
+            StatusText.Text = "SAM1 当前没有可以撤销的点击。";
+            return;
+        }
+
+        var removed = _sam1Prompts[^1];
+        _sam1Prompts.RemoveAt(_sam1Prompts.Count - 1);
+        var version = ++_sam1PromptVersion;
+        var image = _image;
+        ClearSam1HoverPreview();
+
+        if (_sam1Prompts.Count == 0)
+        {
+            if (_sam1ResultIndex >= 0 && _sam1ResultIndex < _annotation.Objects.Count)
+            {
+                _annotation.Objects.RemoveAt(_sam1ResultIndex);
+                _sam1ResultIndex = -1;
+                AppServices.Instance.Datasets.SaveAnnotation(_dataset, _annotation);
+                RefreshImageList(image.RelativePath, suppressSelectionChanged: true);
+            }
+            RefreshAnnotationList(-1);
+            RenderAnnotations();
+            StatusText.Text = $"已撤销最近的 SAM1 {(removed.Label == 1 ? "目标点" : "排除点")}；本轮掩膜已移除。";
+            if (AnnotationCanvas.IsMouseOver)
+                ScheduleSam1Hover(Mouse.GetPosition(AnnotationCanvas));
+            return;
+        }
+
+        RenderAnnotations();
+        try
+        {
+            StatusText.Text = "正在撤销最近的 SAM1 点击并重新计算掩膜……";
+            var prompts = _sam1Prompts.ToArray();
+            var result = await AppServices.Instance.SmartAnnotations.RunSam1ClickAsync(
+                image.FullPath, prompts, className);
+            if (version != _sam1PromptVersion || !ReferenceEquals(image, _image) || result is null) return;
+
+            var datasetObject = ToDatasetObject(result);
+            if (_sam1ResultIndex >= 0 && _sam1ResultIndex < _annotation.Objects.Count)
+                _annotation.Objects[_sam1ResultIndex] = datasetObject;
+            else
+            {
+                _annotation.Objects.Add(datasetObject);
+                _sam1ResultIndex = _annotation.Objects.Count - 1;
+            }
+            RefreshAnnotationList(_sam1ResultIndex);
+            RenderAnnotations();
+            AppServices.Instance.Datasets.SaveAnnotation(_dataset, _annotation);
+            RefreshImageList(image.RelativePath, suppressSelectionChanged: true);
+            StatusText.Text = $"已撤销最近的 SAM1 {(removed.Label == 1 ? "目标点" : "排除点")}，掩膜已恢复到上一步。";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"SAM1 撤销失败：{ex.Message}";
+        }
+    }
+
+    private void ResetSam1Interaction()
+    {
+        ResetSam1ImageState();
+        _sam1ClickMode = false;
+    }
+
+    private void ResetSam1ImageState()
+    {
+        ClearSam1HoverPreview();
+        _sam1Prompts.Clear();
+        _sam1ResultIndex = -1;
+        _sam1PromptVersion++;
+    }
+
+    private async void Sam1HoverTimer_Tick(object? sender, EventArgs e)
+    {
+        _sam1HoverTimer.Stop();
+        if (_sam1HoverBusy || !_sam1ClickMode || _sam1Prompts.Count > 0 ||
+            _sam1HoverPoint is not { } canvasPoint || _image is null ||
+            ClassCombo.SelectedItem is not string className)
+        {
+            return;
+        }
+
+        var version = _sam1HoverVersion;
+        var image = _image;
+        var prompt = new Sam1Prompt(
+            Math.Clamp(canvasPoint.X / Math.Max(1, AnnotationCanvas.ActualWidth), 0, 1),
+            Math.Clamp(canvasPoint.Y / Math.Max(1, AnnotationCanvas.ActualHeight), 0, 1),
+            1);
+        _sam1HoverBusy = true;
+        try
+        {
+            StatusText.Text = "SAM1 正在生成悬浮预览……";
+            var result = await AppServices.Instance.SmartAnnotations.RunSam1ClickAsync(
+                image.FullPath, [prompt], className);
+            if (_sam1ClickMode && _sam1Prompts.Count == 0 && _sam1HoverPoint is not null &&
+                ReferenceEquals(image, _image))
+            {
+                _sam1HoverPreview = result;
+                RenderAnnotations();
+                StatusText.Text = "青色区域为预览；左键确认目标，右键可在确认后排除多余区域。";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_sam1ClickMode) StatusText.Text = $"SAM1 悬浮预览失败：{ex.Message}";
+        }
+        finally
+        {
+            _sam1HoverBusy = false;
+            if (_sam1ClickMode && _sam1Prompts.Count == 0 && version != _sam1HoverVersion && _sam1HoverPoint is not null)
+            {
+                _sam1HoverTimer.Start();
+            }
+        }
+    }
+
+    private void ScheduleSam1Hover(Point canvasPoint)
+    {
+        if (_sam1HoverPoint is { } previous &&
+            Math.Abs(previous.X - canvasPoint.X) < 1 &&
+            Math.Abs(previous.Y - canvasPoint.Y) < 1)
+        {
+            return;
+        }
+
+        _sam1HoverPoint = canvasPoint;
+        _sam1HoverVersion++;
+        // Restarting the timer for every MouseMove acts as a debounce, so inference
+        // never starts until movement stops. Keep the current request running and
+        // submit the newest retained point as soon as the worker becomes available.
+        if (!_sam1HoverBusy && !_sam1HoverTimer.IsEnabled)
+        {
+            _sam1HoverTimer.Start();
+        }
+        RenderAnnotations();
+        StatusText.Text = "已捕捉悬浮位置，正在生成 SAM1 预览……";
+    }
+
+    private void ClearSam1HoverPreview()
+    {
+        _sam1HoverTimer.Stop();
+        _sam1HoverPoint = null;
+        _sam1HoverPreview = null;
+        _sam1HoverVersion++;
     }
 
     private bool TryBuildYoloeMemoryRequest(out IReadOnlyList<YoloEPrompt> prompts, out DatasetImageItem reference)

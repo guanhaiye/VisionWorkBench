@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
-using Microsoft.Win32;
 using VisionWorkbench.Application;
 using IoPath = System.IO.Path;
 
@@ -69,10 +68,8 @@ public partial class TrainingPage : UserControl
             ? "YOLO11 官方支持目标检测和实例分割训练，不支持原生语义分割训练。当前数据集需要使用 YOLO26-sem 或其他语义分割训练方案。"
             : dataset is null
                 ? "请选择一个已保存的数据集。"
-                : "训练完成后，best.pt、last.pt 和训练曲线会保存到数据集目录下的 .visionworkbench/models。选择已有 .pt 模型后将以该模型为基础继续学习。";
+                : "模型列表仅显示官方预训练模型。训练完成后，best.pt、last.pt 和训练曲线会保存到数据集目录下的 .visionworkbench/models。";
     }
-
-    private void RefreshModels_Click(object sender, RoutedEventArgs e) => RefreshModels();
 
     private void RefreshModels()
     {
@@ -81,56 +78,44 @@ public partial class TrainingPage : UserControl
         if (taskType == "detection")
         {
             options.AddRange([
-                new("使用预训练 YOLO11n（自动下载）", "models/yolo11n.pt", false),
-                new("使用预训练 YOLO11s（自动下载）", "models/yolo11s.pt", false),
-                new("使用预训练 YOLO11m（自动下载）", "models/yolo11m.pt", false),
+                OfficialModel("YOLO11n", "models/yolo11n.pt"),
+                OfficialModel("YOLO11s", "models/yolo11s.pt"),
+                OfficialModel("YOLO11m", "models/yolo11m.pt"),
+                OfficialModel("YOLO11l", "models/yolo11l.pt"),
+                OfficialModel("YOLO11x", "models/yolo11x.pt"),
             ]);
         }
         else if (taskType == "instance_segmentation")
         {
             options.AddRange([
-                new("使用预训练 YOLO11n-seg（自动下载）", "models/yolo11n-seg.pt", false),
-                new("使用预训练 YOLO11s-seg（自动下载）", "models/yolo11s-seg.pt", false),
-                new("使用预训练 YOLO11m-seg（自动下载）", "models/yolo11m-seg.pt", false),
+                OfficialModel("YOLO11n-seg", "models/yolo11n-seg.pt"),
+                OfficialModel("YOLO11s-seg", "models/yolo11s-seg.pt"),
+                OfficialModel("YOLO11m-seg", "models/yolo11m-seg.pt"),
+                OfficialModel("YOLO11l-seg", "models/yolo11l-seg.pt"),
+                OfficialModel("YOLO11x-seg", "models/yolo11x-seg.pt"),
             ]);
-        }
-
-        if (_dataset is not null && Directory.Exists(_dataset.RootDirectory))
-        {
-            try
-            {
-                var files = Directory.EnumerateFiles(_dataset.RootDirectory, "*.pt", SearchOption.AllDirectories)
-                    .Where(path => !path.Contains(IoPath.Combine(".visionworkbench", "training-data"), StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
-                options.AddRange(files.Select(path => new ModelOption(
-                    $"继续训练：{IoPath.GetRelativePath(_dataset.RootDirectory, path)}", path, true)));
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // 数据集目录权限不足时仍保留预训练模型选项。
-            }
         }
 
         ModelCombo.ItemsSource = options;
         if (options.Count > 0) ModelCombo.SelectedIndex = 0;
-        var existingCount = options.Count(x => x.IsExisting);
         var baseHint = _dataset?.TaskType == "semantic_segmentation"
             ? "YOLO11 官方支持目标检测和实例分割训练，不支持原生语义分割训练。当前数据集需要使用 YOLO26-sem 或其他语义分割训练方案。"
             : _dataset is null
                 ? "请选择一个已保存的数据集。"
-                : "训练完成后，best.pt、last.pt 和训练曲线会保存到数据集目录下的 .visionworkbench/models。选择已有 .pt 模型后将以该模型为基础继续学习。";
-        ModelHintText.Text = baseHint + (existingCount > 0
-            ? $" 当前目录发现 {existingCount} 个可继续训练的模型。"
-            : " 当前目录未发现已训练模型。");
+                : "模型列表仅显示官方预训练模型。训练完成后，best.pt、last.pt 和训练曲线会保存到数据集目录下的 .visionworkbench/models。";
+        ModelHintText.Text = baseHint;
+    }
+
+    private static ModelOption OfficialModel(string name, string modelPath)
+    {
+        var status = AppServices.Instance.Yolo11Training.IsModelAvailable(modelPath)
+            ? "本地已存在"
+            : "首次使用时下载";
+        return new ModelOption($"官方 {name}（{status}）", modelPath, false);
     }
 
     private void ModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ModelCombo.SelectedItem is ModelOption { IsExisting: true } option)
-        {
-            TrainingStatusText.Text = "已选择已有模型，开始训练时将继续学习。";
-            TrainingStatusText.Foreground = Brushes.DarkBlue;
-        }
         _ = RefreshBatchOptionsAsync();
     }
 
@@ -175,7 +160,9 @@ public partial class TrainingPage : UserControl
         var freeGiB = gpu.FreeBytes / 1024d / 1024d / 1024d;
         var imageFactor = Math.Pow(imageSize / 640d, 2);
         var modelPath = (ModelCombo.SelectedItem as ModelOption)?.ModelPath ?? "yolo11n.pt";
-        var modelFactor = modelPath.Contains("m", StringComparison.OrdinalIgnoreCase) ? 2.5
+        var modelFactor = modelPath.Contains("11x", StringComparison.OrdinalIgnoreCase) ? 5.0
+            : modelPath.Contains("11l", StringComparison.OrdinalIgnoreCase) ? 3.5
+            : modelPath.Contains("11m", StringComparison.OrdinalIgnoreCase) ? 2.5
             : modelPath.Contains("s", StringComparison.OrdinalIgnoreCase) ? 1.6
             : 1.0;
         var estimatedPerBatchGiB = 0.8 * imageFactor * modelFactor;
@@ -183,24 +170,6 @@ public partial class TrainingPage : UserControl
         var maximum = 1;
         while (maximum * 2 <= rawMaximum && maximum < 64) maximum *= 2;
         return maximum;
-    }
-
-    private void BrowseModel_Click(object sender, RoutedEventArgs e)
-    {
-        if (_dataset is null) return;
-        var dialog = new OpenFileDialog
-        {
-            Title = "选择已训练的 YOLO11 模型",
-            Filter = "PyTorch 模型 (*.pt)|*.pt",
-            CheckFileExists = true,
-        };
-        if (dialog.ShowDialog() != true) return;
-        var options = ModelCombo.Items.OfType<ModelOption>().ToList();
-        var option = new ModelOption($"手动加载：{dialog.FileName}", dialog.FileName, true);
-        options.RemoveAll(x => string.Equals(x.ModelPath, option.ModelPath, StringComparison.OrdinalIgnoreCase));
-        options.Add(option);
-        ModelCombo.ItemsSource = options;
-        ModelCombo.SelectedItem = option;
     }
 
     private async void StartTraining_Click(object sender, RoutedEventArgs e)
@@ -364,7 +333,7 @@ public partial class TrainingPage : UserControl
         const double bottom = 28;
         var plotWidth = Math.Max(1, width - left - right);
         var plotHeight = Math.Max(1, height - top - bottom);
-        var axisBrush = new SolidColorBrush(Color.FromRgb(180, 180, 180));
+        var axisBrush = ThemeBrush("BorderBrush", Colors.Gray);
         LossCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = height - bottom, Stroke = axisBrush });
         LossCanvas.Children.Add(new Line { X1 = left, Y1 = height - bottom, X2 = width - right, Y2 = height - bottom, Stroke = axisBrush });
         if (_lossPoints.Count == 0) return;
@@ -380,7 +349,7 @@ public partial class TrainingPage : UserControl
         var maxLoss = Math.Max(minLoss + 0.001, dataMax + padding);
         var maxEpoch = Math.Max(1, _lossPoints.Max(point => point.Epoch));
 
-        var gridBrush = new SolidColorBrush(Color.FromRgb(232, 232, 232));
+        var gridBrush = ThemeBrush("GridLineBrush", Colors.LightGray);
         const int gridCount = 4;
         for (var index = 0; index <= gridCount; index++)
         {
@@ -399,7 +368,7 @@ public partial class TrainingPage : UserControl
             var label = new TextBlock
             {
                 Text = value.ToString("0.###"),
-                Foreground = Brushes.Gray,
+                Foreground = ThemeBrush("MutedTextBrush", Colors.Gray),
                 FontSize = 10,
                 Width = left - 6,
                 TextAlignment = TextAlignment.Right,
@@ -424,6 +393,12 @@ public partial class TrainingPage : UserControl
         TrainingLogList.Items.Add($"[{DateTime.Now:HH:mm:ss}] {message}");
         if (TrainingLogList.Items.Count > 300) TrainingLogList.Items.RemoveAt(0);
         TrainingLogList.ScrollIntoView(TrainingLogList.Items[^1]);
+    }
+
+    private static Brush ThemeBrush(string key, Color fallback)
+    {
+        return System.Windows.Application.Current?.TryFindResource(key) as Brush
+            ?? new SolidColorBrush(fallback);
     }
 
     private static bool TryParsePositive(string text, string name, out int value)

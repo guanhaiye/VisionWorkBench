@@ -238,9 +238,12 @@ public partial class LivePage : UserControl
         {
             OverlayCanvas.Children.Add(new Line
             {
-                X1 = Px(line.A.X), Y1 = Py(line.A.Y),
-                X2 = Px(line.B.X), Y2 = Py(line.B.Y),
-                Stroke = Brushes.Yellow, StrokeThickness = 2,
+                X1 = Px(line.A.X),
+                Y1 = Py(line.A.Y),
+                X2 = Px(line.B.X),
+                Y2 = Py(line.B.Y),
+                Stroke = Brushes.Yellow,
+                StrokeThickness = 2,
             });
             var dx = line.B.X - line.A.X;
             var dy = line.B.Y - line.A.Y;

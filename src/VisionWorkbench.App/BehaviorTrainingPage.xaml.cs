@@ -188,8 +188,9 @@ public partial class BehaviorTrainingPage : UserControl
         var width = Math.Max(1, LossCanvas.ActualWidth); var height = Math.Max(1, LossCanvas.ActualHeight);
         const double left = 45, top = 12, right = 12, bottom = 28;
         var plotWidth = Math.Max(1, width - left - right); var plotHeight = Math.Max(1, height - top - bottom);
-        LossCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = height - bottom, Stroke = Brushes.Gray });
-        LossCanvas.Children.Add(new Line { X1 = left, Y1 = height - bottom, X2 = width - right, Y2 = height - bottom, Stroke = Brushes.Gray });
+        var axisBrush = ThemeBrush("BorderBrush", Colors.Gray);
+        LossCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = height - bottom, Stroke = axisBrush });
+        LossCanvas.Children.Add(new Line { X1 = left, Y1 = height - bottom, X2 = width - right, Y2 = height - bottom, Stroke = axisBrush });
         if (_losses.Count == 0) return;
         var max = Math.Max(0.001, _losses.SelectMany(x => new[] { x.Train, x.Val }).Max());
         max *= 1.15; var maxEpoch = Math.Max(1, _losses.Max(x => x.Epoch));
@@ -205,6 +206,7 @@ public partial class BehaviorTrainingPage : UserControl
         }
     }
     private void AddLog(string text) { LogList.Items.Add($"[{DateTime.Now:HH:mm:ss}] {text}"); if (LogList.Items.Count > 300) LogList.Items.RemoveAt(0); LogList.ScrollIntoView(LogList.Items[^1]); }
+    private static Brush ThemeBrush(string key, Color fallback) => System.Windows.Application.Current?.TryFindResource(key) as Brush ?? new SolidColorBrush(fallback);
     private static string FindDefaultPoseModel()
     {
         var dir = new DirectoryInfo(Environment.CurrentDirectory);

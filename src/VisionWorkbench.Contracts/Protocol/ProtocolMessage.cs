@@ -90,10 +90,10 @@ public static class ProtocolMessage
 
     public static ProtocolEnvelope<T> Create<T>(
         string type, string messageId, T payload, string? correlationId = null) => new()
-    {
-        Type = type,
-        MessageId = messageId,
-        CorrelationId = correlationId,
-        Payload = payload,
-    };
+        {
+            Type = type,
+            MessageId = messageId,
+            CorrelationId = correlationId,
+            Payload = payload,
+        };
 }

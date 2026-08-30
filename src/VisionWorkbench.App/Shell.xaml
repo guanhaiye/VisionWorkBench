@@ -61,7 +61,8 @@
                         </Expander>
                         <Expander Header="数据与模型" IsExpanded="True" Foreground="White" Margin="0,2,0,0">
                             <ListBox Background="Transparent" BorderThickness="0" SelectionChanged="NavList_SelectionChanged">
-                                <ListBoxItem Content="图片标注与数据集" Tag="datasets" IsSelected="True" />
+                                <ListBoxItem Content="目标检测标注" Tag="detection-annotation" />
+                                <ListBoxItem Content="分割标注" Tag="segmentation-annotation" />
                                 <ListBoxItem Content="YOLO11 训练平台" Tag="training" />
                                 <ListBoxItem Content="行为标注平台" Tag="behavior-annotation" />
                                 <ListBoxItem Content="行为训练平台" Tag="behavior-training" />
@@ -72,6 +73,11 @@
                                 <ListBoxItem Content="历史记录" Tag="history" />
                                 <ListBoxItem Content="SPC 结果图" Tag="spc" />
                                 <ListBoxItem Content="日志管理" Tag="logs" />
+                            </ListBox>
+                        </Expander>
+                        <Expander Header="通讯管理" IsExpanded="False" Foreground="White" Margin="0,2,0,0">
+                            <ListBox Background="Transparent" BorderThickness="0" SelectionChanged="NavList_SelectionChanged">
+                                <ListBoxItem Content="TCP/IP 通讯" Tag="communication" />
                             </ListBox>
                         </Expander>
                         <Expander Header="系统管理" IsExpanded="False" Foreground="White" Margin="0,2,0,0">

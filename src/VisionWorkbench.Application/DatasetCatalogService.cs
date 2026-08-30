@@ -15,6 +15,8 @@ public sealed class DatasetDefinition
     public Dictionary<string, string> ImageSplits { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    public override string ToString() => Name;
 }
 
 public sealed record DatasetImageItem(
@@ -316,8 +318,13 @@ public sealed class DatasetCatalogService
 
     private static DatasetDefinition Clone(DatasetDefinition source) => new()
     {
-        Id = source.Id, Name = source.Name, TaskType = source.TaskType, RootDirectory = source.RootDirectory,
-        Classes = [.. source.Classes], CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt,
+        Id = source.Id,
+        Name = source.Name,
+        TaskType = source.TaskType,
+        RootDirectory = source.RootDirectory,
+        Classes = [.. source.Classes],
+        CreatedAt = source.CreatedAt,
+        UpdatedAt = source.UpdatedAt,
         ImageSplits = NormalizeSplits(source.ImageSplits),
     };
 }

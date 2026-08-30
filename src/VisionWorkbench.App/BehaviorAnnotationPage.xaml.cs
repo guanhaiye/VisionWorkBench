@@ -372,8 +372,12 @@ public partial class BehaviorAnnotationPage : UserControl
         var existing = AppServices.Instance.Datasets.List().FirstOrDefault(item => string.Equals(item.RootDirectory, _dataset.RootDirectory, StringComparison.OrdinalIgnoreCase));
         AppServices.Instance.Datasets.Save(new DatasetDefinition
         {
-            Id = existing?.Id ?? Guid.NewGuid().ToString("N"), Name = _dataset.Name, RootDirectory = _dataset.RootDirectory,
-            TaskType = "behavior", Classes = [.. _dataset.Classes], ImageSplits = existing?.ImageSplits ?? new Dictionary<string, string>(),
+            Id = existing?.Id ?? Guid.NewGuid().ToString("N"),
+            Name = _dataset.Name,
+            RootDirectory = _dataset.RootDirectory,
+            TaskType = "behavior",
+            Classes = [.. _dataset.Classes],
+            ImageSplits = existing?.ImageSplits ?? new Dictionary<string, string>(),
         });
     }
 

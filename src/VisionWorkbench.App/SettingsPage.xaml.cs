@@ -1,4 +1,5 @@
 using System.IO;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
@@ -31,6 +32,13 @@ public partial class SettingsPage : UserControl
             RoleCombo.SelectedItem = item;
         }
         OperatorNameText.Text = s.OperatorName;
+        ThemeCombo.SelectedItem = ThemeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.ThemeMode, StringComparison.OrdinalIgnoreCase));
+        if (ThemeCombo.SelectedItem is null) ThemeCombo.SelectedIndex = 0;
+        UiScaleCombo.SelectedItem = UiScaleCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => double.TryParse(item.Tag?.ToString(), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var scale) && Math.Abs(scale - s.UiScale) < 0.001);
+        if (UiScaleCombo.SelectedItem is null) UiScaleCombo.SelectedIndex = 2;
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -60,7 +68,14 @@ public partial class SettingsPage : UserControl
         s.OperatorName = string.IsNullOrWhiteSpace(OperatorNameText.Text.Trim())
             ? Environment.UserName
             : OperatorNameText.Text.Trim();
+        s.ThemeMode = (ThemeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "light";
+        s.UiScale = double.TryParse((UiScaleCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            NumberStyles.Float, CultureInfo.InvariantCulture, out var uiScale)
+            ? Math.Clamp(uiScale, 0.8, 1.5)
+            : 1.0;
         AppServices.Instance.SaveUserSettings();
+        ThemeManager.Apply(s.ThemeMode);
+        ThemeManager.ApplyUiScale(s.UiScale);
         SaveHintText.Text = dataDirChanged ? "已保存（数据目录改动重启后生效）" : "已保存";
     }
 

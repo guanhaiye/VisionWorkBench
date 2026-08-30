@@ -10,7 +10,7 @@
             <TextBlock Text="行为识别训练平台" FontSize="20" FontWeight="Bold" />
             <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Foreground="DarkGreen" VerticalAlignment="Center" />
         </DockPanel>
-        <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1" Padding="8">
+        <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" Padding="8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="320" />
@@ -67,9 +67,9 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="260" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                     <DockPanel Grid.Row="0" Margin="0,0,0,6">
                         <TextBlock Text="Loss 曲线" FontSize="16" FontWeight="Bold" />
-                        <TextBlock x:Name="CurrentLossText" DockPanel.Dock="Right" Foreground="#555" />
+                        <TextBlock x:Name="CurrentLossText" DockPanel.Dock="Right" Foreground="{DynamicResource MutedTextBrush}" />
                     </DockPanel>
-                    <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1" Background="White">
+                    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource SurfaceBrush}">
                         <Canvas x:Name="LossCanvas" SizeChanged="LossCanvas_SizeChanged" />
                     </Border>
                     <GroupBox Grid.Row="2" Header="训练日志" Margin="0,8,0,0">

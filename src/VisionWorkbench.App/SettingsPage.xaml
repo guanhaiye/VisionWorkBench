@@ -32,6 +32,32 @@
                 </ComboBox>
             </GroupBox>
 
+            <GroupBox Header="界面主题（立即生效）">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="右侧页面颜色风格：" Margin="0,0,10,0"/>
+                    <ComboBox x:Name="ThemeCombo" Width="180">
+                        <ComboBoxItem Content="日间模式" Tag="light"/>
+                        <ComboBoxItem Content="夜间模式" Tag="dark"/>
+                    </ComboBox>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="全局字体大小（保存后立即生效）">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="界面缩放比例：" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="UiScaleCombo" Width="200" HorizontalContentAlignment="Center">
+                        <ComboBoxItem Content="较小（80%）" Tag="0.8"/>
+                        <ComboBoxItem Content="小（90%）" Tag="0.9"/>
+                        <ComboBoxItem Content="标准（100%）" Tag="1.0"/>
+                        <ComboBoxItem Content="大（110%）" Tag="1.1"/>
+                        <ComboBoxItem Content="较大（125%）" Tag="1.25"/>
+                        <ComboBoxItem Content="特大（150%）" Tag="1.5"/>
+                    </ComboBox>
+                    <TextBlock Text="全局文字将同比缩放" Margin="12,0,0,0"
+                               Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </GroupBox>
+
             <GroupBox Header="角色与操作者（v1 免密切换——已知限制 #8）">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="角色：" VerticalAlignment="Center" />

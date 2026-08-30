@@ -1,0 +1,41 @@
+<UserControl x:Class="VisionWorkbench.App.WelcomePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{DynamicResource SurfaceBrush}">
+    <Grid Background="{DynamicResource SurfaceAltBrush}">
+        <Ellipse Width="520" Height="520" Fill="#142563EB" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-230,-170,0"/>
+        <Ellipse Width="360" Height="360" Fill="#0D14B8A6" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-160,0,0,-190"/>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid MinHeight="650" Margin="54,42">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="780">
+                    <Border Width="154" Height="154" CornerRadius="34" Background="White" Padding="18">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#2563EB" BlurRadius="30" ShadowDepth="7" Opacity="0.22"/>
+                        </Border.Effect>
+                        <Image Source="/Assets/Branding/visionworkbench-logo-v1.png" Stretch="Uniform"/>
+                    </Border>
+                    <TextBlock Text="VisionWorkbench" FontSize="38" FontWeight="Bold"
+                               Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center" Margin="0,26,0,0"/>
+                    <TextBlock Text="AI 视觉工作台" FontSize="20" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" Margin="0,7,0,0"/>
+                    <TextBlock Text="面向工业视觉场景的一体化工作平台，覆盖数据标注、模型训练、实时检测、行为识别与 TCP/IP 任务通讯。"
+                               FontSize="14" LineHeight="25" TextAlignment="Center" TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,22,0,0"/>
+                    <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0">
+                        <Border Background="#E8F0FF" CornerRadius="14" Padding="14,7" Margin="4"><TextBlock Text="目标检测" Foreground="#1D4ED8"/></Border>
+                        <Border Background="#E8F8F4" CornerRadius="14" Padding="14,7" Margin="4"><TextBlock Text="智能分割" Foreground="#0F766E"/></Border>
+                        <Border Background="#F3E8FF" CornerRadius="14" Padding="14,7" Margin="4"><TextBlock Text="行为识别" Foreground="#7E22CE"/></Border>
+                        <Border Background="#FFF3E6" CornerRadius="14" Padding="14,7" Margin="4"><TextBlock Text="工业通讯" Foreground="#C2410C"/></Border>
+                    </WrapPanel>
+                    <Border Width="92" Height="3" Background="{DynamicResource AccentBrush}" CornerRadius="2" Margin="0,32,0,20"/>
+                    <TextBlock Text="AI改变世界" FontSize="28" FontWeight="Bold" FontStyle="Italic"
+                               Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="VersionText" Text="版本 0.1.0" FontSize="12"
+                               Foreground="{DynamicResource MutedTextBrush}" HorizontalAlignment="Center" Margin="0,22,0,0"/>
+                    <TextBlock Text="请从左侧菜单选择需要使用的功能" FontSize="12"
+                               Foreground="{DynamicResource MutedTextBrush}" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

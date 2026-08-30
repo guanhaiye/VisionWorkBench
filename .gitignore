@@ -4,6 +4,7 @@ obj/
 .vs/
 .idea/
 TestResults/
+artifacts/
 workers/.venv/
 /workers/yolo11/.venv/
 /workers/yolo11/.pip-download/
@@ -18,8 +19,10 @@ workers/.venv/
 /.pytest-yolo/
 /workers/yolo11/.runtime/
 /workers/yolo11/persistent_cache.json
+/workers/yolo11/models/*.pt
 /workers/yoloe/models/
 /workers/sam3/models/
+/workers/sam1/models/
 samples/
 data/
 *.log

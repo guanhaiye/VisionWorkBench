@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using VisionWorkbench.Algorithms;
 using VisionWorkbench.Application;
+using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Cameras.Files;
 using VisionWorkbench.Cameras.Usb;
@@ -22,10 +23,14 @@ public sealed class AppSettings
     public string? PluginsRoot { get; set; }
     public string? PythonExecutable { get; set; }
     public string? YoloeModelPath { get; set; }
+    public string? Sam1ModelPath { get; set; }
+    // 兼容早期预览版设置文件；新配置统一使用 Sam1ModelPath。
     public string? Sam3ModelPath { get; set; }
     public string ExecutionProvider { get; set; } = "cpu";
     public string CurrentRole { get; set; } = "engineer";
     public string OperatorName { get; set; } = Environment.UserName;
+    public string ThemeMode { get; set; } = "light";
+    public double UiScale { get; set; } = 1.0;
     public string? ResultWebhookUrl { get; set; }
 
     private static string FindProjectRoot()
@@ -72,6 +77,7 @@ public sealed class AppServices
     public SmartAnnotationService SmartAnnotations { get; private set; } = null!;
     public Yolo11TrainingService Yolo11Training { get; private set; } = null!;
     public BehaviorTrainingService BehaviorTraining { get; private set; } = null!;
+    public ProjectCommunicationManager TcpCommunication { get; private set; } = null!;
     public string SettingsFile { get; private set; } = "";
 
     private AppServices() { }
@@ -134,6 +140,9 @@ public sealed class AppServices
         Batches = new BatchRepository(Database);
         Recipes = new RecipeService(Tasks);
         BatchService = new BatchService(Batches);
+        TcpCommunication = new ProjectCommunicationManager(
+            Projects, Tasks, LoggerFactory.CreateLogger<ProjectCommunicationManager>(),
+            Path.Combine(logsDir, "tcp"));
 
         // 4. 临时图片 + 清理（FRM-005）
         TempImages = new TempImageStore(Path.Combine(Settings.DataDirectory, "temp-images")).Initialize();
@@ -160,7 +169,7 @@ public sealed class AppServices
             pluginsRoot,
             Settings.PythonExecutable,
             Settings.YoloeModelPath,
-            Settings.Sam3ModelPath);
+            Settings.Sam1ModelPath ?? Settings.Sam3ModelPath);
         Yolo11Training = new Yolo11TrainingService(pluginsRoot, Settings.PythonExecutable);
         BehaviorTraining = new BehaviorTrainingService(pluginsRoot, Settings.PythonExecutable);
         AlgorithmManager = new AlgorithmManager(new AlgorithmManagerOptions
@@ -174,6 +183,7 @@ public sealed class AppServices
         StationRuns = new StationRunCoordinator(
             Records, Batches, TempImages, ResultPublisher,
             loggerFactory.CreateLogger<StationRunCoordinator>(), loggerFactory);
+        TcpCommunication.TaskExecutor = new TcpTaskExecutionService(this).ExecuteAsync;
 
         // 7. DI 容器（页面按需取服务）
         var services = new ServiceCollection();

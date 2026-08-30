@@ -149,41 +149,41 @@ public partial class BehaviorCollectionPage : UserControl
         Dispatcher.BeginInvoke(() => _previewRenderer.Render(PreviewImage, e.Frame, maxFps: 15, force: true));
         if (!_recording) return;
         lock (_recordLock)
+        {
+            try
             {
                 try
                 {
-                    try
-                    {
-                        EnsureRecorder(e.Frame);
-                    }
-                    catch (Exception)
-                    {
-                        // 视频编码器不可用时仍保留 JPG 帧，不能让整次采集失败。
-                        _writer?.Dispose();
-                        _writer = null;
-                        if (_recordVideoPath is not null && File.Exists(_recordVideoPath)) File.Delete(_recordVideoPath);
-                        _videoEncodingFallback = true;
-                        Dispatcher.BeginInvoke(() =>
-                        {
-                            RecordStatusText.Text = "视频编码器不可用，已切换为帧序列采集";
-                            StatusText.Text = "当前系统没有可用的视频编码器；采集仍会保存 JPG 帧。";
-                        });
-                    }
-                    using var mat = Mat.FromPixelData(e.Frame.Height, e.Frame.Width, MatType.CV_8UC3, e.Frame.Pixels, e.Frame.Stride);
-                    _writer?.Write(mat);
-                    if (_recordFramesDirectory is not null)
-                    {
-                        var framePath = Path.Combine(_recordFramesDirectory, $"frame_{_recordedFrames:000000}.jpg");
-                        Cv2.ImWrite(framePath, mat);
-                    }
-                    _recordedFrames++;
+                    EnsureRecorder(e.Frame);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    _recording = false;
-                    Dispatcher.BeginInvoke(() => MessageBox.Show(ex.Message, "录制失败", MessageBoxButton.OK, MessageBoxImage.Warning));
+                    // 视频编码器不可用时仍保留 JPG 帧，不能让整次采集失败。
+                    _writer?.Dispose();
+                    _writer = null;
+                    if (_recordVideoPath is not null && File.Exists(_recordVideoPath)) File.Delete(_recordVideoPath);
+                    _videoEncodingFallback = true;
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        RecordStatusText.Text = "视频编码器不可用，已切换为帧序列采集";
+                        StatusText.Text = "当前系统没有可用的视频编码器；采集仍会保存 JPG 帧。";
+                    });
                 }
+                using var mat = Mat.FromPixelData(e.Frame.Height, e.Frame.Width, MatType.CV_8UC3, e.Frame.Pixels, e.Frame.Stride);
+                _writer?.Write(mat);
+                if (_recordFramesDirectory is not null)
+                {
+                    var framePath = Path.Combine(_recordFramesDirectory, $"frame_{_recordedFrames:000000}.jpg");
+                    Cv2.ImWrite(framePath, mat);
+                }
+                _recordedFrames++;
             }
+            catch (Exception ex)
+            {
+                _recording = false;
+                Dispatcher.BeginInvoke(() => MessageBox.Show(ex.Message, "录制失败", MessageBoxButton.OK, MessageBoxImage.Warning));
+            }
+        }
         Dispatcher.BeginInvoke(() =>
         {
             _previewRenderer.Render(PreviewImage, e.Frame, maxFps: 15);
@@ -598,7 +598,7 @@ public partial class BehaviorCollectionPage : UserControl
     {
         if (_dataset is null || _dataset.Sources.Count == 0) return;
         var answer = MessageBox.Show(
-            $"确定清空全部 { _dataset.Sources.Count } 个采集来源吗？\n对应的视频、帧文件和关联标注也会删除。",
+            $"确定清空全部 {_dataset.Sources.Count} 个采集来源吗？\n对应的视频、帧文件和关联标注也会删除。",
             "清空采集来源", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes) return;
 

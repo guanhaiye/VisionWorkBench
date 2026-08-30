@@ -1,0 +1,77 @@
+<UserControl x:Class="VisionWorkbench.App.CommunicationPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="12">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal">
+            <TextBlock Text="项目" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            <ComboBox x:Name="ProjectCombo" Width="220" SelectionChanged="Project_Changed"/>
+            <Button Content="读取配置" Click="Load_Click" Margin="8,0,0,0"/>
+            <Button Content="保存配置" Click="Save_Click" Margin="6,0,0,0"/>
+            <Button Content="启动通讯" Click="Start_Click" Margin="6,0,0,0"/>
+            <Button Content="停止通讯" Click="Stop_Click" Margin="6,0,0,0"/>
+            <TextBlock x:Name="StateText" Text="已停止" Foreground="Green" VerticalAlignment="Center" Margin="12,0,0,0"/>
+        </StackPanel>
+        <Grid Grid.Row="1" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,12,0">
+                <StackPanel>
+                    <GroupBox Header="项目通讯">
+                        <StackPanel Margin="8">
+                            <CheckBox x:Name="EnabledCheck" Content="启用 TCP/IP 通讯"/>
+                            <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="工作模式"/><ComboBox x:Name="ModeCombo" Grid.Column="1" MinWidth="190" SelectionChanged="Mode_Changed"><ComboBoxItem Content="禁用" Tag="Disabled"/><ComboBoxItem Content="服务端" Tag="Server"/><ComboBoxItem Content="客户端" Tag="Client"/></ComboBox></Grid>
+                            <TextBlock Text="监听地址" Margin="0,8,0,0"/><TextBox x:Name="ListenAddressText"/>
+                            <TextBlock Text="监听端口"/><TextBox x:Name="ListenPortText"/>
+                            <TextBlock Text="远端地址" Margin="0,8,0,0"/><TextBox x:Name="RemoteAddressText"/>
+                            <TextBlock Text="远端端口"/><TextBox x:Name="RemotePortText"/>
+                            <TextBlock Text="最大连接数"/><TextBox x:Name="MaxConnectionsText"/>
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="协议与安全" Margin="0,10,0,0">
+                        <StackPanel Margin="8">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="编码"/><ComboBox x:Name="EncodingCombo" Grid.Column="1" MinWidth="190"><ComboBoxItem Content="utf-8"/><ComboBoxItem Content="gb18030"/></ComboBox></Grid>
+                            <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="拆包方式"/><ComboBox x:Name="FrameCombo" Grid.Column="1" MinWidth="190"><ComboBoxItem Content="JSON 行（\\n）" Tag="Line"/><ComboBoxItem Content="自定义分隔符" Tag="Delimiter"/><ComboBoxItem Content="长度前缀" Tag="LengthPrefix"/></ComboBox></Grid>
+                            <TextBlock Text="消息结束符（\\n 或 HEX:0D0A）" Margin="0,8,0,0"/><TextBox x:Name="TerminatorText"/>
+                            <TextBlock Text="最大消息字节数"/><TextBox x:Name="MaxMessageText"/>
+                            <TextBlock Text="接收超时（毫秒）"/><TextBox x:Name="ReceiveTimeoutText"/>
+                            <CheckBox x:Name="AutoReconnectCheck" Content="客户端自动重连" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="任务触发与结果回传" Margin="0,10,0,0">
+                        <StackPanel Margin="8">
+                            <TextBlock Text="已配置的任务规则" FontWeight="SemiBold"/>
+                            <ListBox x:Name="TriggerRulesList" DisplayMemberPath="DisplayText" MinHeight="90" MaxHeight="150"
+                                     SelectionChanged="TriggerRule_Changed" Margin="0,5,0,4"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="新增规则" Click="NewTaskTrigger_Click"/>
+                                <Button Content="删除规则" Click="DeleteTaskTrigger_Click"/>
+                            </StackPanel>
+                            <Separator Margin="0,8"/>
+                            <TextBlock Text="检测任务"/><ComboBox x:Name="TriggerTaskCombo" DisplayMemberPath="Name" SelectionChanged="TriggerTask_Changed"/>
+                            <CheckBox x:Name="TriggerEnabledCheck" Content="启用 TCP/IP 消息触发任务" Margin="0,8,0,0"/>
+                            <TextBlock Text="匹配方式" Margin="0,8,0,0"/>
+                            <ComboBox x:Name="TriggerMatchModeCombo">
+                                <ComboBoxItem Content="完全匹配" Tag="ExactText"/>
+                                <ComboBoxItem Content="前缀匹配" Tag="Prefix"/>
+                                <ComboBoxItem Content="正则表达式" Tag="Regex"/>
+                            </ComboBox>
+                            <TextBlock Text="收到以下消息时执行" Margin="0,8,0,0"/>
+                            <TextBox x:Name="TriggerMatchValueText" AcceptsReturn="True" MinHeight="48" TextWrapping="Wrap"/>
+                            <TextBlock Text="完成后返回模板" Margin="0,8,0,0"/>
+                            <TextBox x:Name="TriggerResponseTemplateText" AcceptsReturn="True" MinHeight="90" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+                            <TextBlock Text="变量：{requestId} {task} {taskCode} {status} {decision} {count} {recordId}" TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"/>
+                            <Button Content="保存任务规则" Click="SaveTaskTrigger_Click" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="180"/></Grid.RowDefinitions>
+                <TextBlock Text="连接列表" FontWeight="Bold"/>
+                <ListBox x:Name="ConnectionsList" Grid.Row="1" Margin="0,6,0,10" DisplayMemberPath="RemoteEndpoint"/>
+                <StackPanel Grid.Row="2" Orientation="Horizontal"><TextBlock Text="手动发送" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBox x:Name="ManualText" Width="420"/><Button Content="发送" Click="Send_Click" Margin="8,0,0,0"/></StackPanel>
+                <GroupBox Header="通讯日志" Grid.Row="3" Margin="0,10,0,0"><TextBox x:Name="LogText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></GroupBox>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

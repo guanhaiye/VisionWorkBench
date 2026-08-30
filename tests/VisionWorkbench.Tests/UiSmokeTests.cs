@@ -246,6 +246,102 @@ public sealed class UiSmokeTests
     }
 
     [Fact]
+    public void Shell_TcpIpNavigation_ShowsCommunicationPage()
+    {
+        RunOnSta(() =>
+        {
+            AppServices.Instance.Initialize();
+            var shell = new Shell();
+            var pageHost = (ContentControl)FieldOf(shell, "PageHost");
+            var navigationItems = FindLogicalDescendants<ListBoxItem>(shell).ToArray();
+            var tcpItem = navigationItems.Single(item => string.Equals(item.Tag?.ToString(), "communication", StringComparison.Ordinal));
+            var historyItem = navigationItems.Single(item => string.Equals(item.Tag?.ToString(), "history", StringComparison.Ordinal));
+
+            tcpItem.IsSelected = true;
+            Pump();
+            Assert.IsType<CommunicationPage>(pageHost.Content);
+
+            historyItem.IsSelected = true;
+            Pump();
+            Assert.IsType<HistoryPage>(pageHost.Content);
+            Assert.False(tcpItem.IsSelected);
+
+            tcpItem.IsSelected = true;
+            Pump();
+            Assert.IsType<CommunicationPage>(pageHost.Content);
+            shell.Close();
+        });
+    }
+
+    [Fact]
+    public void Shell_AnnotationNavigation_SeparatesDetectionAndSegmentationPlatforms()
+    {
+        RunOnSta(() =>
+        {
+            AppServices.Instance.Initialize();
+            var shell = new Shell();
+            var pageHost = (ContentControl)FieldOf(shell, "PageHost");
+            var navigationItems = FindLogicalDescendants<ListBoxItem>(shell).ToArray();
+            var detectionItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "detection-annotation", StringComparison.Ordinal));
+            var segmentationItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "segmentation-annotation", StringComparison.Ordinal));
+
+            Assert.IsType<WelcomePage>(pageHost.Content);
+            Assert.False(detectionItem.IsSelected);
+            Assert.False(segmentationItem.IsSelected);
+
+            detectionItem.IsSelected = true;
+            Pump();
+            var detectionPage = Assert.IsType<DatasetAnnotationPage>(pageHost.Content);
+            Assert.Equal("目标检测标注平台", ((TextBlock)FieldOf(detectionPage, "PlatformTitleText")).Text);
+            Assert.Equal(Visibility.Collapsed, ((Button)FieldOf(detectionPage, "Sam1Button")).Visibility);
+            Assert.Equal("导出 YOLO 检测数据集", ((Button)FieldOf(detectionPage, "ExportDatasetButton")).Content);
+
+            segmentationItem.IsSelected = true;
+            Pump();
+            var segmentationPage = Assert.IsType<DatasetAnnotationPage>(pageHost.Content);
+            Assert.NotSame(detectionPage, segmentationPage);
+            Assert.Equal("分割标注平台", ((TextBlock)FieldOf(segmentationPage, "PlatformTitleText")).Text);
+            Assert.Equal(Visibility.Visible, ((Button)FieldOf(segmentationPage, "Sam1Button")).Visibility);
+            Assert.Equal("导出分割数据集", ((Button)FieldOf(segmentationPage, "ExportDatasetButton")).Content);
+            Assert.False(detectionItem.IsSelected);
+            shell.Close();
+        });
+    }
+
+    [Fact]
+    public void Shell_MinimizeButton_DoesNotMaximizeWindow()
+    {
+        RunOnSta(() =>
+        {
+            AppServices.Instance.Initialize();
+            var shell = new Shell { WindowState = WindowState.Normal };
+            var minimizeButton = (Button)FieldOf(shell, "MinimizeButton");
+
+            minimizeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            Assert.Equal(WindowState.Minimized, shell.WindowState);
+            shell.Close();
+        });
+    }
+
+    private static IEnumerable<T> FindLogicalDescendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+        {
+            if (child is T match)
+            {
+                yield return match;
+            }
+            foreach (var descendant in FindLogicalDescendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    [Fact]
     public void SpcPage_Loaded_DoesNotRaiseDispatcherException()
     {
         RunOnSta(() =>

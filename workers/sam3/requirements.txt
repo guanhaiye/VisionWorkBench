@@ -1,5 +1,0 @@
-numpy>=1.26
-Pillow>=10.0
-opencv-python-headless>=4.10
-# SAM3 is installed from the official Meta repository; it is intentionally
-# not pinned here because its checkpoint/runtime distribution is separate.
