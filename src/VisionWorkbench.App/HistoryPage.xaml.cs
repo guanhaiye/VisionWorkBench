@@ -7,16 +7,15 @@ using VisionWorkbench.Persistence;
 
 namespace VisionWorkbench.App;
 
-/// <summary>历史记录页（文档 §8.4）：分页查询、原图/标注图、人工纠错。</summary>
+/// <summary>历史记录页（文档 §8.4）：分页查询和原图/标注图。</summary>
 public partial class HistoryPage : UserControl
 {
-    private int _pageIndex;
-    private PagedResult<InspectionRecordEntity>? _lastResult;
-
     private sealed record TaskFilterItem(long? Id, string Name)
     {
         public long? Id { get; } = Id;
         public string Name { get; } = Name;
+
+        public override string ToString() => Name;
     }
 
     public HistoryPage()
@@ -24,6 +23,10 @@ public partial class HistoryPage : UserControl
         InitializeComponent();
         Loaded += async (_, _) =>
         {
+            if (!EnsureHistoryEnabled())
+            {
+                return;
+            }
             if (TaskFilter.Items.Count == 0)
             {
                 var tasks = await AppServices.Instance.Recipes.ListAsync();
@@ -38,12 +41,67 @@ public partial class HistoryPage : UserControl
 
     private async void Query_Click(object sender, RoutedEventArgs e)
     {
-        _pageIndex = 0;
+        if (!EnsureHistoryEnabled())
+        {
+            return;
+        }
         await Query();
+    }
+
+    private async void ClearAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureHistoryEnabled())
+        {
+            return;
+        }
+        try
+        {
+            var count = await AppServices.Instance.Records.CountAsync();
+            if (count == 0)
+            {
+                ThemedMessageBox.Show("当前没有可清理的历史记录。", "历史记录",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var confirmation = ThemedMessageBox.Show(
+                $"确定清理全部 {count} 条历史记录吗？\n\n历史记录、原图、标注结果图和证据文件都会被删除，此操作不可恢复。任务、数据集和模型不会被删除。",
+                "确认清理历史记录",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (confirmation != MessageBoxResult.OK)
+            {
+                return;
+            }
+
+            var paths = await AppServices.Instance.Records.DeleteAllAsync();
+            var failedFiles = UiFileUtilities.DeleteFiles(paths);
+            RecordsGrid.SelectedItem = null;
+            OriginalImage.Source = null;
+            AnnotatedImage.Source = null;
+            DetailText.Text = "";
+            await Query();
+            ThemedMessageBox.Show(
+                failedFiles.Count == 0
+                    ? $"已清理 {count} 条历史记录及 {paths.Count} 个本地文件。"
+                    : $"已清理 {count} 条历史记录，但有 {failedFiles.Count} 个本地文件未能删除，请检查文件是否被占用。",
+                "历史记录",
+                MessageBoxButton.OK,
+                failedFiles.Count == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"清理历史记录失败：{ex.Message}", "历史记录",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private async void ExportCsv_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureHistoryEnabled())
+        {
+            return;
+        }
         var dialog = new SaveFileDialog
         {
             Filter = "CSV 文件 (*.csv)|*.csv|所有文件 (*.*)|*.*",
@@ -59,57 +117,55 @@ public partial class HistoryPage : UserControl
             var taskId = (TaskFilter.SelectedItem as TaskFilterItem)?.Id;
             var status = (StatusFilter.SelectedItem as ComboBoxItem)?.Content as string;
             await AppServices.Instance.Records.ExportCsvAsync(new RecordQuery(
-                ProjectId: EmptyToNull(ProjectFilter.Text),
+                ProjectId: null,
                 TaskId: taskId,
-                StationCode: EmptyToNull(StationFilter.Text),
+                StationCode: null,
                 Status: status == "全部" ? null : status,
                 From: FromDate.SelectedDate is { } from ? from.Date : null,
                 To: ToDate.SelectedDate is { } to ? to.Date.AddDays(1).AddTicks(-1) : null,
-                ModelVersion: EmptyToNull(ModelFilter.Text)),
+                ModelVersion: null),
                 dialog.FileName);
-            MessageBox.Show("CSV 导出完成", "历史记录");
+            ThemedMessageBox.Show("CSV 导出完成", "历史记录");
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"CSV 导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"CSV 导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
     private async Task Query()
     {
+        if (!EnsureHistoryEnabled())
+        {
+            return;
+        }
         var taskId = (TaskFilter.SelectedItem as TaskFilterItem)?.Id;
         var status = (StatusFilter.SelectedItem as ComboBoxItem)?.Content as string;
         var query = new RecordQuery(
-            ProjectId: EmptyToNull(ProjectFilter.Text),
+            ProjectId: null,
             TaskId: taskId,
-            StationCode: EmptyToNull(StationFilter.Text),
+            StationCode: null,
             Status: status == "全部" ? null : status,
             From: FromDate.SelectedDate is { } d ? d.Date : null,
             To: ToDate.SelectedDate is { } t ? t.Date.AddDays(1).AddTicks(-1) : null,
-            ModelVersion: EmptyToNull(ModelFilter.Text));
-        _lastResult = await AppServices.Instance.Records.QueryAsync(query, _pageIndex, pageSize: 50);
-        RecordsGrid.ItemsSource = _lastResult.Items;
-        PageText.Text = _lastResult.TotalPages == 0
-            ? "0 / 0"
-            : $"{_pageIndex + 1} / {_lastResult.TotalPages}（共 {_lastResult.Total} 条）";
+            ModelVersion: null);
+        var result = await AppServices.Instance.Records.QueryAsync(query, pageIndex: 0, pageSize: 500);
+        RecordsGrid.ItemsSource = result.Items;
     }
 
-    private async void PrevPage_Click(object sender, RoutedEventArgs e)
+    private bool EnsureHistoryEnabled()
     {
-        if (_lastResult is { } r && _pageIndex > 0)
+        if (AppServices.Instance.Settings.EnableHistory)
         {
-            _pageIndex--;
-            await Query();
+            return true;
         }
-    }
 
-    private async void NextPage_Click(object sender, RoutedEventArgs e)
-    {
-        if (_lastResult is { } r && _pageIndex < r.TotalPages - 1)
-        {
-            _pageIndex++;
-            await Query();
-        }
+        RecordsGrid.ItemsSource = Array.Empty<InspectionRecordEntity>();
+        RecordsGrid.SelectedItem = null;
+        OriginalImage.Source = null;
+        AnnotatedImage.Source = null;
+        DetailText.Text = "历史记录已关闭，请在系统设置中开启。";
+        return false;
     }
 
     private void RecordsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -118,107 +174,14 @@ public partial class HistoryPage : UserControl
         {
             return;
         }
-        ShowImage(OriginalImage, record.OriginalImagePath);
-        ShowImage(AnnotatedImage, record.AnnotatedImagePath);
+        UiFileUtilities.ShowImage(OriginalImage, record.OriginalImagePath);
+        UiFileUtilities.ShowImage(AnnotatedImage, record.AnnotatedImagePath);
+        OriginalImageViewer.FitToWindow();
+        ResultImageViewer.FitToWindow();
         DetailText.Text = $"记录 {record.Id} | 项目 {record.ProjectId} | 工位 {record.StationCode} | 任务 {record.TaskId} | 批次 {record.BatchId?.ToString() ?? "—"}\n"
             + $"{record.StartedAt:yyyy-MM-dd HH:mm:ss} → {(record.CompletedAt?.ToString("HH:mm:ss") ?? "—")}\n"
-            + $"插件: {record.PluginVersion ?? "—"} | 已纠错: {(record.WasCorrected ? "是" : "否")}\n"
+            + $"插件: {record.PluginVersion ?? "—"}\n"
             + $"判定: {record.FinalResultJson}";
     }
 
-    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static void ShowImage(Image image, string? path)
-    {
-        try
-        {
-            image.Source = path is not null && File.Exists(path)
-                ? new System.Windows.Media.Imaging.BitmapImage(new Uri(path))
-                : null;
-        }
-        catch (Exception)
-        {
-            image.Source = null;
-        }
-    }
-
-    private async void Correct_Click(object sender, RoutedEventArgs e)
-    {
-        if (RecordsGrid.SelectedItem is not InspectionRecordEntity record)
-        {
-            MessageBox.Show("先选择一条记录", "提示");
-            return;
-        }
-        var dialog = new CorrectionDialog($"纠错记录 {record.Id}（{record.Status}）", hideDelta: true)
-        {
-            Owner = Window.GetWindow(this),
-        };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-        try
-        {
-            await AppServices.Instance.Records.AddCorrectionAsync(
-                record.Id,
-                beforeJson: record.FinalResultJson,
-                afterJson: System.Text.Json.JsonSerializer.Serialize(new { corrected = true, @operator = dialog.OperatorName }),
-                reason: dialog.Reason,
-                operatorName: dialog.OperatorName);
-            MessageBox.Show("纠错已保存", "历史记录");
-            await Query();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"纠错失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private async void ReInference_Click(object sender, RoutedEventArgs e)
-    {
-        if (RecordsGrid.SelectedItem is not InspectionRecordEntity record)
-        {
-            MessageBox.Show("先选择一条有原图的记录", "提示");
-            return;
-        }
-        var recipe = await AppServices.Instance.Recipes.FindAsync(record.TaskId);
-        if (recipe is not { } pair)
-        {
-            MessageBox.Show("关联任务不存在，无法重新推理", "错误");
-            return;
-        }
-        var dialog = new ReInferenceDialog(pair.Recipe.SettingsJson)
-        {
-            Owner = Window.GetWindow(this),
-        };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-        try
-        {
-            var result = await AppServices.Instance.ReInference.RunAsync(
-                record.Id, pair.Recipe.PluginId, dialog.SettingsJson, dialog.ModelVersion);
-            MessageBox.Show($"重新推理完成，新记录 ID：{result.Id}", "历史记录");
-            await Query();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"重新推理失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private async void HistoryOfCorrections_Click(object sender, RoutedEventArgs e)
-    {
-        if (RecordsGrid.SelectedItem is not InspectionRecordEntity record)
-        {
-            return;
-        }
-        var corrections = await AppServices.Instance.Records.ListCorrectionsAsync(record.Id);
-        var text = corrections.Count == 0
-            ? "无修正记录"
-            : string.Join("\n\n", corrections.Select(c =>
-                $"{c.CorrectedAt:yyyy-MM-dd HH:mm:ss} {c.OperatorName}\n原因: {c.Reason}"));
-        MessageBox.Show(text, $"记录 {record.Id} 修正历史");
-    }
 }

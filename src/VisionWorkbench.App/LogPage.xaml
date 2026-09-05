@@ -9,11 +9,17 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+        <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
+            <DockPanel.Resources>
+                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                    <Setter Property="DockPanel.Dock" Value="Right" />
+                </Style>
+            </DockPanel.Resources>
             <TextBlock Text="日志管理" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" />
             <Button Content="刷新日志" Click="Refresh_Click" Margin="18,0,0,0" Padding="14,4" />
             <Button Content="打开日志目录" Click="OpenDirectory_Click" Margin="8,0,0,0" Padding="14,4" />
             <Button Content="导出当前日志" Click="Export_Click" Margin="8,0,0,0" Padding="14,4" />
+            <Button x:Name="ClearAllButton" Content="清空日志" Click="ClearAll_Click" Margin="8,0,0,0" Padding="14,4" />
         </DockPanel>
 
         <Border Grid.Row="1" BorderBrush="#DDD" BorderThickness="0,1,0,1" Padding="6" Margin="0,0,0,8">
@@ -49,7 +55,65 @@
             </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="时间" Binding="{Binding Timestamp, StringFormat=yyyy-MM-dd HH:mm:ss.fff}" Width="165" />
-                <DataGridTextColumn Header="等级" Binding="{Binding Level}" Width="70" />
+                <DataGridTemplateColumn Header="等级" Width="76">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="5" Padding="7,3" HorizontalAlignment="Center" BorderThickness="1">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="#F1F5F9" />
+                                        <Setter Property="BorderBrush" Value="#CBD5E1" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding LevelKey}" Value="debug">
+                                                <Setter Property="Background" Value="#F1F5F9" />
+                                                <Setter Property="BorderBrush" Value="#CBD5E1" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LevelKey}" Value="information">
+                                                <Setter Property="Background" Value="#DBEAFE" />
+                                                <Setter Property="BorderBrush" Value="#93C5FD" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LevelKey}" Value="warning">
+                                                <Setter Property="Background" Value="#FEF3C7" />
+                                                <Setter Property="BorderBrush" Value="#FCD34D" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LevelKey}" Value="error">
+                                                <Setter Property="Background" Value="#FEE2E2" />
+                                                <Setter Property="BorderBrush" Value="#FCA5A5" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LevelKey}" Value="critical">
+                                                <Setter Property="Background" Value="#EDE9FE" />
+                                                <Setter Property="BorderBrush" Value="#C4B5FD" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Text="{Binding Level}" HorizontalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="#64748B" />
+                                            <Setter Property="FontWeight" Value="SemiBold" />
+                                            <Setter Property="FontSize" Value="11" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LevelKey}" Value="information">
+                                                    <Setter Property="Foreground" Value="#1D4ED8" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding LevelKey}" Value="warning">
+                                                    <Setter Property="Foreground" Value="#B45309" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding LevelKey}" Value="error">
+                                                    <Setter Property="Foreground" Value="#B91C1C" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding LevelKey}" Value="critical">
+                                                    <Setter Property="Foreground" Value="#6D28D9" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="150" />
                 <DataGridTextColumn Header="日志内容" Binding="{Binding Message}" Width="*" />
                 <DataGridTextColumn Header="文件" Binding="{Binding FileName}" Width="160" />

@@ -2,17 +2,24 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:media="clr-namespace:System.Windows.Media;assembly=PresentationCore"
         Title="VisionWorkbench &#x2014; AI &#x89C6;&#x89C9;&#x5DE5;&#x4F5C;&#x53F0;" Width="1360" Height="860"
         MinWidth="1100" MinHeight="700" WindowStartupLocation="CenterScreen"
-        WindowStyle="None" Background="{DynamicResource WindowBrush}">
+        WindowStyle="None" Background="{DynamicResource WindowBrush}" Topmost="False">
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+        <shell:WindowChrome CaptionHeight="46" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
     <Window.Icon>
-        <BitmapImage UriSource="/Assets/Branding/visionworkbench-taskbar.ico" />
+        <BitmapImage UriSource="/Assets/Branding/logo.png" />
     </Window.Icon>
     <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- 允许 Shell 在没有 Application 实例的设计器/UI 测试中独立加载。 -->
+                <ResourceDictionary Source="Theme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
         <Style TargetType="Expander">
+            <EventSetter Event="Expanded" Handler="SidebarExpander_Expanded" />
             <Setter Property="Foreground" Value="#9FB0CA" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -22,6 +29,8 @@
         <Style TargetType="ListBox">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
         </Style>
         <Style x:Key="UserHeaderButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
@@ -95,6 +104,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        </ResourceDictionary>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -111,20 +121,82 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                        <Image Source="/Assets/Branding/visionworkbench-taskbar.png" Width="25" Height="25" Stretch="Uniform"/>
+                        <Image Source="/Assets/Branding/logo.png" Width="25" Height="25" Stretch="Uniform"
+                               RenderTransformOrigin="0.5,0.5">
+                            <Image.RenderTransform>
+                                <media:RotateTransform x:Name="BrandLogoRotation" Angle="0" />
+                            </Image.RenderTransform>
+                            <Image.Triggers>
+                                <EventTrigger RoutedEvent="MouseEnter">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="BrandLogoRotation"
+                                                             Storyboard.TargetProperty="Angle"
+                                                             From="0" To="360" Duration="0:0:0.7"
+                                                             FillBehavior="Stop" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Image.Triggers>
+                        </Image>
                         <TextBlock Text="VisionWorkbench" FontWeight="SemiBold" FontSize="13" Margin="10,0,0,0" Foreground="{DynamicResource TextBrush}"/>
                         <TextBlock Text="  ·  AI 视觉工作台" FontSize="12" Foreground="{DynamicResource MutedTextBrush}"/>
                     </StackPanel>
                 </Border>
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                    <Button x:Name="MinimizeButton" Style="{StaticResource TitleBarButton}" shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="最小化" Click="MinimizeWindow_Click">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Panel.ZIndex="100"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True">
+                    <Button x:Name="HelpButton" Style="{StaticResource TitleBarButton}"
+                            Width="46" Content="？" FontSize="18" FontWeight="SemiBold"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True" Focusable="True"
+                            ToolTip="&#x6253;&#x5F00;&#x5E2;&#x52A9;&#x83DC;&#x5355;"
+                            PreviewMouseLeftButtonDown="HelpButton_PreviewMouseLeftButtonDown"
+                            />
+                    <Button x:Name="TopmostButton" Style="{StaticResource TitleBarButton}"
+                            Width="46"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True" Focusable="True"
+                            ToolTip="切换窗口置顶"
+                            PreviewMouseLeftButtonDown="TopmostButton_PreviewMouseLeftButtonDown"
+                            >
+                        <Grid Width="22" Height="22">
+                            <Path x:Name="TopmostInactiveIcon" Width="16" Height="16"
+                                  Data="M 5,1 L 9,1 L 9,4 L 11,6 L 9,7 L 9,9 L 7,10 L 5,9 L 5,7 L 3,6 L 5,4 Z M 7,10 L 7,13"
+                                  Fill="Transparent" Stroke="#DCE6F5" StrokeThickness="1.5"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Path.RenderTransform>
+                                    <media:RotateTransform Angle="35" CenterX="7" CenterY="7" />
+                                </Path.RenderTransform>
+                            </Path>
+                            <Border x:Name="TopmostActiveIconBackground" Width="22" Height="22"
+                                    CornerRadius="3" Background="#4F8DE8" Visibility="Collapsed">
+                                <Path x:Name="TopmostActiveIcon" Width="16" Height="16"
+                                      Data="M 5,1 L 9,1 L 9,4 L 11,6 L 9,7 L 9,9 L 7,10 L 5,9 L 5,7 L 3,6 L 5,4 Z M 7,10 L 7,13"
+                                      Fill="White" Stroke="White" StrokeThickness="1.2"
+                                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="MinimizeButton" Style="{StaticResource TitleBarButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True" Focusable="True"
+                            ToolTip="最小化" Click="MinimizeWindow_Click"
+                            PreviewMouseLeftButtonDown="MinimizeWindow_PreviewMouseLeftButtonDown">
                         <Path Data="M 1,8 L 11,8" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.4"/>
                     </Button>
-                    <Button x:Name="MaximizeButton" Style="{StaticResource TitleBarButton}" shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="最大化" Click="MaximizeWindow_Click">
+                    <Button x:Name="MaximizeButton" Style="{StaticResource TitleBarButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True" Focusable="True"
+                            ToolTip="最大化" PreviewMouseLeftButtonDown="MaximizeWindow_PreviewMouseLeftButtonDown">
                         <Path x:Name="MaximizeIcon" Data="M 1,1 L 11,1 11,11 1,11 Z" Fill="Transparent"
                               Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2"/>
                     </Button>
-                    <Button shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="关闭" Click="CloseWindow_Click">
+                    <Button x:Name="CloseButton" shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True" Focusable="True"
+                            ToolTip="关闭" PreviewMouseLeftButtonDown="CloseWindow_PreviewMouseLeftButtonDown">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource TitleBarButton}">
                                 <Style.Triggers>
@@ -149,7 +221,7 @@
                     <Button x:Name="UserMenuButton" Style="{StaticResource UserHeaderButton}" Click="UserMenu_Click" ToolTip="用户管理">
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/></Grid.ColumnDefinitions>
-                            <Border Width="44" Height="44" CornerRadius="22" Background="#2563EB" VerticalAlignment="Center">
+                            <Border x:Name="UserAvatarBorder" Width="44" Height="44" CornerRadius="22" Background="#2563EB" VerticalAlignment="Center">
                                 <TextBlock x:Name="UserAvatarText" Text="用" Foreground="White" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="11,0,0,0">
@@ -160,29 +232,33 @@
                         </Grid>
                     </Button>
                 </Border>
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer x:Name="SidebarScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" CanContentScroll="False"
+                              VerticalContentAlignment="Top" Focusable="True"
+                              PreviewMouseWheel="SidebarScrollViewer_PreviewMouseWheel">
                     <StackPanel>
                         <Expander Header="&#x5DE5;&#x4F5C;&#x53F0;" IsExpanded="False">
                             <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x5B9E;&#x65F6;&#x68C0;&#x6D4B;" Tag="live" />
                                 <ListBoxItem Content="&#x4EFB;&#x52A1;&#x914D;&#x7F6E;" Tag="tasks" />
-                                <ListBoxItem Content="&#x9879;&#x76EE;&#x4E0E;&#x5DE5;&#x4F4D;" Tag="stations" />
                             </ListBox>
                         </Expander>
                         <Expander Header="&#x6570;&#x636E;&#x4E0E;&#x6A21;&#x578B;" IsExpanded="False">
                             <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
-                                <ListBoxItem Content="&#x76EE;&#x6807;&#x68C0;&#x6D4B;&#x6807;&#x6CE8;" Tag="detection-annotation" />
-                                <ListBoxItem Content="&#x5206;&#x5272;&#x6807;&#x6CE8;" Tag="segmentation-annotation" />
-                                <ListBoxItem Content="YOLO11 &#x8BAD;&#x7EC3;&#x5E73;&#x53F0;" Tag="training" />
-                                <ListBoxItem Content="&#x884C;&#x4E3A;&#x6570;&#x636E;&#x91C7;&#x96C6;" Tag="behavior-collection" />
-                                <ListBoxItem Content="&#x884C;&#x4E3A;&#x6807;&#x6CE8;&#x5E73;&#x53F0;" Tag="behavior-annotation" />
-                                <ListBoxItem Content="&#x884C;&#x4E3A;&#x8BAD;&#x7EC3;&#x5E73;&#x53F0;" Tag="behavior-training" />
+                                <ListBoxItem Content="&#x76EE;&#x6807;&#x68C0;&#x6D4B;" Tag="data-model-detection" />
+                                <!-- 兼容旧导航键；新界面分别展示语义分割和实例分割。 -->
+                                <ListBoxItem Tag="data-model-segmentation" Visibility="Collapsed" />
+                                <ListBoxItem Content="&#x8BED;&#x4E49;&#x5206;&#x5272;" Tag="data-model-semantic-segmentation" />
+                                <ListBoxItem Content="&#x5B9E;&#x4F8B;&#x5206;&#x5272;" Tag="data-model-instance-segmentation" />
+                                <ListBoxItem Content="&#x884C;&#x4E3A;&#x8BC6;&#x522B;" Tag="data-model-behavior" />
+                                <ListBoxItem Content="AI&#x5B57;&#x7B26;&#x8BC6;&#x522B;" Tag="data-model-ai-text" />
+                                <ListBoxItem Content="AI&#x6761;&#x7801;&#x8BC6;&#x522B;" Tag="data-model-barcode" />
+                                <ListBoxItem Content="AI&#x4E8C;&#x7EF4;&#x7801;&#x8BC6;&#x522B;" Tag="data-model-qrcode" />
                             </ListBox>
                         </Expander>
                         <Expander Header="&#x7ED3;&#x679C;&#x67E5;&#x770B;" IsExpanded="False">
                             <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x5386;&#x53F2;&#x8BB0;&#x5F55;" Tag="history" />
-                                <ListBoxItem Content="SPC &#x7ED3;&#x679C;&#x56FE;" Tag="spc" />
                                 <ListBoxItem Content="&#x65E5;&#x5FD7;&#x7BA1;&#x7406;" Tag="logs" />
                             </ListBox>
                         </Expander>
@@ -195,13 +271,14 @@
                             <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x7B97;&#x6CD5;&#x7BA1;&#x7406;" Tag="plugins" />
                                 <ListBoxItem Content="&#x8BBE;&#x5907;&#x7BA1;&#x7406;" Tag="devices" />
+                                <ListBoxItem Content="&#x672C;&#x673A;&#x76D1;&#x63A7;" Tag="monitor" />
                                 <ListBoxItem Content="&#x7CFB;&#x7EDF;&#x8BBE;&#x7F6E;" Tag="settings" />
                             </ListBox>
                         </Expander>
                     </StackPanel>
                 </ScrollViewer>
                 <Border Grid.Row="2" BorderBrush="#243550" BorderThickness="0,1,0,0" Padding="18,11">
-                    <StackPanel Orientation="Horizontal">
+                    <StackPanel x:Name="SidebarStatusStackPanel" Orientation="Horizontal">
                         <Ellipse Width="8" Height="8" Fill="#22C55E" Margin="0,0,8,0"/>
                         <TextBlock Text="系统就绪" Foreground="#AFC0D8" FontSize="11"/>
                         <TextBlock Text="  ·  单实例运行" Foreground="#607796" FontSize="11"/>
@@ -211,12 +288,32 @@
         </Border>
         <Border Grid.Row="1" Grid.Column="1" Margin="14" Background="{DynamicResource SurfaceBrush}" CornerRadius="10" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
             <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.10" Color="#334155"/></Border.Effect>
-            <ContentControl x:Name="PageHost" Margin="1"/>
+            <ContentControl x:Name="PageHost"
+                            Margin="1"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch"/>
         </Border>
         <Popup x:Name="UserMenuPopup" PlacementTarget="{Binding ElementName=UserMenuButton}" Placement="Right"
                HorizontalOffset="8" VerticalOffset="0" StaysOpen="False" AllowsTransparency="True">
-            <Border Width="330" Background="White" BorderBrush="#D9E1EC" BorderThickness="1" CornerRadius="10" Padding="18">
+            <Border x:Name="UserPopupContentBorder" Width="330" Background="White"
+                    BorderBrush="#D9E1EC" BorderThickness="1" CornerRadius="10" Padding="18">
                 <Border.Effect><DropShadowEffect BlurRadius="22" ShadowDepth="4" Opacity="0.22" Color="#334155"/></Border.Effect>
+                <StackPanel TextElement.Foreground="#172033">
+                <Grid Margin="0,0,0,12" MinHeight="62">
+                    <StackPanel HorizontalAlignment="Left" Margin="0,0,70,0">
+                        <TextBlock Text="&#x7528;&#x6237;&#x4FE1;&#x606F;" FontSize="18" FontWeight="Bold" />
+                        <TextBlock Text="&#x5F53;&#x524D;&#x767B;&#x5F55;&#x7528;&#x6237;&#x4FE1;&#x606F;&#xFF08;&#x53EA;&#x8BFB;&#xFF09;" Foreground="#64748B"
+                                   FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Border x:Name="AvatarPreviewBorder" Width="54" Height="54" CornerRadius="27"
+                            Background="#2563EB" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Cursor="Hand" MouseLeftButtonDown="AvatarPreview_MouseLeftButtonDown">
+                        <TextBlock x:Name="AvatarPreviewText" Foreground="White" FontSize="20"
+                                   FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </Grid>
                 <StackPanel>
                     <TextBlock Text="用户管理" FontSize="18" FontWeight="Bold"/>
                     <TextBlock Text="登录信息仅保存在当前电脑" Foreground="#64748B" FontSize="11" Margin="0,3,0,14"/>
@@ -227,11 +324,59 @@
                         <ComboBoxItem Content="工程师" Tag="engineer"/>
                         <ComboBoxItem Content="专家" Tag="expert"/>
                     </ComboBox>
+                    <StackPanel x:Name="AvatarRegistrationHint" Orientation="Horizontal" Margin="0,0,0,12">
+                        <Border x:Name="AvatarRegistrationPreviewBorder" Width="54" Height="54" CornerRadius="27"
+                                Visibility="Collapsed"
+                                Background="#2563EB" VerticalAlignment="Center">
+                            <TextBlock x:Name="AvatarRegistrationPreviewText" Foreground="White" FontSize="20"
+                                       FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="头像" />
+                        </StackPanel>
+                    </StackPanel>
                     <TextBlock Text="操作员可执行任务；工程师可编辑任务；专家可修改高级参数。" Foreground="#64748B" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel x:Name="RegistrationPasswordPanel" Margin="0,0,0,12">
+                        <TextBlock Text="密码" />
+                        <PasswordBox x:Name="RegistrationPasswordBox" Margin="0,5,0,8" MinHeight="32" />
+                        <TextBlock Text="确认密码" />
+                        <PasswordBox x:Name="RegistrationConfirmPasswordBox" Margin="0,5,0,0" MinHeight="32" />
+                    </StackPanel>
+                    <StackPanel x:Name="UserActionsPanel" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="退出登录" Click="Logout_Click" Style="{StaticResource UserSecondaryButton}"/>
                         <Button Content="登录 / 保存" Click="SaveUser_Click"/>
+                        <Button x:Name="SuperAdminButton" Content="用户管理" Click="SuperAdminButton_Click"
+                                Style="{StaticResource SecondaryButton}" Visibility="Collapsed" />
                     </StackPanel>
+                </StackPanel>
+                <StackPanel x:Name="LoginPanel" Visibility="Collapsed">
+                    <TextBlock Text="用户名" />
+                    <TextBox x:Name="LoginNameText" Margin="0,5,0,10" />
+                    <TextBlock Text="密码" />
+                    <PasswordBox x:Name="LoginPasswordBox" Margin="0,5,0,14" MinHeight="32" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="注册" Click="Register_Click" Style="{StaticResource SecondaryButton}" />
+                        <Button Content="登录" Click="Login_Click" />
+                    </StackPanel>
+                </StackPanel>
+                </StackPanel>
+            </Border>
+        </Popup>
+        <Popup x:Name="HelpMenuPopup" PlacementTarget="{Binding ElementName=HelpButton}" Placement="Bottom"
+               HorizontalOffset="-82" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True">
+            <Border Width="250" Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="8">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.22" Color="#000000" />
+                </Border.Effect>
+                <StackPanel>
+                    <TextBlock Text="&#x5E2E;&#x52A9;&#x4E2D;&#x5FC3;" Margin="10,5,10,7"
+                               FontSize="15" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextBrush}" />
+                    <Button Content="Python&#x811A;&#x672C;&#x7F16;&#x5199;&#x89C4;&#x5219;"
+                            HorizontalContentAlignment="Left" Padding="12,9"
+                            Click="PythonScriptRules_Click" />
                 </StackPanel>
             </Border>
         </Popup>

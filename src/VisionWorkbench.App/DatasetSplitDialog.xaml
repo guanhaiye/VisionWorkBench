@@ -4,10 +4,18 @@
         Title="设置数据集划分比例"
         Width="430"
         Height="250"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False">
-    <StackPanel Margin="20">
+        Style="{StaticResource ThemedDialogWindow}"
+        WindowStartupLocation="CenterOwner">
+    <Border Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="10"
+            Padding="20">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="22" ShadowDepth="6" Direction="270"
+                              Opacity="0.18" Color="#334155" />
+        </Border.Effect>
+        <StackPanel>
         <TextBlock Text="设置训练集与验证集比例" FontSize="18" FontWeight="Bold" />
         <TextBlock Text="拖动滑块设置比例，确认后会覆盖当前已有的训练集/验证集划分。"
                    Margin="0,8,0,14"
@@ -30,5 +38,6 @@
             <Button Content="取消" Click="Cancel_Click" Width="76" Margin="0,0,8,0" />
             <Button Content="确定划分" Click="Confirm_Click" Width="92" />
         </StackPanel>
-    </StackPanel>
+        </StackPanel>
+    </Border>
 </Window>

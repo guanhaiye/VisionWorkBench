@@ -364,4 +364,26 @@ public sealed class FlowCountingEndToEndTests(ITestOutputHelper output)
         Assert.Equal(0.05, recipe.CountingLine.Hysteresis, 3);
         Assert.Empty(recipe.Rules);
     }
+
+    [Fact]
+    public async Task RecipeService_Saves_ContourAnalysis_Without_Rules()
+    {
+        await using var ctx = await CreateContextAsync();
+        var service = new RecipeService(ctx.Tasks);
+
+        var saved = await service.SaveAsync(new Recipe
+        {
+            Name = "contour-analysis",
+            CameraProviderId = "image-folder",
+            CameraDeviceId = "images",
+            PluginId = FlowPlugin,
+            TaskType = InspectionTaskType.ContourAnalysis,
+            Rules = [],
+        });
+
+        var found = await service.FindAsync(saved.Id);
+        Assert.NotNull(found);
+        Assert.Equal(InspectionTaskType.ContourAnalysis, found!.Value.Recipe.TaskType);
+        Assert.Empty(found.Value.Recipe.Rules);
+    }
 }

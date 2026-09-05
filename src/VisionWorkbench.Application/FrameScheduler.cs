@@ -41,10 +41,13 @@ public sealed class FrameScheduler
         Strategy = strategy;
         if (strategy == FrameRoutingStrategy.Bounded)
         {
-            _queue = Channel.CreateBounded<VideoFrame>(new BoundedChannelOptions(boundedCapacity)
+            // Bounded is a legacy name; callers rely on lossless, ordered delivery
+            // for finite file sources. DropOldest breaks tracking under load.
+            ArgumentOutOfRangeException.ThrowIfLessThan(boundedCapacity, 1);
+            _queue = Channel.CreateUnbounded<VideoFrame>(new UnboundedChannelOptions
             {
-                FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
+                SingleWriter = false,
             });
         }
     }
@@ -59,11 +62,7 @@ public sealed class FrameScheduler
         if (_queue is not null)
         {
             // DropOldest 满时丢最老；被丢的帧计入丢弃数
-            if (_queue.Writer.TryWrite(frame))
-            {
-                // 容量有限，TryWrite 失败即丢
-            }
-            else
+            if (!_queue.Writer.TryWrite(frame))
             {
                 Interlocked.Increment(ref _dropped);
             }
@@ -99,6 +98,26 @@ public sealed class FrameScheduler
         }
         _latestSignal.Release();
         SourceCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>暂停时丢弃已经排队但尚未开始处理的帧，恢复后只处理新帧。</summary>
+    public void ClearPendingFrames()
+    {
+        if (_queue is not null)
+        {
+            while (_queue.Reader.TryRead(out _))
+            {
+            }
+            return;
+        }
+
+        lock (_latestLock)
+        {
+            _latest = null;
+        }
+        while (_latestSignal.Wait(0))
+        {
+        }
     }
 
     /// <summary>

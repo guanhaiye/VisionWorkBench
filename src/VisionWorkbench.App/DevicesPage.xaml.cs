@@ -38,7 +38,7 @@ public partial class DevicesPage : UserControl
     {
         if (DevicesGrid.SelectedItem is not CameraDescriptor descriptor)
         {
-            MessageBox.Show("先扫描并选择设备", "提示");
+            ThemedMessageBox.Show("先扫描并选择设备", "提示");
             return;
         }
         if (_testSession is not null)

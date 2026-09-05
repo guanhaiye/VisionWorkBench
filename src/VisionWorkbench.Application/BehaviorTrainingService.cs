@@ -38,7 +38,7 @@ public sealed class BehaviorTrainingService : IDisposable
     {
         var yoloDirectory = Path.Combine(workersRoot, "yolo11");
         _scriptPath = Path.Combine(yoloDirectory, "behavior_train_worker.py");
-        _python = ResolvePython(configuredPython, yoloDirectory, workersRoot);
+        _python = PythonProcessSupport.ResolvePython(configuredPython, yoloDirectory, workersRoot);
     }
 
     public bool IsRunning => _process is { HasExited: false };
@@ -73,7 +73,7 @@ public sealed class BehaviorTrainingService : IDisposable
             _process = process;
             if (!process.Start()) throw new InvalidOperationException("无法启动行为训练 worker。");
 
-            using var registration = cancellationToken.Register(() => TryKill(process));
+            using var registration = cancellationToken.Register(() => PythonProcessSupport.TryKill(process));
             await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(request, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             await process.StandardInput.FlushAsync(cancellationToken);
             process.StandardInput.Close();
@@ -85,7 +85,7 @@ public sealed class BehaviorTrainingService : IDisposable
             string? line;
             while ((line = await process.StandardOutput.ReadLineAsync(cancellationToken)) is not null)
             {
-                if (!TryParseEvent(line, out var json)) continue;
+                if (!PythonProcessSupport.TryParseEvent(line, out var json)) continue;
                 var root = json.RootElement;
                 var eventName = ReadString(root, "event") ?? "log";
                 var message = ReadString(root, "message") ?? "";
@@ -121,7 +121,7 @@ public sealed class BehaviorTrainingService : IDisposable
         }
         finally
         {
-            if (_process is { HasExited: false } running) TryKill(running);
+            if (_process is { HasExited: false } running) PythonProcessSupport.TryKill(running);
             _process?.Dispose();
             _process = null;
             _gate.Release();
@@ -130,46 +130,17 @@ public sealed class BehaviorTrainingService : IDisposable
 
     public Task CancelAsync()
     {
-        if (_process is { HasExited: false } process) TryKill(process);
+        if (_process is { HasExited: false } process) PythonProcessSupport.TryKill(process);
         return Task.CompletedTask;
     }
 
     public void Dispose()
     {
-        if (_process is { HasExited: false } process) TryKill(process);
+        if (_process is { HasExited: false } process) PythonProcessSupport.TryKill(process);
         _gate.Dispose();
-    }
-
-    private static bool TryParseEvent(string line, out JsonDocument document)
-    {
-        try
-        {
-            document = JsonDocument.Parse(line);
-            return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("event", out _);
-        }
-        catch (JsonException)
-        {
-            document = null!;
-            return false;
-        }
     }
 
     private static int ReadInt(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetInt32(out var result) ? result : 0;
     private static double? ReadDouble(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetDouble(out var result) ? result : null;
     private static string? ReadString(JsonElement root, string name) => root.TryGetProperty(name, out var value) ? value.GetString() : null;
-    private static string ResolvePython(string? configured, string yoloDirectory, string workersRoot)
-    {
-        if (!string.IsNullOrWhiteSpace(configured)) return configured;
-        var candidates = new[]
-        {
-            Path.Combine(yoloDirectory, ".venv", "Scripts", "python.exe"),
-            Path.Combine(workersRoot, ".venv", "Scripts", "python.exe"),
-        };
-        return candidates.FirstOrDefault(File.Exists) ?? "python";
-    }
-
-    private static void TryKill(Process process)
-    {
-        try { if (!process.HasExited) process.Kill(true); } catch { }
-    }
 }

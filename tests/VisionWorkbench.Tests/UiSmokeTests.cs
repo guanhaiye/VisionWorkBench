@@ -90,6 +90,43 @@ public sealed class UiSmokeTests
     }
 
     [Fact]
+    public void TasksPage_NewButton_Initializes_Editor()
+    {
+        RunOnSta(() =>
+        {
+            var page = new TasksPage();
+            var button = (Button)FieldOf(page, "NewButton");
+
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            Assert.True(((StackPanel)FieldOf(page, "EditorPanel")).IsEnabled);
+            Assert.Equal("新任务", ((TextBox)FieldOf(page, "NameText")).Text);
+            var rules = (System.Collections.IEnumerable)FieldOf(page, "_rules");
+            Assert.Single(rules.Cast<object>());
+        });
+    }
+
+    [Fact]
+    public void LiveTaskPanel_StartAndPauseButtons_AreMutuallyExclusive()
+    {
+        RunOnSta(() =>
+        {
+            var panel = new LiveTaskPanel([]);
+            var start = (Button)FieldOf(panel, "StartButton");
+            var pause = (Button)FieldOf(panel, "PauseButton");
+            var setButtons = panel.GetType().GetMethod("SetButtons", Flags)!;
+
+            setButtons.Invoke(panel, [false]);
+            Assert.True(start.IsEnabled);
+            Assert.False(pause.IsEnabled);
+
+            setButtons.Invoke(panel, [true]);
+            Assert.False(start.IsEnabled);
+            Assert.True(pause.IsEnabled);
+        });
+    }
+
+    [Fact]
     public void LivePage_RecordCompleted_Draws_Overlay_And_Updates_Counters()
     {
         RunOnSta(() =>
@@ -226,22 +263,33 @@ public sealed class UiSmokeTests
     }
 
     [Fact]
-    public void SpcPage_CanBeInstantiated()
-    {
-        RunOnSta(() =>
-        {
-            var page = new SpcPage();
-            Assert.NotNull(page);
-        });
-    }
-
-    [Fact]
     public void LogPage_CanBeInstantiated()
     {
         RunOnSta(() =>
         {
             var page = new LogPage();
             Assert.NotNull(page);
+            var clearButton = (Button)FieldOf(page, "ClearAllButton");
+            Assert.Equal("清空日志", clearButton.Content);
+        });
+    }
+
+    [Fact]
+    public void DatasetSplitDialog_CanBeInstantiated_WithThemedWindowStyle()
+    {
+        RunOnSta(() =>
+        {
+            var application = System.Windows.Application.Current ?? new System.Windows.Application();
+            if (!application.Resources.Contains("ThemedDialogWindow"))
+            {
+                application.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/VisionWorkbench;component/Theme.xaml"),
+                });
+            }
+            var dialog = new DatasetSplitDialog();
+            Assert.Equal(WindowStartupLocation.CenterOwner, dialog.WindowStartupLocation);
+            dialog.Close();
         });
     }
 
@@ -274,7 +322,7 @@ public sealed class UiSmokeTests
     }
 
     [Fact]
-    public void Shell_AnnotationNavigation_SeparatesDetectionAndSegmentationPlatforms()
+    public void Shell_DataModelNavigation_SwitchesDetectionAndSegmentationPlatforms()
     {
         RunOnSta(() =>
         {
@@ -282,30 +330,62 @@ public sealed class UiSmokeTests
             var shell = new Shell();
             var pageHost = (ContentControl)FieldOf(shell, "PageHost");
             var navigationItems = FindLogicalDescendants<ListBoxItem>(shell).ToArray();
-            var detectionItem = navigationItems.Single(item =>
-                string.Equals(item.Tag?.ToString(), "detection-annotation", StringComparison.Ordinal));
-            var segmentationItem = navigationItems.Single(item =>
-                string.Equals(item.Tag?.ToString(), "segmentation-annotation", StringComparison.Ordinal));
-
             Assert.IsType<WelcomePage>(pageHost.Content);
-            Assert.False(detectionItem.IsSelected);
-            Assert.False(segmentationItem.IsSelected);
+            var detectionItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "data-model-detection", StringComparison.Ordinal));
+            var segmentationItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "data-model-segmentation", StringComparison.Ordinal));
+            var aiTextItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "data-model-ai-text", StringComparison.Ordinal));
+            var barcodeItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "data-model-barcode", StringComparison.Ordinal));
+            var qrCodeItem = navigationItems.Single(item =>
+                string.Equals(item.Tag?.ToString(), "data-model-qrcode", StringComparison.Ordinal));
 
             detectionItem.IsSelected = true;
             Pump();
-            var detectionPage = Assert.IsType<DatasetAnnotationPage>(pageHost.Content);
+            var dataModelPage = Assert.IsType<DataModelPage>(pageHost.Content);
+            var platformHost = (ContentControl)FieldOf(dataModelPage, "PlatformHost");
+
+            var detectionPage = Assert.IsType<DatasetAnnotationPage>(platformHost.Content);
             Assert.Equal("目标检测标注平台", ((TextBlock)FieldOf(detectionPage, "PlatformTitleText")).Text);
             Assert.Equal(Visibility.Collapsed, ((Button)FieldOf(detectionPage, "Sam1Button")).Visibility);
             Assert.Equal("导出 YOLO 检测数据集", ((Button)FieldOf(detectionPage, "ExportDatasetButton")).Content);
 
             segmentationItem.IsSelected = true;
             Pump();
-            var segmentationPage = Assert.IsType<DatasetAnnotationPage>(pageHost.Content);
+            var segmentationPage = Assert.IsType<DatasetAnnotationPage>(platformHost.Content);
             Assert.NotSame(detectionPage, segmentationPage);
             Assert.Equal("分割标注平台", ((TextBlock)FieldOf(segmentationPage, "PlatformTitleText")).Text);
             Assert.Equal(Visibility.Visible, ((Button)FieldOf(segmentationPage, "Sam1Button")).Visibility);
             Assert.Equal("导出分割数据集", ((Button)FieldOf(segmentationPage, "ExportDatasetButton")).Content);
             Assert.False(detectionItem.IsSelected);
+
+            aiTextItem.IsSelected = true;
+            Pump();
+            var aiTextPage = Assert.IsType<AiCharacterRecognitionPage>(platformHost.Content);
+            Assert.Equal("AI字符识别标注平台", ((TextBlock)FieldOf(aiTextPage, "PlatformTitleText")).Text);
+            Assert.True(((Button)FieldOf(dataModelPage, "AiTextAnnotationNode")).IsEnabled);
+            ((Button)FieldOf(dataModelPage, "AiTextTrainingNode")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            Assert.Equal("AI字符识别训练平台", ((TextBlock)FieldOf(platformHost.Content!, "PlatformTitleText")).Text);
+            ((Button)FieldOf(dataModelPage, "AiTextTestNode")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            Assert.Equal("AI字符识别测试平台", ((TextBlock)FieldOf(platformHost.Content!, "PlatformTitleText")).Text);
+
+            barcodeItem.IsSelected = true;
+            Pump();
+            Assert.Equal("AI条码识别标注平台", ((TextBlock)FieldOf(platformHost.Content!, "PlatformTitleText")).Text);
+            ((Button)FieldOf(dataModelPage, "BarcodeTrainingNode")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            Assert.Equal("AI条码识别训练平台", ((TextBlock)FieldOf(platformHost.Content!, "PlatformTitleText")).Text);
+            ((Button)FieldOf(dataModelPage, "BarcodeTestNode")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            Assert.Equal("AI条码识别测试平台", ((TextBlock)FieldOf(platformHost.Content!, "PlatformTitleText")).Text);
+
+            qrCodeItem.IsSelected = true;
+            Pump();
+            Assert.Equal("AI二维码识别标注平台", ((TextBlock)FieldOf(platformHost.Content!, "PlatformTitleText")).Text);
             shell.Close();
         });
     }
@@ -326,6 +406,22 @@ public sealed class UiSmokeTests
         });
     }
 
+    [Fact]
+    public void Shell_Sidebar_UsesSingleScrollOwner()
+    {
+        RunOnSta(() =>
+        {
+            AppServices.Instance.Initialize();
+            var shell = new Shell();
+            var sidebar = (ScrollViewer)FieldOf(shell, "SidebarScrollViewer");
+            Assert.Equal(ScrollBarVisibility.Auto, sidebar.VerticalScrollBarVisibility);
+            var lists = FindLogicalDescendants<ListBox>(shell).ToArray();
+            Assert.All(lists, list => Assert.Equal(ScrollBarVisibility.Disabled,
+                ScrollViewer.GetVerticalScrollBarVisibility(list)));
+            shell.Close();
+        });
+    }
+
     private static IEnumerable<T> FindLogicalDescendants<T>(DependencyObject root) where T : DependencyObject
     {
         foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
@@ -341,23 +437,4 @@ public sealed class UiSmokeTests
         }
     }
 
-    [Fact]
-    public void SpcPage_Loaded_DoesNotRaiseDispatcherException()
-    {
-        RunOnSta(() =>
-        {
-            var errors = new List<Exception>();
-            Dispatcher.CurrentDispatcher.UnhandledException += (_, e) =>
-            {
-                errors.Add(e.Exception);
-                e.Handled = true;
-            };
-            var page = new SpcPage();
-            page.Measure(new Size(1000, 700));
-            page.Arrange(new Rect(0, 0, 1000, 700));
-            page.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
-            Pump(12);
-            Assert.Empty(errors);
-        });
-    }
 }

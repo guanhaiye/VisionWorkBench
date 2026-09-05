@@ -6,7 +6,6 @@
         WindowStyle="None"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
-        Topmost="True"
         AllowsTransparency="True"
         Background="Transparent">
     <Border Background="White" CornerRadius="16"
@@ -17,13 +16,9 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <Image Grid.Row="0" Stretch="Uniform" HorizontalAlignment="Center"
-                   VerticalAlignment="Center" Margin="12,0,12,8">
-                <Image.Source>
-                    <CroppedBitmap Source="pack://application:,,,/VisionWorkbench;component/Assets/Branding/visionworkbench-logo-v1.png"
-                                   SourceRect="0,130,1200,1124" />
-                </Image.Source>
-            </Image>
+                <Image Grid.Row="0" Stretch="Uniform" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" Margin="12,0,12,8"
+                       Source="pack://application:,,,/VisionWorkbench;component/Assets/Branding/logo.png" />
             <TextBlock Grid.Row="1" Text="VisionWorkbench — AI 视觉工作台"
                        HorizontalAlignment="Center" Foreground="#1D4ED8"
                        FontSize="16" FontWeight="SemiBold" />

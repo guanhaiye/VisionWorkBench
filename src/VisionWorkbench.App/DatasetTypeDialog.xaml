@@ -4,10 +4,18 @@
         Title="选择数据集类型"
         Width="380"
         Height="270"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False">
-    <StackPanel Margin="20">
+        Style="{StaticResource ThemedDialogWindow}"
+        WindowStartupLocation="CenterOwner">
+    <Border Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="10"
+            Padding="20">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="22" ShadowDepth="6" Direction="270"
+                              Opacity="0.18" Color="#334155" />
+        </Border.Effect>
+        <StackPanel>
         <TextBlock Text="请选择标注任务类型" FontSize="18" FontWeight="Bold" />
         <TextBlock Text="类型确定后，标注形状和智能标注工具会自动匹配。"
                    Margin="0,8,0,14"
@@ -30,5 +38,6 @@
                 Tag="instance_segmentation"
                 Click="TaskType_Click"
                 Height="32" />
-    </StackPanel>
+        </StackPanel>
+    </Border>
 </Window>

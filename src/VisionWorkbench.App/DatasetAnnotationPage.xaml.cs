@@ -2,13 +2,16 @@ using System.IO;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using VbFileSystem = Microsoft.VisualBasic.FileIO.FileSystem;
 using VisionWorkbench.Application;
+using IoPath = System.IO.Path;
 
 namespace VisionWorkbench.App;
 
@@ -16,6 +19,8 @@ public enum AnnotationPlatform
 {
     Detection,
     Segmentation,
+    SemanticSegmentation,
+    InstanceSegmentation,
 }
 
 /// <summary>离线图片数据集标注页面，按目标检测与分割两个平台隔离展示。</summary>
@@ -78,13 +83,22 @@ public partial class DatasetAnnotationPage : UserControl
     {
         _platform = platform;
         InitializeComponent();
-        PlatformTitleText.Text = platform == AnnotationPlatform.Detection
-            ? "目标检测标注平台"
-            : "分割标注平台";
+        AnnotationScrollViewer.ZoomChanged += (_, zoom) =>
+        {
+            _zoom = zoom;
+            ZoomText.Text = $"缩放：{zoom:P0}";
+        };
+        PlatformTitleText.Text = platform switch
+        {
+            AnnotationPlatform.Detection => "目标检测标注平台",
+            AnnotationPlatform.SemanticSegmentation => "语义分割标注平台",
+            AnnotationPlatform.InstanceSegmentation => "实例分割标注平台",
+            _ => "分割标注平台",
+        };
         ExportDatasetButton.Content = platform == AnnotationPlatform.Detection
             ? "导出 YOLO 检测数据集"
             : "导出分割数据集";
-        Sam1Button.Visibility = platform == AnnotationPlatform.Segmentation
+        Sam1Button.Visibility = IsSegmentationPlatform
             ? Visibility.Visible
             : Visibility.Collapsed;
         // Submit the latest hover position at roughly one display frame instead of
@@ -92,13 +106,15 @@ public partial class DatasetAnnotationPage : UserControl
         _sam1HoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _sam1HoverTimer.Tick += Sam1HoverTimer_Tick;
         Loaded += (_, _) => RefreshDatasets();
+        IsVisibleChanged += (_, args) =>
+        {
+            if (args.NewValue is true) RefreshDatasets(_dataset?.Id);
+        };
     }
 
     private void RefreshDatasets(string? selectId = null)
     {
-        var datasets = AppServices.Instance.Datasets.List()
-            .Where(IsDatasetForCurrentPlatform)
-            .ToList();
+        var datasets = VisibleDatasets();
         DatasetList.ItemsSource = datasets;
         if (selectId is not null)
         {
@@ -118,6 +134,14 @@ public partial class DatasetAnnotationPage : UserControl
         {
             taskType = "detection";
         }
+        else if (_platform == AnnotationPlatform.SemanticSegmentation)
+        {
+            taskType = "semantic_segmentation";
+        }
+        else if (_platform == AnnotationPlatform.InstanceSegmentation)
+        {
+            taskType = "instance_segmentation";
+        }
         else
         {
             var typeDialog = new DatasetTypeDialog(segmentationOnly: true) { Owner = Window.GetWindow(this) };
@@ -131,6 +155,7 @@ public partial class DatasetAnnotationPage : UserControl
             Classes = ["object"],
         };
         DatasetNameText.Text = _dataset.Name;
+        SourceRootText.Text = "";
         DatasetRootText.Text = "";
         DatasetClassesText.Text = "object";
         ClassCombo.ItemsSource = _dataset.Classes;
@@ -138,7 +163,7 @@ public partial class DatasetAnnotationPage : UserControl
         UpdateTaskTypeUi();
         ImageList.ItemsSource = null;
         ClearImageView();
-        var datasets = AppServices.Instance.Datasets.List().ToList();
+        var datasets = VisibleDatasets();
         datasets.Add(_dataset);
         DatasetList.ItemsSource = datasets;
         DatasetList.SelectedItem = _dataset;
@@ -192,7 +217,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"加载数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"加载数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -226,17 +251,32 @@ public partial class DatasetAnnotationPage : UserControl
     private bool IsDatasetForCurrentPlatform(DatasetDefinition dataset) =>
         IsTaskTypeForCurrentPlatform(dataset.TaskType);
 
+    private List<DatasetDefinition> VisibleDatasets() =>
+        AppServices.Instance.Datasets.List()
+            .Where(IsDatasetForCurrentPlatform)
+            .ToList();
+
     private bool IsTaskTypeForCurrentPlatform(string? taskType) => _platform switch
     {
         AnnotationPlatform.Detection => taskType == "detection",
         AnnotationPlatform.Segmentation => taskType is "semantic_segmentation" or "instance_segmentation",
+        AnnotationPlatform.SemanticSegmentation => taskType == "semantic_segmentation",
+        AnnotationPlatform.InstanceSegmentation => taskType == "instance_segmentation",
         _ => false,
     };
 
+    private bool IsSegmentationPlatform => _platform is AnnotationPlatform.Segmentation or AnnotationPlatform.SemanticSegmentation or AnnotationPlatform.InstanceSegmentation;
+
     private void ShowWrongPlatform(string? taskType)
     {
-        var target = taskType == "detection" ? "目标检测标注平台" : "分割标注平台";
-        MessageBox.Show($"该数据集属于{target}，请从左侧进入对应平台后再加载。",
+        var target = taskType switch
+        {
+            "detection" => "目标检测标注平台",
+            "semantic_segmentation" => "语义分割标注平台",
+            "instance_segmentation" => "实例分割标注平台",
+            _ => "对应标注平台",
+        };
+        ThemedMessageBox.Show($"该数据集属于{target}，请从左侧进入对应平台后再加载。",
             "标注平台不匹配", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -244,32 +284,91 @@ public partial class DatasetAnnotationPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe) return;
         var dialog = new OpenFolderDialog { Title = "选择图片数据集目录" };
-        if (Directory.Exists(DatasetRootText.Text)) dialog.InitialDirectory = DatasetRootText.Text;
+        if (Directory.Exists(SourceRootText.Text)) dialog.InitialDirectory = SourceRootText.Text;
         if (dialog.ShowDialog() == true)
         {
-            if (_dataset is null)
+            try
             {
-                NewDataset_Click(sender, e);
-                if (_dataset is null) return;
+                if (_dataset is null)
+                {
+                    NewDataset_Click(sender, e);
+                    if (_dataset is null) return;
+                }
+                var sourceDirectory = IoPath.GetFullPath(dialog.FolderName);
+                var datasetDirectory = CreateDatasetDirectory(sourceDirectory, _dataset!.Name);
+                CopyImagesToDataset(sourceDirectory, datasetDirectory);
+                SourceRootText.Text = sourceDirectory;
+                DatasetRootText.Text = datasetDirectory;
+                _dataset!.RootDirectory = datasetDirectory;
+                _dataset.Name = DatasetNameText.Text.Trim();
+                _dataset.Classes = ParseClasses(DatasetClassesText.Text);
+                _dataset = AppServices.Instance.Datasets.Save(_dataset);
+                RefreshDatasets(_dataset.Id);
+                var images = AppServices.Instance.Datasets.ListImages(_dataset);
+                ImageList.ItemsSource = images;
+                ImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
+                StatusText.Text = $"已读取 {sourceDirectory}，图片已复制到独立数据集目录，共 {images.Count} 张。原始目录未修改。";
             }
-            DatasetRootText.Text = dialog.FolderName;
-            _dataset!.RootDirectory = dialog.FolderName;
-            _dataset.Name = DatasetNameText.Text.Trim();
-            _dataset.Classes = ParseClasses(DatasetClassesText.Text);
-            _dataset = AppServices.Instance.Datasets.Save(_dataset);
-            RefreshDatasets(_dataset.Id);
-            var images = AppServices.Instance.Datasets.ListImages(_dataset);
-            ImageList.ItemsSource = images;
-            ImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
-            if (images.Count > 0)
+            catch (Exception ex)
             {
-                StatusText.Text = $"已扫描并登记数据集，共发现 {images.Count} 张图片。名称或类别修改后请点击“保存数据集”。";
-            }
-            else
-            {
-                StatusText.Text = "目录已选择，但没有找到 jpg、jpeg、png 或 bmp 图片。请检查目录层级和文件格式。";
+                ThemedMessageBox.Show($"创建独立数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
+    }
+
+    private static string CreateDatasetDirectory(string sourceDirectory, string datasetName)
+    {
+        var storageRoot = AppServices.Instance.Settings.DatasetDirectory;
+        if (string.IsNullOrWhiteSpace(storageRoot)) storageRoot = @"E:\";
+        storageRoot = IoPath.GetFullPath(storageRoot.Trim());
+        Directory.CreateDirectory(storageRoot);
+
+        var sourceName = new DirectoryInfo(sourceDirectory).Name;
+        var safeName = string.IsNullOrWhiteSpace(datasetName) ? sourceName : datasetName.Trim();
+        foreach (var invalid in IoPath.GetInvalidFileNameChars()) safeName = safeName.Replace(invalid, '_');
+        if (string.IsNullOrWhiteSpace(safeName)) safeName = "dataset";
+
+        var candidate = IoPath.Combine(storageRoot, safeName);
+        if (PathsEqual(candidate, sourceDirectory))
+        {
+            candidate = IoPath.Combine(storageRoot, safeName + "-visionworkbench");
+        }
+        if (!Directory.Exists(candidate)) return candidate;
+
+        var suffix = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        var withTimestamp = IoPath.Combine(storageRoot, $"{safeName}-{suffix}");
+        return Directory.Exists(withTimestamp)
+            ? IoPath.Combine(storageRoot, $"{safeName}-{DateTime.Now:yyyyMMdd-HHmmss-fff}")
+            : withTimestamp;
+    }
+
+    private static void CopyImagesToDataset(string sourceDirectory, string datasetDirectory)
+    {
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { ".jpg", ".jpeg", ".png", ".bmp" };
+        var files = Directory.EnumerateFiles(sourceDirectory, "*.*", SearchOption.AllDirectories)
+            .Where(path => extensions.Contains(IoPath.GetExtension(path)))
+            .Where(path => !IsInternalDatasetPath(IoPath.GetRelativePath(sourceDirectory, path)))
+            .ToArray();
+        if (files.Length == 0)
+            throw new InvalidOperationException("原始目录中没有找到 jpg、jpeg、png 或 bmp 图片。");
+
+        Directory.CreateDirectory(datasetDirectory);
+        foreach (var sourcePath in files)
+        {
+            var relativePath = IoPath.GetRelativePath(sourceDirectory, sourcePath);
+            var destinationPath = IoPath.Combine(datasetDirectory, relativePath);
+            Directory.CreateDirectory(IoPath.GetDirectoryName(destinationPath)!);
+            File.Copy(sourcePath, destinationPath, overwrite: false);
+        }
+    }
+
+    private static bool IsInternalDatasetPath(string relativePath)
+    {
+        var firstSegment = relativePath
+            .Split([IoPath.DirectorySeparatorChar, IoPath.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        return string.Equals(firstSegment, ".visionworkbench", StringComparison.OrdinalIgnoreCase);
     }
 
     private void SaveDataset_Click(object sender, RoutedEventArgs e)
@@ -287,7 +386,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"保存数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"保存数据集失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -296,7 +395,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (!RolePolicy.CanEditRecipe) return;
         if (_dataset is null)
         {
-            MessageBox.Show("请先选择或保存数据集。", "数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先选择或保存数据集。", "数据集", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -306,22 +405,31 @@ public partial class DatasetAnnotationPage : UserControl
         try
         {
             var selectedPath = _image?.RelativePath;
+            var beforeSplit = AppServices.Instance.Datasets.ListImages(_dataset);
+            var annotatedCount = beforeSplit.Count(image => image.HasAnnotation);
+            if (annotatedCount == 0)
+            {
+                ThemedMessageBox.Show("当前数据集没有已标注图片，未标注图片不会参与自动划分。", "数据集划分",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
             _dataset = AppServices.Instance.Datasets.AutoSplit(_dataset, dialog.TrainRatio);
             RefreshImageList(selectedPath);
             var images = AppServices.Instance.Datasets.ListImages(_dataset);
             var train = images.Count(x => x.Split == "train");
             var validation = images.Count(x => x.Split == "val");
-            StatusText.Text = $"已自动划分数据集：训练集 {train} 张，验证集 {validation} 张（比例 {(dialog.TrainRatio * 100):0}%:{(100 - dialog.TrainRatio * 100):0}%）。未划分图片可通过右键菜单调整。";
+            var skipped = beforeSplit.Count - annotatedCount;
+            StatusText.Text = $"已自动划分数据集：训练集 {train} 张，验证集 {validation} 张（比例 {(dialog.TrainRatio * 100):0}%:{(100 - dialog.TrainRatio * 100):0}%）。已跳过 {skipped} 张未标注图片，保持未划分。";
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"自动划分失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"自动划分失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
     private void ExportDataset_Click(object sender, RoutedEventArgs e)
     {
-        if (_dataset is null) { MessageBox.Show("请先选择或保存数据集。", "数据集"); return; }
+        if (_dataset is null) { ThemedMessageBox.Show("请先选择或保存数据集。", "数据集"); return; }
         var dialog = new OpenFolderDialog { Title = "选择 YOLO 数据集导出目录" };
         if (dialog.ShowDialog() != true) return;
         try
@@ -337,7 +445,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"导出失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"导出失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -398,7 +506,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"切换图片划分状态失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"切换图片划分状态失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -428,6 +536,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (DatasetList.SelectedItem is not DatasetDefinition dataset) return;
         _dataset = dataset;
         DatasetNameText.Text = dataset.Name;
+        SourceRootText.Text = "当前数据集目录";
         DatasetRootText.Text = dataset.RootDirectory;
         DatasetClassesText.Text = string.Join(", ", dataset.Classes);
         ClassCombo.ItemsSource = dataset.Classes;
@@ -472,9 +581,12 @@ public partial class DatasetAnnotationPage : UserControl
         rename.Click += (_, _) => RenameDataset(dataset);
         menu.Items.Add(rename);
         menu.Items.Add(new Separator());
-        var delete = new MenuItem { Header = "删除数据集" };
-        delete.Click += (_, _) => DeleteDataset(dataset);
-        menu.Items.Add(delete);
+        var removeFromList = new MenuItem { Header = "仅从列表中删除（保留本地数据）" };
+        removeFromList.Click += (_, _) => DeleteDataset(dataset, deleteLocalData: false);
+        menu.Items.Add(removeFromList);
+        var deleteLocal = new MenuItem { Header = "彻底删除（包含本地数据）" };
+        deleteLocal.Click += (_, _) => DeleteDataset(dataset, deleteLocalData: true);
+        menu.Items.Add(deleteLocal);
         menu.IsOpen = true;
     }
 
@@ -482,7 +594,7 @@ public partial class DatasetAnnotationPage : UserControl
     {
         if (!Directory.Exists(dataset.RootDirectory))
         {
-            MessageBox.Show($"本地目录不存在：{dataset.RootDirectory}", "打开目录", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"本地目录不存在：{dataset.RootDirectory}", "打开目录", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         Process.Start(new ProcessStartInfo
@@ -505,19 +617,163 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"修改数据集名称失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"修改数据集名称失败：{ex.Message}", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
-    private void DeleteDataset(DatasetDefinition dataset)
+    private void DeleteDataset(DatasetDefinition dataset, bool deleteLocalData)
     {
-        var result = MessageBox.Show(
-            $"确定要删除数据集“{dataset.Name}”吗？\n\n此操作只会从 VisionWorkbench 列表中移除数据集，不会删除本地图片和标注文件。",
-            "确认删除数据集",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-        if (result != MessageBoxResult.Yes) return;
+        var owner = Window.GetWindow(this);
+        var localDeleteMode = LocalDeleteMode.RecycleBin;
+        if (!deleteLocalData)
+        {
+            var result = ThemedMessageBox.Show(
+                owner,
+                $"确定要从列表中移除数据集“{dataset.Name}”吗？\n\n本地图片、标注文件和数据集目录都会保留。",
+                "从列表中删除",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+        }
+        else
+        {
+            if (!TryChooseLocalDeleteMode(dataset, out var mode)) return;
+            localDeleteMode = mode;
+            if (mode == LocalDeleteMode.Permanent)
+            {
+                var result = ThemedMessageBox.Show(
+                    owner,
+                    $"即将永久删除数据集“{dataset.Name}”及其本地文件，删除后无法从回收站恢复。\n\n目录：{dataset.RootDirectory}\n\n确定继续吗？",
+                    "确认永久删除",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (result != MessageBoxResult.Yes) return;
+            }
+
+            try
+            {
+                var root = IoPath.GetFullPath(dataset.RootDirectory.Trim());
+                if (!Directory.Exists(root))
+                {
+                    AppServices.Instance.Datasets.Delete(dataset.Id);
+                    StatusText.Text = $"本地目录已不存在，数据集“{dataset.Name}”已从列表中删除。";
+                    RefreshAfterDatasetDeletion(dataset);
+                    return;
+                }
+
+                if (IsUnsafeDatasetRoot(root))
+                    throw new InvalidOperationException("为避免误删整块磁盘，不能删除磁盘根目录。请先修改数据集目录。 ");
+
+                if (mode == LocalDeleteMode.RecycleBin)
+                    VbFileSystem.DeleteDirectory(root,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                else
+                    Directory.Delete(root, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                ThemedMessageBox.Show(owner, $"删除本地数据失败：{ex.Message}", "删除数据集失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+        }
+
         AppServices.Instance.Datasets.Delete(dataset.Id);
+        RefreshAfterDatasetDeletion(dataset);
+        StatusText.Text = deleteLocalData
+            ? localDeleteMode == LocalDeleteMode.RecycleBin
+                ? $"数据集“{dataset.Name}”已删除，本地数据已移动到回收站。"
+                : $"数据集“{dataset.Name}”及本地数据已永久删除。"
+            : $"数据集“{dataset.Name}”已从列表中删除，本地数据已保留。";
+    }
+
+    private enum LocalDeleteMode
+    {
+        RecycleBin,
+        Permanent,
+    }
+
+    private bool TryChooseLocalDeleteMode(DatasetDefinition dataset, out LocalDeleteMode mode)
+    {
+        mode = LocalDeleteMode.RecycleBin;
+        var owner = Window.GetWindow(this);
+        var window = new Window
+        {
+            Title = "彻底删除数据集",
+            Width = 560,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
+            Owner = owner,
+            ShowInTaskbar = false,
+            ResizeMode = ResizeMode.NoResize,
+        };
+        if (System.Windows.Application.Current.TryFindResource("ThemedDialogWindow") is Style style)
+            window.Style = style;
+
+        var result = false;
+        var selectedMode = LocalDeleteMode.RecycleBin;
+        var panel = new StackPanel { Margin = new Thickness(20) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"确定要彻底删除数据集“{dataset.Name}”吗？",
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 12),
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"这会删除本地图片、标注文件和数据集目录：\n{dataset.RootDirectory}\n\n请选择处理方式：",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)System.Windows.Application.Current.FindResource("MutedTextBrush"),
+            Margin = new Thickness(0, 0, 0, 18),
+        });
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var cancel = new Button { Content = "取消", MinWidth = 86, IsCancel = true };
+        cancel.Style = (Style)System.Windows.Application.Current.FindResource("SecondaryButton");
+        cancel.Click += (_, _) => window.Close();
+        var recycle = new Button { Content = "移动到回收站", MinWidth = 120, Margin = new Thickness(8, 2, 0, 2) };
+        recycle.Click += (_, _) => { selectedMode = LocalDeleteMode.RecycleBin; result = true; window.Close(); };
+        var permanent = new Button
+        {
+            Content = "直接删除",
+            MinWidth = 100,
+            Margin = new Thickness(8, 2, 0, 2),
+            Background = (Brush)System.Windows.Application.Current.FindResource("DangerBrush"),
+            BorderBrush = (Brush)System.Windows.Application.Current.FindResource("DangerBrush"),
+        };
+        permanent.Click += (_, _) => { selectedMode = LocalDeleteMode.Permanent; result = true; window.Close(); };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(recycle);
+        buttons.Children.Add(permanent);
+        panel.Children.Add(buttons);
+        window.Content = new Border
+        {
+            Background = (Brush)System.Windows.Application.Current.FindResource("SurfaceBrush"),
+            BorderBrush = (Brush)System.Windows.Application.Current.FindResource("BorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Child = panel,
+        };
+        window.Loaded += (_, _) => recycle.Focus();
+        window.ShowDialog();
+        mode = selectedMode;
+        return result;
+    }
+
+    private static bool IsUnsafeDatasetRoot(string root)
+    {
+        var driveRoot = IoPath.GetPathRoot(root);
+        return string.IsNullOrWhiteSpace(driveRoot)
+            || string.Equals(root.TrimEnd(IoPath.DirectorySeparatorChar, IoPath.AltDirectorySeparatorChar),
+                driveRoot.TrimEnd(IoPath.DirectorySeparatorChar, IoPath.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RefreshAfterDatasetDeletion(DatasetDefinition dataset)
+    {
+        if (string.Equals(_dataset?.Id, dataset.Id, StringComparison.OrdinalIgnoreCase))
+            _dataset = null;
         RefreshDatasets();
         if (DatasetList.Items.Count == 0)
         {
@@ -529,7 +785,6 @@ public partial class DatasetAnnotationPage : UserControl
             UpdateTaskTypeUi();
             ClearImageView();
         }
-        StatusText.Text = $"数据集“{dataset.Name}”已从列表中删除，本地文件未被删除。";
     }
 
     private async void ImageList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -552,8 +807,8 @@ public partial class DatasetAnnotationPage : UserControl
             if (keepSam1Active)
             {
                 _sam1ClickMode = true;
-                Sam1Button.Content = "完成 SAM1 标注";
-                StatusText.Text = $"已切换图片：{image.RelativePath}。SAM1 仍处于开启状态，移动鼠标即可预览。";
+                Sam1Button.Content = "完成智能标注";
+                StatusText.Text = $"已切换图片：{image.RelativePath}。智能标注仍处于开启状态，移动鼠标即可预览。";
                 if (AnnotationCanvas.IsMouseOver)
                     ScheduleSam1Hover(Mouse.GetPosition(AnnotationCanvas));
             }
@@ -831,9 +1086,6 @@ public partial class DatasetAnnotationPage : UserControl
     private void FitImageToWindow_Click(object sender, RoutedEventArgs e)
     {
         ResetZoom();
-        AnnotationScrollViewer.UpdateLayout();
-        AnnotationScrollViewer.ScrollToHorizontalOffset(0);
-        AnnotationScrollViewer.ScrollToVerticalOffset(0);
         StatusText.Text = "图像已自适应标注窗口。";
     }
 
@@ -1017,67 +1269,35 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (Math.Abs(_zoom - 1) < 0.001) UpdateAnnotationSurfaceSize();
+        if (AnnotationScrollViewer.Zoom <= 1.001)
+        {
+            AnnotationScrollViewer.FitToWindow();
+        }
     }
 
-    private void AnnotationScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    private void AnnotationCanvas_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (AnnotationImage.Source is null) return;
-        if (_eraserMode)
-        {
-            e.Handled = true;
-            _eraserDiameter = Math.Clamp(_eraserDiameter + (e.Delta > 0 ? 6 : -6), 8, 240);
-            _eraserCursorPoint = Mouse.GetPosition(AnnotationCanvas);
-            RenderAnnotations();
-            StatusText.Text = $"橡皮擦直径：{_eraserDiameter:0} 像素；按住左键拖动擦除。";
-            return;
-        }
+        if (!_eraserMode || AnnotationImage.Source is null) return;
         e.Handled = true;
-        var oldZoom = _zoom;
-        var factor = e.Delta > 0 ? 1.15 : 1 / 1.15;
-        _zoom = Math.Clamp(_zoom * factor, 0.25, 8);
-        if (Math.Abs(_zoom - oldZoom) < 0.001) return;
-
-        var mouse = e.GetPosition(AnnotationScrollViewer);
-        var contentX = (AnnotationScrollViewer.HorizontalOffset + mouse.X) / oldZoom;
-        var contentY = (AnnotationScrollViewer.VerticalOffset + mouse.Y) / oldZoom;
-        UpdateAnnotationSurfaceSize();
-        AnnotationScrollViewer.UpdateLayout();
-        AnnotationScrollViewer.ScrollToHorizontalOffset(contentX * _zoom - mouse.X);
-        AnnotationScrollViewer.ScrollToVerticalOffset(contentY * _zoom - mouse.Y);
-        ZoomText.Text = $"缩放：{_zoom:P0}";
+        _eraserDiameter = Math.Clamp(_eraserDiameter + (e.Delta > 0 ? 6 : -6), 8, 240);
+        _eraserCursorPoint = Mouse.GetPosition(AnnotationCanvas);
+        RenderAnnotations();
+        StatusText.Text = $"橡皮擦直径：{_eraserDiameter:0} 像素；按住左键拖动擦除。";
     }
 
     private void ResetZoom()
     {
         _zoom = 1;
         if (ZoomText is not null) ZoomText.Text = "缩放：100%";
-        if (AnnotationScrollViewer is null || AnnotationSurface is null) return;
-        UpdateAnnotationSurfaceSize();
-        AnnotationScrollViewer.ScrollToHome();
+        AnnotationScrollViewer?.FitToWindow();
     }
 
-    private void UpdateAnnotationSurfaceSize()
+    private void RequestAutoFit()
     {
-        if (AnnotationScrollViewer is null || AnnotationSurface is null) return;
-        var availableWidth = Math.Max(1, AnnotationScrollViewer.ViewportWidth > 0
-            ? AnnotationScrollViewer.ViewportWidth
-            : AnnotationScrollViewer.ActualWidth);
-        var availableHeight = Math.Max(1, AnnotationScrollViewer.ViewportHeight > 0
-            ? AnnotationScrollViewer.ViewportHeight
-            : AnnotationScrollViewer.ActualHeight);
-        var imageWidth = AnnotationImage.Source?.Width ?? availableWidth;
-        var imageHeight = AnnotationImage.Source?.Height ?? availableHeight;
-        var imageRatio = imageWidth / Math.Max(1, imageHeight);
-        var viewportRatio = availableWidth / availableHeight;
-        var fittedWidth = viewportRatio > imageRatio
-            ? availableHeight * imageRatio
-            : availableWidth;
-        var fittedHeight = viewportRatio > imageRatio
-            ? availableHeight
-            : availableWidth / imageRatio;
-        AnnotationSurface.Width = Math.Max(1, fittedWidth * _zoom);
-        AnnotationSurface.Height = Math.Max(1, fittedHeight * _zoom);
+        if (AnnotationScrollViewer.Zoom <= 1.001)
+        {
+            AnnotationScrollViewer.FitToWindow();
+        }
     }
 
     private void RenderAnnotations()
@@ -1091,17 +1311,22 @@ public partial class DatasetAnnotationPage : UserControl
         for (var i = 0; i < _annotation.Objects.Count; i++)
         {
             var obj = _annotation.Objects[i];
-            var rectangle = new Rectangle
+            var hasPolygon = obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3;
+            var semanticPolygon = _dataset?.TaskType == "semantic_segmentation" && hasPolygon;
+            if (!semanticPolygon)
             {
-                Width = Math.Max(1, obj.Width * AnnotationCanvas.ActualWidth),
-                Height = Math.Max(1, obj.Height * AnnotationCanvas.ActualHeight),
-                Stroke = i == selected ? Brushes.Lime : Brushes.Orange,
-                StrokeThickness = i == selected ? 3 : 2,
-                IsHitTestVisible = false,
-            };
-            Canvas.SetLeft(rectangle, obj.X * AnnotationCanvas.ActualWidth);
-            Canvas.SetTop(rectangle, obj.Y * AnnotationCanvas.ActualHeight);
-            AnnotationCanvas.Children.Add(rectangle);
+                var rectangle = new Rectangle
+                {
+                    Width = Math.Max(1, obj.Width * AnnotationCanvas.ActualWidth),
+                    Height = Math.Max(1, obj.Height * AnnotationCanvas.ActualHeight),
+                    Stroke = i == selected ? Brushes.Lime : Brushes.Orange,
+                    StrokeThickness = i == selected ? 3 : 2,
+                    IsHitTestVisible = false,
+                };
+                Canvas.SetLeft(rectangle, obj.X * AnnotationCanvas.ActualWidth);
+                Canvas.SetTop(rectangle, obj.Y * AnnotationCanvas.ActualHeight);
+                AnnotationCanvas.Children.Add(rectangle);
+            }
             var label = new TextBlock
             {
                 Text = obj.ClassName,
@@ -1113,7 +1338,7 @@ public partial class DatasetAnnotationPage : UserControl
             Canvas.SetLeft(label, obj.X * AnnotationCanvas.ActualWidth);
             Canvas.SetTop(label, Math.Max(0, obj.Y * AnnotationCanvas.ActualHeight - 18));
             AnnotationCanvas.Children.Add(label);
-            if (obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3)
+            if (hasPolygon)
             {
                 var polygon = new Polygon
                 {
@@ -1414,8 +1639,8 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void UpdateToolButtons()
     {
-        ManualDrawButton.Content = _manualDrawMode ? "手动绘制 ✓" : "手动绘制";
-        EraserButton.Content = _eraserMode ? "橡皮擦 ✓" : "橡皮擦";
+        ManualDrawButton.Content = "手动绘制";
+        EraserButton.Content = "橡皮擦";
     }
 
     private void UpdateTaskTypeUi()
@@ -1434,20 +1659,16 @@ public partial class DatasetAnnotationPage : UserControl
             "instance_segmentation" => "实例分割",
             _ => "未选择",
         };
-        var shapeName = isDetection ? "矩形框" : taskType == "instance_segmentation" ? "多边形（YOLO11-seg）" : isSegmentation ? "多边形" : "未选择";
+        AnnotationScrollViewer.WheelZoomEnabled = !_eraserMode;
         DatasetTaskTypeText.Text = $"标注类型：{typeName}";
-        AnnotationShapeText.Text = $"形状：{shapeName}";
         YoloeButton.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
         ManualDrawButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         EraserButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
-        Sam1Button.Visibility = _platform == AnnotationPlatform.Segmentation
+        Sam1Button.Visibility = IsSegmentationPlatform
             ? Visibility.Visible
             : Visibility.Collapsed;
-        Sam1Button.Content = _dataset is null
-            ? "SAM1 智能标注"
-            : taskType == "instance_segmentation"
-                ? "SAM1 点击生成实例掩膜"
-                : "SAM1 点击分割";
+        FinishShortcutHint.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
+        Sam1Button.Content = "智能标注";
         if (!isSegmentation)
         {
             _sam1ClickMode = false;
@@ -1518,6 +1739,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (_sam1ClickMode)
         {
             var selectedPath = _image?.RelativePath;
+            ++_sam1PromptVersion;
             ClearSam1HoverPreview();
             _sam1ClickMode = false;
             _manualDrawMode = true;
@@ -1527,7 +1749,7 @@ public partial class DatasetAnnotationPage : UserControl
             UpdateTaskTypeUi();
             if (selectedPath is not null) RefreshImageList(selectedPath);
             RenderAnnotations();
-            StatusText.Text = "SAM1 本轮智能标注已完成。";
+            StatusText.Text = "本轮智能标注已完成。";
             return;
         }
         _sam1ClickMode = true;
@@ -1537,7 +1759,7 @@ public partial class DatasetAnnotationPage : UserControl
         _sam1Prompts.Clear();
         _sam1ResultIndex = -1;
         ClearSam1HoverPreview();
-        Sam1Button.Content = "完成 SAM1 标注";
+        Sam1Button.Content = "完成智能标注";
         UpdateToolButtons();
         StatusText.Text = $"{AppServices.Instance.SmartAnnotations.DescribeSam1Availability()}；移动鼠标可预览，左键添加目标点，右键添加排除点。";
         if (AnnotationCanvas.IsMouseOver)
@@ -1564,13 +1786,13 @@ public partial class DatasetAnnotationPage : UserControl
         {
             var positive = _sam1Prompts.Count(point => point.Label == 1);
             var negative = _sam1Prompts.Count - positive;
-            StatusText.Text = $"SAM1 正在计算：{positive} 个目标点，{negative} 个排除点……";
+            StatusText.Text = $"智能标注正在计算：{positive} 个目标点，{negative} 个排除点……";
             var result = await AppServices.Instance.SmartAnnotations.RunSam1ClickAsync(
                 image.FullPath, _sam1Prompts.ToArray(), className);
             if (promptVersion != _sam1PromptVersion || !ReferenceEquals(image, _image)) return;
             if (result is null)
             {
-                StatusText.Text = "SAM1 没有返回有效分割区域。";
+                StatusText.Text = "智能标注没有返回有效分割区域。";
                 return;
             }
             var datasetObject = ToDatasetObject(result);
@@ -1584,16 +1806,22 @@ public partial class DatasetAnnotationPage : UserControl
             RefreshAnnotationList(_sam1ResultIndex);
             RenderAnnotations();
             AppServices.Instance.Datasets.SaveAnnotation(_dataset!, _annotation);
-            StatusText.Text = $"SAM1 掩膜已更新：左键继续保留，右键继续排除；目标点 {positive}，排除点 {negative}。";
+            StatusText.Text = $"智能标注掩膜已更新：左键继续保留，右键继续排除；目标点 {positive}，排除点 {negative}。";
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"SAM1 点击分割失败：{ex.Message}";
+            StatusText.Text = $"智能标注失败：{ex.Message}";
         }
     }
 
     private async void DatasetAnnotationPage_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.None && !IsTextInputFocused())
+        {
+            e.Handled = true;
+            EndCurrentAnnotation();
+            return;
+        }
         if (!_sam1ClickMode || e.Key != Key.Z ||
             (Keyboard.Modifiers & ModifierKeys.Control) == 0)
         {
@@ -1604,6 +1832,68 @@ public partial class DatasetAnnotationPage : UserControl
         await UndoLastSam1PromptAsync();
     }
 
+    private void EndCurrentAnnotation()
+    {
+        if (_sam1ClickMode)
+        {
+            ++_sam1PromptVersion;
+            ClearSam1HoverPreview();
+            _sam1ClickMode = true;
+            _manualDrawMode = false;
+            _eraserMode = false;
+            _eraserDragging = false;
+            _sam1Prompts.Clear();
+            _sam1ResultIndex = -1;
+            AnnotationCanvas.ReleaseMouseCapture();
+            UpdateToolButtons();
+            RenderAnnotations();
+            StatusText.Text = "S：本轮智能标注已结束，可继续点击生成下一个目标。";
+            if (AnnotationCanvas.IsMouseOver)
+                ScheduleSam1Hover(Mouse.GetPosition(AnnotationCanvas));
+            return;
+        }
+
+        if (_eraserMode)
+        {
+            if (_eraserDragging)
+            {
+                _eraserDragging = false;
+                AnnotationCanvas.ReleaseMouseCapture();
+                EraseStroke(_eraserStrokePoints);
+                _eraserStrokePoints.Clear();
+                if (_eraserChanged) AutoSaveAnnotation("橡皮擦轨迹");
+            }
+            _eraserMode = true;
+            _eraserCursorPoint = null;
+            _manualDrawMode = false;
+            UpdateToolButtons();
+            RenderAnnotations();
+            StatusText.Text = "S：本次橡皮擦操作已结束，可继续擦除下一个区域。";
+            return;
+        }
+
+        if (_manualDrawMode)
+        {
+            if (_polygonPoints.Count >= 3)
+            {
+                FinishPolygon();
+            }
+            else if (_polygonPoints.Count > 0)
+            {
+                CancelPolygonDraft();
+                RenderAnnotations();
+            }
+            _manualDrawMode = true;
+            AnnotationCanvas.ReleaseMouseCapture();
+            UpdateToolButtons();
+            RenderAnnotations();
+            StatusText.Text = "S：本次手动绘制已结束，可继续绘制下一个。";
+        }
+    }
+
+    private static bool IsTextInputFocused() =>
+        Keyboard.FocusedElement is TextBoxBase or PasswordBox or ComboBox;
+
     private async Task UndoLastSam1PromptAsync()
     {
         if (_image is null || _annotation is null || _dataset is null ||
@@ -1613,7 +1903,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         if (_sam1Prompts.Count == 0)
         {
-            StatusText.Text = "SAM1 当前没有可以撤销的点击。";
+            StatusText.Text = "当前没有可以撤销的智能标注点击。";
             return;
         }
 
@@ -1634,7 +1924,7 @@ public partial class DatasetAnnotationPage : UserControl
             }
             RefreshAnnotationList(-1);
             RenderAnnotations();
-            StatusText.Text = $"已撤销最近的 SAM1 {(removed.Label == 1 ? "目标点" : "排除点")}；本轮掩膜已移除。";
+            StatusText.Text = $"已撤销最近的智能标注 {(removed.Label == 1 ? "目标点" : "排除点")}；本轮掩膜已移除。";
             if (AnnotationCanvas.IsMouseOver)
                 ScheduleSam1Hover(Mouse.GetPosition(AnnotationCanvas));
             return;
@@ -1643,7 +1933,7 @@ public partial class DatasetAnnotationPage : UserControl
         RenderAnnotations();
         try
         {
-            StatusText.Text = "正在撤销最近的 SAM1 点击并重新计算掩膜……";
+            StatusText.Text = "正在撤销最近的智能标注点击并重新计算掩膜……";
             var prompts = _sam1Prompts.ToArray();
             var result = await AppServices.Instance.SmartAnnotations.RunSam1ClickAsync(
                 image.FullPath, prompts, className);
@@ -1661,11 +1951,11 @@ public partial class DatasetAnnotationPage : UserControl
             RenderAnnotations();
             AppServices.Instance.Datasets.SaveAnnotation(_dataset, _annotation);
             RefreshImageList(image.RelativePath, suppressSelectionChanged: true);
-            StatusText.Text = $"已撤销最近的 SAM1 {(removed.Label == 1 ? "目标点" : "排除点")}，掩膜已恢复到上一步。";
+            StatusText.Text = $"已撤销最近的智能标注 {(removed.Label == 1 ? "目标点" : "排除点")}，掩膜已恢复到上一步。";
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"SAM1 撤销失败：{ex.Message}";
+            StatusText.Text = $"智能标注撤销失败：{ex.Message}";
         }
     }
 
@@ -1702,7 +1992,7 @@ public partial class DatasetAnnotationPage : UserControl
         _sam1HoverBusy = true;
         try
         {
-            StatusText.Text = "SAM1 正在生成悬浮预览……";
+            StatusText.Text = "智能标注正在生成悬浮预览……";
             var result = await AppServices.Instance.SmartAnnotations.RunSam1ClickAsync(
                 image.FullPath, [prompt], className);
             if (_sam1ClickMode && _sam1Prompts.Count == 0 && _sam1HoverPoint is not null &&
@@ -1715,7 +2005,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
-            if (_sam1ClickMode) StatusText.Text = $"SAM1 悬浮预览失败：{ex.Message}";
+            if (_sam1ClickMode) StatusText.Text = $"智能标注悬浮预览失败：{ex.Message}";
         }
         finally
         {
@@ -1746,7 +2036,7 @@ public partial class DatasetAnnotationPage : UserControl
             _sam1HoverTimer.Start();
         }
         RenderAnnotations();
-        StatusText.Text = "已捕捉悬浮位置，正在生成 SAM1 预览……";
+        StatusText.Text = "已捕捉悬浮位置，正在生成智能标注预览……";
     }
 
     private void ClearSam1HoverPreview()
@@ -1799,7 +2089,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
 
         StatusText.Text = "当前图片没有可用的 YOLOE 标注记忆。请先手动画框并选择类别，标注会在操作完成后自动保存。";
-        MessageBox.Show(
+        ThemedMessageBox.Show(
             "还没有可用的标注记忆。请先在当前图片上画至少一个矩形框并选择类别，标注完成后会自动保存，再使用 YOLOE 自动标注。",
             "需要先建立标注记忆",
             MessageBoxButton.OK,

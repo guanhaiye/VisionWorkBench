@@ -1,0 +1,89 @@
+<Window x:Class="VisionWorkbench.App.RuleAddDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource ThemedDialogWindow}"
+        Width="480" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        Title="添加判定规则">
+    <Border Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="10"
+            Padding="20">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="22" ShadowDepth="6" Direction="270"
+                              Opacity="0.18" Color="#334155"/>
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal">
+                <Border Width="4" Height="22" Background="{DynamicResource AccentBrush}"
+                        CornerRadius="2" Margin="0,0,10,0"/>
+                <TextBlock Text="添加判定规则" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextBrush}"/>
+            </StackPanel>
+            <TextBlock Grid.Row="1" Text="选择规则种类，确认后会在规则栏新增一行。"
+                       Margin="14,12,0,10" Foreground="{DynamicResource MutedTextBrush}"/>
+
+            <Grid Grid.Row="2" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="规则种类" VerticalAlignment="Center"/>
+                <ComboBox x:Name="KindCombo" Grid.Column="1" SelectedIndex="0">
+                    <ComboBoxItem Content="面积范围（像素²）" Tag="AreaRange"/>
+                    <ComboBoxItem Content="直径范围（像素）" Tag="DiameterRange"/>
+                    <ComboBoxItem Content="数量范围" Tag="CountRange"/>
+                </ComboBox>
+            </Grid>
+            <Grid Grid.Row="3" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="目标类别" VerticalAlignment="Center"/>
+                <ComboBox x:Name="ClassCombo" Grid.Column="1"
+                          SelectedValuePath="ClassId"
+                          SelectedIndex="0"
+                          ToolTip="选择所有类别或指定类别">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayName}"
+                                       Foreground="{DynamicResource TextBrush}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </Grid>
+            <Grid Grid.Row="4" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="范围" VerticalAlignment="Center"/>
+                <TextBox x:Name="MinimumText" Grid.Column="1" ToolTip="留空表示不限"/>
+                <TextBlock Grid.Column="2" Text="至" Margin="10,0" VerticalAlignment="Center"/>
+                <TextBox x:Name="MaximumText" Grid.Column="3" ToolTip="留空表示不限"/>
+            </Grid>
+            <TextBlock Grid.Row="5" x:Name="HintText"
+                       Text="面积单位为像素²，直径单位为像素；数量必须为整数。留空表示对应方向不限。"
+                       TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"
+                       Margin="90,0,0,14"/>
+            <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="取消" IsCancel="True" Style="{StaticResource SecondaryButton}"
+                        Click="Cancel_Click"/>
+                <Button Content="添加" IsDefault="True" Click="Add_Click" Margin="8,2,4,2"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

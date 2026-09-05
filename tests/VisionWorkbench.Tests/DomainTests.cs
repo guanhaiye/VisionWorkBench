@@ -293,6 +293,30 @@ public sealed class DomainTests
         Assert.Equal(2, service.State.CurrentTotal);
     }
 
+    [Fact]
+    public void ApplyOutput_SnapshotFallback_Accumulates_Object_Count_When_Events_Are_Empty()
+    {
+        var service = new CountingService("c1");
+        var output = new AlgorithmOutput
+        {
+            OutputId = "o1",
+            InputId = "i1",
+            Sequence = 7,
+            Detections =
+            [
+                new DetectionResult { ClassId = "part", ClassName = "零件", Confidence = 0.9, Box = new() },
+                new DetectionResult { ClassId = "part", ClassName = "零件", Confidence = 0.8, Box = new() },
+            ],
+        };
+
+        var events = service.ApplyOutput(output, snapshotFallback: true);
+
+        Assert.Single(events);
+        Assert.Equal(CountingEventType.Appeared, events[0].Type);
+        Assert.Equal(2, events[0].Delta);
+        Assert.Equal(2, service.State.CurrentTotal);
+    }
+
     // ---- CNT-L-014 事件重放恢复 ----
 
     [Fact]

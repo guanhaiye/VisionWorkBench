@@ -59,10 +59,15 @@ public sealed class RecipeService(TaskRepository tasks)
         {
             throw new ArgumentException("推理设备只能选择 cpu 或 cuda（CFG-006）");
         }
+        var taskType = recipe.TaskType.Normalize();
         ValidateGeometry(recipe);
         ValidateSettingsJson(recipe.SettingsJson);
-        // 流水计数模式无 OK/NG 判定，允许零规则（§16.3/§16.4）
-        if (recipe.Rules.Count == 0 && recipe.CountingMode == CountingMode.Snapshot)
+        // 流水计数模式和轮廓分析不需要 OK/NG 判定，允许零规则（§16.3/§16.4）
+        if (recipe.Rules.Count == 0
+            && recipe.CountingMode == CountingMode.Snapshot
+            && taskType is (InspectionTaskType.Detection or InspectionTaskType.BehaviorRecognition)
+            && !(recipe.PostProcess.Mode == PostProcessMode.PythonScript
+                 && !string.IsNullOrWhiteSpace(recipe.PostProcess.Script)))
         {
             throw new ArgumentException("至少配置一条判定规则（CFG-004）");
         }
@@ -89,21 +94,28 @@ public sealed class RecipeService(TaskRepository tasks)
         entity.SettingsJson = string.IsNullOrWhiteSpace(recipe.SettingsJson) ? "{}" : recipe.SettingsJson;
         entity.RulesJson = JsonSerializer.Serialize(recipe.Rules, JsonOptions);
         // ROI / 计数模式 / 检测线 共存于 RegionsJson（可选字段，旧数据缺失回退默认）
-        var hasRegions = recipe.Roi is not null
+        var hasRegions = !taskType.IsCounting()
+            || recipe.Roi is not null
             || recipe.CountingLine is not null
             || recipe.CountingMode != CountingMode.Snapshot
             || recipe.ExecutionProvider != "cpu"
             || recipe.Behavior.Enabled
-            || recipe.Behavior.Zones.Count > 0;
+            || recipe.Behavior.Zones.Count > 0
+            || recipe.PostProcess.Mode != PostProcessMode.VisualRules
+            || !string.IsNullOrWhiteSpace(recipe.PostProcess.Script);
         entity.RegionsJson = hasRegions
             ? JsonSerializer.Serialize(new
             {
                 recipe.Roi,
                 Policy = recipe.Roi is null ? null : recipe.RoiPolicy.ToString(),
+                // 原样持久化以保证旧任务（Counting/ContourAnalysis）可无损往返；
+                // 业务判断通过 Normalize/IsXxx 扩展方法获得统一语义。
+                TaskType = recipe.TaskType.ToString(),
                 Mode = recipe.CountingMode.ToString(),
                 Line = recipe.CountingLine,
                 ExecutionProvider = recipe.ExecutionProvider,
                 Behavior = recipe.Behavior,
+                PostProcess = recipe.PostProcess,
             }, JsonOptions)
             : null;
         return await tasks.SaveAsync(entity, ct);
@@ -124,10 +136,12 @@ public sealed class RecipeService(TaskRepository tasks)
         }
         Contracts.Results.NormalizedRect? roi = null;
         var policy = RoiBoundaryPolicy.CenterInside;
+        var taskType = InspectionTaskType.Detection;
         var mode = CountingMode.Snapshot;
         CountingLineConfig? line = null;
         var executionProvider = "cpu";
         var behavior = new BehaviorRecognitionConfig();
+        var postProcess = new PostProcessConfig();
         if (!string.IsNullOrWhiteSpace(entity.RegionsJson))
         {
             try
@@ -138,6 +152,10 @@ public sealed class RecipeService(TaskRepository tasks)
                 {
                     policy = parsed;
                 }
+                if (doc?.TaskType is { } t)
+                {
+                    taskType = t;
+                }
                 if (doc?.Mode is { } m)
                 {
                     mode = m; // JsonStringEnumConverter 已校验，非法值抛 JsonException 走回退
@@ -145,6 +163,7 @@ public sealed class RecipeService(TaskRepository tasks)
                 line = doc?.Line;
                 executionProvider = doc?.ExecutionProvider is "cuda" ? "cuda" : "cpu";
                 behavior = doc?.Behavior ?? new BehaviorRecognitionConfig();
+                postProcess = doc?.PostProcess ?? new PostProcessConfig();
             }
             catch (JsonException)
             {
@@ -164,9 +183,11 @@ public sealed class RecipeService(TaskRepository tasks)
             SettingsJson = entity.SettingsJson,
             Roi = roi,
             RoiPolicy = policy,
+            TaskType = taskType,
             CountingMode = mode,
             CountingLine = line,
             Behavior = behavior,
+            PostProcess = postProcess,
             Rules = rules,
         };
     }
@@ -174,10 +195,12 @@ public sealed class RecipeService(TaskRepository tasks)
     private sealed record RegionDoc(
         Contracts.Results.NormalizedRect? Roi,
         string? Policy,
+        InspectionTaskType? TaskType,
         CountingMode? Mode,
         CountingLineConfig? Line,
         string? ExecutionProvider,
-        BehaviorRecognitionConfig? Behavior);
+        BehaviorRecognitionConfig? Behavior,
+        PostProcessConfig? PostProcess);
 
     private static void ValidateSettingsJson(string settingsJson)
     {

@@ -1,6 +1,7 @@
 <UserControl x:Class="VisionWorkbench.App.DevicesPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:VisionWorkbench.App">
     <Grid Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -30,9 +31,9 @@
                     <Button Content="测试选中设备" Click="Test_Click" />
                     <TextBlock x:Name="TestStatusText" VerticalAlignment="Center" Margin="12,0,0,0" />
                 </StackPanel>
-                <Border Grid.Row="1" Background="#111" Margin="0,6,0,0">
+                <local:ImageViewer Grid.Row="1" Background="#111" Margin="0,6,0,0">
                     <Image x:Name="TestPreviewImage" Stretch="Uniform" />
-                </Border>
+                </local:ImageViewer>
             </Grid>
         </GroupBox>
     </Grid>

@@ -18,7 +18,7 @@ public partial class DatasetRenameDialog : Window
     {
         if (string.IsNullOrWhiteSpace(DatasetName))
         {
-            MessageBox.Show("数据集名称不能为空。", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show("数据集名称不能为空。", "数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         DialogResult = true;

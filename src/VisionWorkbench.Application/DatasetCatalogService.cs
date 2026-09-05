@@ -167,15 +167,18 @@ public sealed class DatasetCatalogService
 
         var images = ListImages(dataset);
         if (images.Count == 0) throw new InvalidOperationException("数据集目录中没有图片");
+        var annotatedImages = images.Where(image => image.HasAnnotation).ToArray();
+        if (annotatedImages.Length == 0)
+            throw new InvalidOperationException("数据集中没有已标注图片，未标注图片不会参与自动划分");
 
-        var trainCount = (int)Math.Round(images.Count * trainRatio, MidpointRounding.AwayFromZero);
-        if (images.Count >= 2) trainCount = Math.Clamp(trainCount, 1, images.Count - 1);
+        var trainCount = (int)Math.Round(annotatedImages.Length * trainRatio, MidpointRounding.AwayFromZero);
+        if (annotatedImages.Length >= 2) trainCount = Math.Clamp(trainCount, 1, annotatedImages.Length - 1);
         else trainCount = 1;
 
         dataset.ImageSplits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var index = 0; index < images.Count; index++)
+        for (var index = 0; index < annotatedImages.Length; index++)
         {
-            dataset.ImageSplits[NormalizeRelativePath(images[index].RelativePath)] =
+            dataset.ImageSplits[NormalizeRelativePath(annotatedImages[index].RelativePath)] =
                 index < trainCount ? "train" : "val";
         }
         return Save(dataset);
@@ -240,6 +243,30 @@ public sealed class DatasetCatalogService
             yaml.AppendLine($"  {i}: {dataset.Classes[i]}");
         File.WriteAllText(Path.Combine(output, "data.yaml"), yaml.ToString(), Encoding.UTF8);
         return output;
+    }
+
+    /// <summary>导出 ATU5/FPN 语义分割 Worker 使用的像素掩膜清单。</summary>
+    public string ExportSemantic(DatasetDefinition dataset, string outputDirectory)
+    {
+        if (dataset.Classes.Count == 0) throw new InvalidOperationException("请先配置至少一个类别");
+        var images = ListImages(dataset).Where(x => x.Split is "train" or "val" && x.HasAnnotation).ToArray();
+        if (images.Length == 0) throw new InvalidOperationException("请先为语义分割图片配置标注并划分训练集和验证集");
+
+        var output = Path.GetFullPath(outputDirectory);
+        Directory.CreateDirectory(output);
+        var manifest = new
+        {
+            classes = dataset.Classes,
+            items = images.Select(image => new
+            {
+                imagePath = image.FullPath,
+                split = image.Split,
+                objects = LoadAnnotation(dataset, image.RelativePath).Objects,
+            }),
+        };
+        var manifestPath = Path.Combine(output, "semantic-manifest.json");
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), Encoding.UTF8);
+        return manifestPath;
     }
 
     private static string? ToYoloLine(DatasetAnnotationObject obj, IReadOnlyList<string> classes)

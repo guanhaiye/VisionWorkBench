@@ -57,12 +57,12 @@ public partial class CommunicationPage : UserControl
     }
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
-        try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); StateText.Text = "配置已保存"; } catch (Exception ex) { MessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
+        try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); StateText.Text = "配置已保存"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
-    private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = "已启动"; } catch (Exception ex) { MessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
+    private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
     private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
     private async void Send_Click(object sender, RoutedEventArgs e)
-    { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { MessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
+    { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
     private void Mode_Changed(object sender, SelectionChangedEventArgs e) => UpdateModeVisibility();
     private void TriggerTask_Changed(object sender, SelectionChangedEventArgs e)
     {
@@ -94,7 +94,7 @@ public partial class CommunicationPage : UserControl
     {
         var configuredIds = TriggerRulesList.Items.OfType<TriggerRuleRow>().Select(row => row.TaskId).ToHashSet();
         var task = _triggerTasks.FirstOrDefault(item => !configuredIds.Contains(item.Id)) ?? _triggerTasks.FirstOrDefault();
-        if (task is null) { MessageBox.Show("请先创建检测任务", "TCP/IP 设置"); return; }
+        if (task is null) { ThemedMessageBox.Show("请先创建检测任务", "TCP/IP 设置"); return; }
         TriggerRulesList.SelectedItem = null;
         _loadingTriggerEditor = true;
         TriggerTaskCombo.SelectedItem = task;
@@ -117,7 +117,7 @@ public partial class CommunicationPage : UserControl
     {
         if (TriggerTaskCombo.SelectedItem is not TaskEntity task)
         {
-            MessageBox.Show("请先选择检测任务", "TCP/IP 设置");
+            ThemedMessageBox.Show("请先选择检测任务", "TCP/IP 设置");
             return;
         }
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
@@ -130,7 +130,7 @@ public partial class CommunicationPage : UserControl
         };
         if (config.Enabled && string.IsNullOrWhiteSpace(config.MatchValue))
         {
-            MessageBox.Show("启用任务触发时，接收消息不能为空", "TCP/IP 设置");
+            ThemedMessageBox.Show("启用任务触发时，接收消息不能为空", "TCP/IP 设置");
             return;
         }
         if (config.Enabled && _triggerTasks.Any(other => other.Id != task.Id
@@ -138,7 +138,7 @@ public partial class CommunicationPage : UserControl
             && existing.MatchMode == config.MatchMode
             && string.Equals(existing.MatchValue, config.MatchValue, StringComparison.Ordinal)))
         {
-            MessageBox.Show("该触发消息已被其他任务使用，请为每个任务配置唯一消息", "TCP/IP 设置");
+            ThemedMessageBox.Show("该触发消息已被其他任务使用，请为每个任务配置唯一消息", "TCP/IP 设置");
             return;
         }
         task.TriggerJson = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });

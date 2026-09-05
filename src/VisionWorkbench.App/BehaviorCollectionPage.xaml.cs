@@ -67,7 +67,7 @@ public partial class BehaviorCollectionPage : UserControl
         if (dialog.ShowDialog() != true) return;
         if (!BehaviorDatasetStore.TryLoadFromRoot(dialog.FolderName, out var dataset) || dataset is null)
         {
-            MessageBox.Show("目录中没有 .visionworkbench/behavior-dataset.json。", "加载行为数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("目录中没有 .visionworkbench/behavior-dataset.json。", "加载行为数据集", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         _dataset = dataset;
@@ -181,7 +181,7 @@ public partial class BehaviorCollectionPage : UserControl
             catch (Exception ex)
             {
                 _recording = false;
-                Dispatcher.BeginInvoke(() => MessageBox.Show(ex.Message, "录制失败", MessageBoxButton.OK, MessageBoxImage.Warning));
+                Dispatcher.BeginInvoke(() => ThemedMessageBox.Show(ex.Message, "录制失败", MessageBoxButton.OK, MessageBoxImage.Warning));
             }
         }
         Dispatcher.BeginInvoke(() =>
@@ -284,14 +284,14 @@ public partial class BehaviorCollectionPage : UserControl
         }
         if (_dataset is null)
         {
-            MessageBox.Show("请先新建或加载行为数据集。", "开始录制", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先新建或加载行为数据集。", "开始录制", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (_session is null && CameraCombo.SelectedItem is CameraDescriptor)
             await StartPreviewAsync();
         if (_session is null)
         {
-            MessageBox.Show("请先选择并打开相机。", "开始录制", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先选择并打开相机。", "开始录制", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         var sourceId = Guid.NewGuid().ToString("N");
@@ -378,7 +378,7 @@ public partial class BehaviorCollectionPage : UserControl
             RefreshSourceList();
             StatusText.Text = $"已导入视频并抽取 {result.Count} 帧。";
         }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "导入视频失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "导入视频失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
 
     private async void ImportFrames_Click(object sender, RoutedEventArgs e)
@@ -577,7 +577,7 @@ public partial class BehaviorCollectionPage : UserControl
     private async void DeleteSource_Click(object sender, RoutedEventArgs e)
     {
         if (_dataset is null || SourceList.SelectedItem is not BehaviorSequenceSource source) return;
-        var answer = MessageBox.Show(
+        var answer = ThemedMessageBox.Show(
             $"确定删除采集来源“{source.Name}”吗？\n对应的视频和帧文件也会从本地删除。",
             "删除采集来源", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes) return;
@@ -597,7 +597,7 @@ public partial class BehaviorCollectionPage : UserControl
     private async void ClearSources_Click(object sender, RoutedEventArgs e)
     {
         if (_dataset is null || _dataset.Sources.Count == 0) return;
-        var answer = MessageBox.Show(
+        var answer = ThemedMessageBox.Show(
             $"确定清空全部 {_dataset.Sources.Count} 个采集来源吗？\n对应的视频、帧文件和关联标注也会删除。",
             "清空采集来源", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes) return;
@@ -665,5 +665,5 @@ public partial class BehaviorCollectionPage : UserControl
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = _dataset.RootDirectory, UseShellExecute = true });
     }
 
-    private void ShowDatasetRequired() => MessageBox.Show("请先新建或加载行为数据集。", "行为数据采集", MessageBoxButton.OK, MessageBoxImage.Information);
+    private void ShowDatasetRequired() => ThemedMessageBox.Show("请先新建或加载行为数据集。", "行为数据采集", MessageBoxButton.OK, MessageBoxImage.Information);
 }

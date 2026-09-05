@@ -80,4 +80,22 @@ public sealed class FrameSchedulerTests
         Assert.Equal(2, (await scheduler.TakeNextAsync(CancellationToken.None))!.Sequence);
         Assert.Null(await scheduler.TakeNextAsync(CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Bounded_Slow_Consumer_Does_Not_Drop_Frames()
+    {
+        var scheduler = new FrameScheduler(FrameRoutingStrategy.Bounded, boundedCapacity: 2);
+        for (var i = 1; i <= 10; i++)
+        {
+            scheduler.OnFrame(Frame(i));
+        }
+        scheduler.Complete();
+
+        for (var i = 1; i <= 10; i++)
+        {
+            Assert.Equal(i, (await scheduler.TakeNextAsync(CancellationToken.None))!.Sequence);
+        }
+        Assert.Equal(0, scheduler.DroppedFrameCount);
+        Assert.Null(await scheduler.TakeNextAsync(CancellationToken.None));
+    }
 }

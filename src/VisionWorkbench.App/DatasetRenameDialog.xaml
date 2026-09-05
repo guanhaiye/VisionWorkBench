@@ -4,10 +4,18 @@
         Title="修改数据集名称"
         Width="360"
         Height="150"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False">
-    <Grid Margin="16">
+        Style="{StaticResource ThemedDialogWindow}"
+        WindowStartupLocation="CenterOwner">
+    <Border Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="10"
+            Padding="20">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="22" ShadowDepth="6" Direction="270"
+                              Opacity="0.18" Color="#334155" />
+        </Border.Effect>
+        <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -17,5 +25,6 @@
             <Button Content="确定" Click="Confirm_Click" Width="76" Margin="0,0,8,0" />
             <Button Content="取消" Click="Cancel_Click" Width="76" />
         </StackPanel>
-    </Grid>
+        </Grid>
+    </Border>
 </Window>

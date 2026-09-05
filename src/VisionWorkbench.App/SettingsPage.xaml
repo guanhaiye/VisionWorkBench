@@ -12,6 +12,17 @@
                 </StackPanel>
             </GroupBox>
 
+            <GroupBox Header="标注数据集目录">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBox x:Name="DatasetDirText" Margin="0,4,8,4" MinWidth="420" />
+                        <Button Content="选择目录" Click="BrowseDatasetDirectory_Click" Margin="0,4,0,4" />
+                    </StackPanel>
+                    <TextBlock Text="标注平台读取原始图片后，会复制到此目录下的新数据集目录，不会修改原始图片目录。默认：E:\。"
+                               Foreground="#888" FontSize="11" TextWrapping="Wrap" />
+                </StackPanel>
+            </GroupBox>
+
             <GroupBox Header="Python 解释器（开发态；打包态用插件内嵌 runtime）">
                 <StackPanel>
                     <TextBox x:Name="PythonText" Margin="0,4,0,4" />
@@ -30,6 +41,15 @@
                     <ComboBoxItem Content="cuda" />
                     <ComboBoxItem Content="openvino" />
                 </ComboBox>
+            </GroupBox>
+
+            <GroupBox Header="检测数据记录">
+                <StackPanel>
+                    <CheckBox x:Name="EnableHistoryCheck" Content="开启历史记录" IsChecked="True"
+                              Margin="0,4,0,2" />
+                    <TextBlock Text="关闭后不再在历史记录页面显示新产生的检测记录。"
+                               Foreground="#888" FontSize="11" TextWrapping="Wrap" />
+                </StackPanel>
             </GroupBox>
 
             <GroupBox Header="界面主题（立即生效）">
@@ -61,13 +81,14 @@
             <GroupBox Header="角色与操作者（v1 免密切换——已知限制 #8）">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="角色：" VerticalAlignment="Center" />
-                    <ComboBox x:Name="RoleCombo" Width="140">
+                    <ComboBox x:Name="RoleCombo" Width="140" IsEnabled="False" ToolTip="请在用户管理中维护角色">
                         <ComboBoxItem Content="操作员" Tag="operator" />
                         <ComboBoxItem Content="工程师" Tag="engineer" IsSelected="True" />
                         <ComboBoxItem Content="专家" Tag="expert" />
                     </ComboBox>
                     <TextBlock Text="操作者姓名：" VerticalAlignment="Center" Margin="24,0,8,0" />
-                    <TextBox x:Name="OperatorNameText" Width="160" />
+                    <TextBox x:Name="OperatorNameText" Width="160" IsReadOnly="True"
+                             ToolTip="请在用户管理中维护账号" />
                 </StackPanel>
             </GroupBox>
 

@@ -136,7 +136,13 @@ class Yolo11Engine:
             ) from error
 
         self.device = self._resolve_device(self.settings.device)
-        self.model = YOLO(str(self.settings.model_path))
+        model_suffix = self.settings.model_path.suffix.lower()
+        task_hint = (
+            "segment" if self.settings.task in {"instance", "semantic"}
+            else "pose" if self.settings.task == "pose"
+            else "detect"
+        )
+        self.model = YOLO(str(self.settings.model_path), task=task_hint) if model_suffix == ".engine" else YOLO(str(self.settings.model_path))
         self.temporal_pose = TemporalPoseClassifier(
             self.settings.temporal_model_type,
             self.settings.temporal_model_path,
@@ -186,25 +192,40 @@ class Yolo11Engine:
             )
         return configured
 
-    def predict(self, image_path: str, sequence: int = 0) -> dict[str, Any]:
+    def predict(
+        self,
+        image_path: str,
+        sequence: int = 0,
+        roi: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         image = _read_image(image_path)
-        height, width = image.shape[:2]
+        full_height, full_width = image.shape[:2]
+        roi_bounds = _roi_pixel_bounds(roi, full_width, full_height)
+        inference_image = image
+        if roi_bounds is not None:
+            left, top, right, bottom = roi_bounds
+            inference_image = image[top:bottom, left:right]
+        height, width = inference_image.shape[:2]
         started = time.perf_counter()
         if self.settings.tracking:
             results = self.model.track(
-                source=image,
+                source=inference_image,
                 persist=True,
                 tracker="bytetrack.yaml",
                 **self._predict_options(),
             )
         else:
-            results = self.model.predict(source=image, **self._predict_options())
+            results = self.model.predict(source=inference_image, **self._predict_options())
         if not results:
             result: Any = None
         else:
             result = results[0]
 
         output = self._build_output(result, width, height, image_path, sequence)
+        output["imageWidth"] = width
+        output["imageHeight"] = height
+        if roi_bounds is not None:
+            _restore_output_coordinates(output, roi_bounds, full_width, full_height)
         total_ms = (time.perf_counter() - started) * 1000.0
         output["performance"] = {
             "inferenceMs": round(total_ms, 2),
@@ -366,7 +387,7 @@ class Yolo11Engine:
                     "mode": "instance",
                     "classId": detection["classId"],
                     "confidence": detection["confidence"],
-                    "contours": [contour],
+                    "contours": _protocol_contour_list([contour]),
                     "areaRatio": round(_contour_area_ratio(contour), 8),
                     "maskImagePath": saved,
                 }
@@ -419,7 +440,7 @@ class Yolo11Engine:
                     "mode": "semantic",
                     "classId": str(class_id),
                     "confidence": round(scores.get(class_id, 0.0), 6),
-                    "contours": contours,
+                    "contours": _protocol_contour_list(contours),
                     "areaRatio": round(float(mask.mean()), 8),
                     "maskImagePath": saved,
                 }
@@ -444,7 +465,7 @@ class Yolo11Engine:
                     "mode": "semantic",
                     "classId": str(class_id),
                     "confidence": 1.0,
-                    "contours": contours,
+                    "contours": _protocol_contour_list(contours),
                     "areaRatio": round(float(mask.mean()), 8),
                     "maskImagePath": saved,
                 }
@@ -544,6 +565,81 @@ def _normalized_box(box: Iterable[float], width: int, height: int) -> dict[str, 
     }
 
 
+def _roi_pixel_bounds(
+    roi: dict[str, Any] | None, width: int, height: int
+) -> tuple[int, int, int, int] | None:
+    """Convert a normalized ROI to a non-empty pixel crop."""
+    if not isinstance(roi, dict):
+        return None
+    try:
+        x = float(roi.get("x", 0.0))
+        y = float(roi.get("y", 0.0))
+        roi_width = float(roi.get("width", 0.0))
+        roi_height = float(roi.get("height", 0.0))
+    except (TypeError, ValueError):
+        return None
+    if roi_width <= 0 or roi_height <= 0:
+        return None
+    x = max(0.0, min(x, 1.0))
+    y = max(0.0, min(y, 1.0))
+    x2 = max(x, min(x + roi_width, 1.0))
+    y2 = max(y, min(y + roi_height, 1.0))
+    left = max(0, min(width - 1, int(round(x * width))))
+    top = max(0, min(height - 1, int(round(y * height))))
+    right = max(left + 1, min(width, int(round(x2 * width))))
+    bottom = max(top + 1, min(height, int(round(y2 * height))))
+    return left, top, right, bottom
+
+
+def _restore_output_coordinates(
+    output: dict[str, Any], bounds: tuple[int, int, int, int], full_width: int, full_height: int
+) -> None:
+    """Map crop-relative output coordinates back to the original image."""
+    left, top, right, bottom = bounds
+    offset_x = left / full_width
+    offset_y = top / full_height
+    scale_x = (right - left) / full_width
+    scale_y = (bottom - top) / full_height
+
+    for detection in output.get("detections", []):
+        _restore_box(detection.get("box"), offset_x, offset_y, scale_x, scale_y)
+    for track in output.get("tracks", []):
+        _restore_box(track.get("box"), offset_x, offset_y, scale_x, scale_y)
+        for point in track.get("trail", []):
+            _restore_point(point, offset_x, offset_y, scale_x, scale_y)
+    for keypoint in output.get("keypoints", []):
+        for point in keypoint.get("points", []):
+            _restore_point(point, offset_x, offset_y, scale_x, scale_y)
+    for segmentation in output.get("segmentations", []):
+        for contour in segmentation.get("contours", []):
+            for point in contour:
+                if isinstance(point, list) and len(point) >= 2:
+                    point[0] = offset_x + float(point[0]) * scale_x
+                    point[1] = offset_y + float(point[1]) * scale_y
+        if "areaRatio" in segmentation:
+            segmentation["areaRatio"] = float(segmentation["areaRatio"]) * scale_x * scale_y
+
+
+def _restore_box(
+    box: dict[str, Any] | None, offset_x: float, offset_y: float, scale_x: float, scale_y: float
+) -> None:
+    if not isinstance(box, dict):
+        return
+    box["x"] = offset_x + float(box.get("x", 0.0)) * scale_x
+    box["y"] = offset_y + float(box.get("y", 0.0)) * scale_y
+    box["width"] = float(box.get("width", 0.0)) * scale_x
+    box["height"] = float(box.get("height", 0.0)) * scale_y
+
+
+def _restore_point(
+    point: dict[str, Any] | None, offset_x: float, offset_y: float, scale_x: float, scale_y: float
+) -> None:
+    if not isinstance(point, dict):
+        return
+    point["x"] = offset_x + float(point.get("x", 0.0)) * scale_x
+    point["y"] = offset_y + float(point.get("y", 0.0)) * scale_y
+
+
 def _polygon_from_list(polygons: Any, index: int) -> list[list[float]]:
     try:
         polygon = np.asarray(polygons[index], dtype=np.float32)
@@ -593,3 +689,17 @@ def _contour_area_ratio(contour: list[list[float]]) -> float:
         x2, y2 = contour[(index + 1) % len(contour)]
         area += x1 * y2 - x2 * y1
     return abs(area) / 2.0
+
+
+def _protocol_contour_list(
+    contours: list[list[list[float]]],
+) -> list[list[dict[str, float]]]:
+    """把内部的 [x, y] 轮廓转换为宿主协议要求的 {x, y} 点。"""
+    return [
+        [
+            {"x": point[0], "y": point[1]}
+            for point in contour
+            if len(point) >= 2
+        ]
+        for contour in contours
+    ]

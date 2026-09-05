@@ -24,6 +24,15 @@ public enum RuleKind
     /// <summary>置信度过低转人工确认（RUL-005）。</summary>
     LowConfidence,
 
+    /// <summary>Target area range, stored in square pixels.</summary>
+    AreaRange,
+
+    /// <summary>Target diameter range, stored in pixels.</summary>
+    DiameterRange,
+
+    /// <summary>Target count range.</summary>
+    CountRange,
+
     // ---- 区域、缺陷和行为规则 ----
     RegionMustHaveTarget,
     RegionForbiddenTarget,
@@ -49,6 +58,12 @@ public sealed record InspectionRule
 
     /// <summary>低置信度阈值（LowConfidence 规则）。</summary>
     public double MinConfidence { get; init; } = 0.6;
+
+    /// <summary>Minimum value for range rules; 0 means no lower bound.</summary>
+    public double Minimum { get; init; }
+
+    /// <summary>Maximum value for range rules; 0 means no upper bound.</summary>
+    public double Maximum { get; init; }
 
     /// <summary>失败时是否降级为人工确认而不是 NG。</summary>
     public bool DowngradeToReview { get; init; }
@@ -91,12 +106,53 @@ public enum CountingMode
     LineCrossing,
 }
 
-/// <summary>任务配置类型，用于决定任务配置页显示的专业参数。</summary>
+/// <summary>后处理判定方式。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum PostProcessMode
+{
+    VisualRules,
+    PythonScript,
+}
+
+/// <summary>任务完成算法推理后的筛选配置。</summary>
+public sealed record PostProcessConfig
+{
+    public PostProcessMode Mode { get; init; } = PostProcessMode.VisualRules;
+    public string Script { get; init; } = "";
+}
+
+/// <summary>任务类型，与数据与模型平台保持一致。</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InspectionTaskType
 {
-    Counting,
+    Detection,
+    SemanticSegmentation,
+    InstanceSegmentation,
     BehaviorRecognition,
+    AiText,
+    Barcode,
+    QrCode,
+
+    // Legacy values retained so existing task JSON can still be read.
+    Counting,
+    ContourAnalysis,
+}
+
+public static class InspectionTaskTypeExtensions
+{
+    public static InspectionTaskType Normalize(this InspectionTaskType type) => type switch
+    {
+        InspectionTaskType.Counting => InspectionTaskType.Detection,
+        InspectionTaskType.ContourAnalysis => InspectionTaskType.InstanceSegmentation,
+        _ => type,
+    };
+
+    public static bool IsCounting(this InspectionTaskType type) => type.Normalize() == InspectionTaskType.Detection;
+
+    public static bool IsRegion(this InspectionTaskType type) => type.Normalize() is
+        InspectionTaskType.SemanticSegmentation or InspectionTaskType.InstanceSegmentation;
+
+    public static bool IsBehavior(this InspectionTaskType type) => type.Normalize() == InspectionTaskType.BehaviorRecognition;
 }
 
 /// <summary>检测线配置（LineCrossing 模式，归一化坐标）。</summary>
@@ -127,8 +183,8 @@ public sealed record Recipe
     /// <summary>推理设备：cpu 或 cuda。</summary>
     public string ExecutionProvider { get; init; } = "cpu";
 
-    /// <summary>任务类型：目标计数与判定，或行为识别。</summary>
-    public InspectionTaskType TaskType { get; init; } = InspectionTaskType.Counting;
+    /// <summary>任务类型：与数据与模型平台的任务类型一致。</summary>
+    public InspectionTaskType TaskType { get; init; } = InspectionTaskType.Detection;
 
     /// <summary>插件设置（透传 initialize.settings）。</summary>
     public string SettingsJson { get; init; } = "{}";
@@ -146,6 +202,9 @@ public sealed record Recipe
 
     /// <summary>首期行为识别配置：区域闯入、滞留、聚集及后续跌倒模型参数。</summary>
     public BehaviorRecognitionConfig Behavior { get; init; } = new();
+
+    /// <summary>可视化规则与 Python 后处理脚本二选一。</summary>
+    public PostProcessConfig PostProcess { get; init; } = new();
 
     public IReadOnlyList<InspectionRule> Rules { get; init; } = [];
 }

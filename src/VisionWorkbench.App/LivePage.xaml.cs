@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Microsoft.Extensions.Logging;
 
 using VisionWorkbench.Application;
 using VisionWorkbench.Contracts.Results;
@@ -22,7 +23,12 @@ public partial class LivePage : UserControl
     public LivePage()
     {
         InitializeComponent();
-        LayoutCombo.SelectedIndex = 0;
+        LayoutCombo.SelectedIndex = AppServices.Instance.Settings.LiveLayout switch
+        {
+            "vertical" => 1,
+            "horizontal" => 2,
+            _ => 0,
+        };
         ApplyLayout();
     }
 
@@ -38,6 +44,7 @@ public partial class LivePage : UserControl
 
     private async void Page_Unloaded(object sender, RoutedEventArgs e)
     {
+        SaveWorkspaceSettings();
         await ShutdownPanelsAsync();
     }
 
@@ -63,15 +70,34 @@ public partial class LivePage : UserControl
 
             if (_panels.Count == 0)
             {
-                AddTaskPanel();
+                var restoredTaskIds = (AppServices.Instance.Settings.LiveTaskIds ?? [])
+                    .Where(id => items.Any(item => item.Id == id))
+                    .Distinct()
+                    .ToArray();
+                if (restoredTaskIds.Length == 0)
+                {
+                    AddTaskPanel();
+                }
+                else
+                {
+                    foreach (var taskId in restoredTaskIds)
+                    {
+                        AddTaskPanel(taskId);
+                    }
+                }
             }
             else
             {
                 UpdateWorkspaceStatus();
             }
+
+            await PrepareModelsAsync();
         }
         catch (Exception ex)
         {
+            AppServices.Instance.LoggerFactory
+                .CreateLogger<LivePage>()
+                .LogError(ex, "实时检测加载任务失败");
             WorkspaceStatusText.Text = $"加载任务失败：{ex.Message}";
         }
         finally
@@ -91,14 +117,25 @@ public partial class LivePage : UserControl
         AddTaskPanel();
     }
 
-    private void AddTaskPanel()
+    private void WorkspaceSettings_Click(object sender, RoutedEventArgs e)
+    {
+        WorkspaceSettingsPopup.IsOpen = !WorkspaceSettingsPopup.IsOpen;
+    }
+
+    private void AddTaskPanel(long? taskId = null)
     {
         var panel = new LiveTaskPanel(_availableTasks);
         panel.RemoveRequested += Panel_RemoveRequested;
         panel.TaskSelectionChanged += Panel_TaskSelectionChanged;
+        panel.SettingsChanged += Panel_SettingsChanged;
         _panels.Add(panel);
         PanelsHost.Items.Add(panel);
         ApplyLayout();
+        if (taskId is { } id)
+        {
+            panel.SelectTask(id);
+        }
+        SaveWorkspaceSettings();
         UpdateWorkspaceStatus();
     }
 
@@ -119,7 +156,14 @@ public partial class LivePage : UserControl
             return;
         }
 
+        RestorePanelRoi(panel);
+        SaveWorkspaceSettings();
         UpdateWorkspaceStatus();
+    }
+
+    private void Panel_SettingsChanged(object? sender, EventArgs e)
+    {
+        SaveWorkspaceSettings();
     }
 
     private async void Panel_RemoveRequested(object? sender, EventArgs e)
@@ -129,11 +173,25 @@ public partial class LivePage : UserControl
             return;
         }
 
+        var taskName = panel.TaskId == 0 ? "当前检测面板" : $"任务「{panel.SelectedTaskName}」";
+        var confirmation = new ConfirmDialog(
+            "确认移除",
+            $"确定要移除{taskName}吗？\n正在运行的检测会被停止。")
+        {
+            Owner = Window.GetWindow(this)
+        };
+        if (confirmation.ShowDialog() != true)
+        {
+            return;
+        }
+
         panel.RemoveRequested -= Panel_RemoveRequested;
         panel.TaskSelectionChanged -= Panel_TaskSelectionChanged;
+        panel.SettingsChanged -= Panel_SettingsChanged;
         await panel.ShutdownAsync();
         _panels.Remove(panel);
         PanelsHost.Items.Remove(panel);
+        SaveWorkspaceSettings();
         UpdateWorkspaceStatus();
     }
 
@@ -144,9 +202,62 @@ public partial class LivePage : UserControl
 
     private void LayoutCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (IsInitialized)
+        if (IsInitialized && IsLoaded)
         {
             ApplyLayout();
+            SaveWorkspaceSettings();
+        }
+    }
+
+    private void SaveWorkspaceSettings()
+    {
+        var settings = AppServices.Instance.Settings;
+        settings.LiveLayout = (LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "grid";
+        settings.LiveTaskIds = _panels
+            .Select(panel => panel.TaskId)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList();
+        settings.LiveRois ??= [];
+        foreach (var panel in _panels.Where(panel => panel.TaskId > 0 && panel.HasRoiOverride))
+        {
+            settings.LiveRois[panel.TaskId] = panel.RoiOverride;
+        }
+        try
+        {
+            AppServices.Instance.SaveUserSettings();
+        }
+        catch (Exception ex)
+        {
+            WorkspaceStatusText.Text = $"实时检测设置保存失败：{ex.Message}";
+        }
+    }
+
+    private async Task PrepareModelsAsync()
+    {
+        foreach (var panel in _panels.Where(panel => panel.TaskId > 0))
+        {
+            try
+            {
+                await panel.PrepareModelAsync();
+            }
+            catch (Exception ex)
+            {
+                WorkspaceStatusText.Text = $"任务模型预加载失败：{ex.Message}";
+            }
+        }
+    }
+
+    private static void RestorePanelRoi(LiveTaskPanel panel)
+    {
+        var settings = AppServices.Instance.Settings;
+        if (settings.LiveRois is not null && settings.LiveRois.TryGetValue(panel.TaskId, out var roi))
+        {
+            panel.RestoreRoi(hasOverride: true, roi: roi);
+        }
+        else
+        {
+            panel.RestoreRoi(hasOverride: false, roi: null);
         }
     }
 

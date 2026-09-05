@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ATU5/FPN 语义分割推理设置",
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "string",
+      "const": "semantic",
+      "default": "semantic"
+    },
+    "modelPath": {
+      "type": "string",
+      "default": "models/atu5.pt",
+      "title": "语义分割模型路径",
+      "description": "支持训练生成的 .pt 或 TensorRT .engine 模型。"
+    },
+    "device": {
+      "type": "string",
+      "enum": ["auto", "cpu", "cuda", "cuda:0", "cuda:1"],
+      "default": "auto",
+      "title": "执行设备"
+    },
+    "minArea": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "title": "最小区域面积（像素）"
+    }
+  }
+}

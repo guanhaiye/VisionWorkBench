@@ -10,6 +10,12 @@ public sealed record AlgorithmOutput
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
     public long Sequence { get; init; }
 
+    /// <summary>原始输入图像宽度（像素），用于将结果换算为像素单位。</summary>
+    public int ImageWidth { get; init; }
+
+    /// <summary>原始输入图像高度（像素），用于将结果换算为像素单位。</summary>
+    public int ImageHeight { get; init; }
+
     public IReadOnlyList<ClassificationResult> Classifications { get; init; } = [];
     public IReadOnlyList<DetectionResult> Detections { get; init; } = [];
     public IReadOnlyList<SegmentationResult> Segmentations { get; init; } = [];

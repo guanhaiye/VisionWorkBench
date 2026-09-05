@@ -23,7 +23,9 @@ public sealed class TcpTaskExecutionService(AppServices services)
         var camera = await services.Cameras.OpenSessionAsync(descriptor, options, cancellationToken);
         var algorithm = await services.AlgorithmManager.CreateSessionAsync(recipe.PluginId, cancellationToken);
         var run = new DetectionRunService(services.Records, services.TempImages,
-            services.LoggerFactory.CreateLogger<DetectionRunService>(), $"tcp-task-{task.Id}", services.ResultPublisher);
+            services.LoggerFactory.CreateLogger<DetectionRunService>(), $"tcp-task-{task.Id}", services.ResultPublisher,
+            () => services.Settings.EnableHistory,
+            () => services.Settings.EnableHistory);
         var batchService = new BatchService(services.Batches);
         var completion = new TaskCompletionSource<RecordCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
         run.RecordCompleted += (_, result) => completion.TrySetResult(result);

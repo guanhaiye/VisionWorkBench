@@ -64,6 +64,7 @@ internal sealed class UsbCameraSession(
     CameraDescriptor descriptor, ILogger? logger) : ICameraSession
 {
     private readonly CancellationTokenSource _cts = new();
+    private readonly AsyncPauseGate _pauseGate = new();
     private Task? _loopTask;
     private VideoCapture? _capture;
     private long _sequence;
@@ -133,6 +134,26 @@ internal sealed class UsbCameraSession(
         return Task.CompletedTask;
     }
 
+    public Task PauseAsync(CancellationToken cancellationToken)
+    {
+        if (State == CameraSessionState.Streaming)
+        {
+            _pauseGate.Pause();
+            State = CameraSessionState.Paused;
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task ResumeAsync(CancellationToken cancellationToken)
+    {
+        if (State == CameraSessionState.Paused)
+        {
+            _pauseGate.Resume();
+            State = CameraSessionState.Streaming;
+        }
+        return Task.CompletedTask;
+    }
+
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _cts.Cancel();
@@ -163,6 +184,7 @@ internal sealed class UsbCameraSession(
         _capture?.Dispose();
         _capture = null;
         _cts.Dispose();
+        _pauseGate.Dispose();
         State = CameraSessionState.Closed;
     }
 
@@ -176,6 +198,7 @@ internal sealed class UsbCameraSession(
 
         while (!ct.IsCancellationRequested)
         {
+            await _pauseGate.WaitIfPausedAsync(ct);
             var readOk = false;
             try
             {

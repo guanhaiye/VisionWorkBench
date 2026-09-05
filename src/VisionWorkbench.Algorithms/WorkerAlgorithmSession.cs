@@ -14,6 +14,7 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
     private readonly PluginManifest _manifest;
     private readonly ILogger _logger;
     private AlgorithmInitialization? _initialization;
+    private int _disposeRequested;
 
     public WorkerAlgorithmSession(WorkerProcess process, PluginManifest manifest, ILogger logger)
     {
@@ -145,15 +146,18 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
         {
             _logger.LogWarning("stop_session 失败（尽力而为）: {Error}", ex.Message);
         }
-        State = AlgorithmSessionState.Stopped;
+        // stop_session 只结束本次检测，不卸载 Worker 中已初始化的模型；保留 Ready
+        // 状态，后续开始检测可直接复用，不必再次加载模型。
+        State = AlgorithmSessionState.Ready;
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (State == AlgorithmSessionState.Running)
+        if (State is AlgorithmSessionState.Running or AlgorithmSessionState.Ready)
         {
             await StopAsync(CancellationToken.None);
         }
+        Interlocked.Exchange(ref _disposeRequested, 1);
         await _process.DisposeAsync();
         State = AlgorithmSessionState.Stopped;
     }
@@ -168,6 +172,11 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
 
     private void OnWorkerExited(int code)
     {
+        if (Volatile.Read(ref _disposeRequested) != 0
+            || State is AlgorithmSessionState.Stopping or AlgorithmSessionState.Stopped)
+        {
+            return;
+        }
         if (State is AlgorithmSessionState.Running or AlgorithmSessionState.Ready)
         {
             State = AlgorithmSessionState.Faulted;

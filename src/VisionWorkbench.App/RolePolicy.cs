@@ -5,5 +5,4 @@ public static class RolePolicy
 {
     public static string Current => AppServices.Instance.Settings.CurrentRole?.Trim().ToLowerInvariant() ?? "operator";
     public static bool CanEditRecipe => Current is "engineer" or "expert";
-    public static bool CanEditAdvanced => Current == "expert";
 }

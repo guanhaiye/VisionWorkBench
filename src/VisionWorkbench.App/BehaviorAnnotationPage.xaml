@@ -1,6 +1,7 @@
 <UserControl x:Class="VisionWorkbench.App.BehaviorAnnotationPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:VisionWorkbench.App">
     <Grid Margin="10">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
         <WrapPanel Grid.Row="0" Margin="0,0,0,8">
@@ -48,9 +49,9 @@
                     <Slider x:Name="TimelineSlider" Grid.Column="1" Minimum="0" Maximum="1" ValueChanged="TimelineSlider_ValueChanged" />
                     <TextBlock x:Name="CurrentFrameText" Grid.Column="2" Text="0/0" VerticalAlignment="Center" Margin="8,0,0,0" />
                 </Grid>
-                <Border Grid.Row="1" Background="#202020" BorderBrush="#888" BorderThickness="1">
+                <local:ImageViewer Grid.Row="1" Background="#202020" BorderBrush="#888" BorderThickness="1">
                     <Image x:Name="PreviewImage" Stretch="Uniform" />
-                </Border>
+                </local:ImageViewer>
                 <StackPanel Grid.Row="2" Margin="0,8,0,0">
                     <WrapPanel>
                         <TextBlock Text="片段起始帧" VerticalAlignment="Center" Margin="0,0,5,0" />

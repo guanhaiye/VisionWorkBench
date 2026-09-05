@@ -1,6 +1,7 @@
 <UserControl x:Class="VisionWorkbench.App.TasksPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:VisionWorkbench.App">
     <Grid Margin="8">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="260" />
@@ -10,7 +11,7 @@
         <!-- 左：任务列表 -->
         <DockPanel Grid.Column="0" Margin="0,0,8,0">
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
-                <Button Content="新建" Click="New_Click" />
+                <Button x:Name="NewButton" Content="新建" Click="New_Click" />
                 <Button Content="删除" Click="Delete_Click" />
                 <Button Content="刷新" Click="Refresh_Click" />
             </StackPanel>
@@ -18,7 +19,7 @@
         </DockPanel>
 
         <!-- 右：编辑器 -->
-        <ScrollViewer Grid.Column="1">
+        <ScrollViewer x:Name="TaskEditorScrollViewer" Grid.Column="1">
             <StackPanel x:Name="EditorPanel" IsEnabled="False">
                 <GroupBox Header="基本信息">
                     <StackPanel>
@@ -31,8 +32,13 @@
                             <ComboBox x:Name="TaskTypeCombo" Width="180" Margin="8,0,0,0"
                                       SelectionChanged="TaskTypeCombo_SelectionChanged">
                                 <ComboBoxItem Content="请选择任务类型" Tag="" IsSelected="True" />
-                                <ComboBoxItem Content="目标计数与判定" Tag="Counting" />
+                                <ComboBoxItem Content="目标检测" Tag="Detection" />
+                                <ComboBoxItem Content="语义分割" Tag="SemanticSegmentation" />
+                                <ComboBoxItem Content="实例分割" Tag="InstanceSegmentation" />
                                 <ComboBoxItem Content="行为识别" Tag="BehaviorRecognition" />
+                                <ComboBoxItem Content="AI字符识别" Tag="AiText" />
+                                <ComboBoxItem Content="AI条码识别" Tag="Barcode" />
+                                <ComboBoxItem Content="AI二维码识别" Tag="QrCode" />
                             </ComboBox>
                         </StackPanel>
                         <TextBlock Text="说明" />
@@ -47,10 +53,10 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition />
-                            <RowDefinition />
-                            <RowDefinition />
-                            <RowDefinition Height="230" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Provider ID：" VerticalAlignment="Center" />
                         <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ProviderCombo" Margin="0,2,0,6"
@@ -62,13 +68,15 @@
                                 Content="选择目录..." Click="BrowseDevice_Click" Margin="0,2,0,6" />
                         <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" x:Name="CameraPreviewPanel"
                                 Visibility="Collapsed" Background="#111" BorderBrush="#555" BorderThickness="1"
-                                Margin="0,4,0,8">
-                            <Grid>
-                                <Image x:Name="CameraPreviewImage" Stretch="Uniform" />
-                                <TextBlock x:Name="CameraPreviewStatusText" Text="正在准备相机预览..."
-                                           Foreground="White" Background="#99000000" Padding="8"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Grid>
+                                Height="230" Margin="0,4,0,8">
+                            <local:ImageViewer Background="#111" BorderBrush="#555" BorderThickness="1">
+                                <Grid>
+                                    <Image x:Name="CameraPreviewImage" Stretch="Uniform" />
+                                    <TextBlock x:Name="CameraPreviewStatusText" Text="正在准备相机预览..."
+                                               Foreground="White" Background="#99000000" Padding="8"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Grid>
+                            </local:ImageViewer>
                         </Border>
                         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="DevicePreviewText"
                                    Foreground="#666" Text="尚未选择图片目录" Margin="0,0,0,6" />
@@ -76,7 +84,7 @@
                 </GroupBox>
                 <GroupBox Header="算法插件">
                     <StackPanel>
-                        <Grid>
+                        <Grid x:Name="GeneralPluginSelectorPanel">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
@@ -84,6 +92,11 @@
                         <TextBlock Text="插件 ID：" VerticalAlignment="Center" />
                         <ComboBox x:Name="PluginCombo" Grid.Column="1" SelectionChanged="PluginCombo_SelectionChanged" />
                         </Grid>
+                        <TextBlock x:Name="SemanticPluginFixedText"
+                                   Text="ATU5/FPN 语义分割（自动选择）"
+                                   Visibility="Collapsed"
+                                   Foreground="#2E7D32"
+                                   Margin="0,0,0,6" />
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <TextBlock Text="推理设备：" VerticalAlignment="Center" />
                             <ComboBox x:Name="ExecutionProviderCombo" Width="180">
@@ -107,7 +120,7 @@
                             <RowDefinition />
                             <RowDefinition />
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="任务类型：" VerticalAlignment="Center" />
+                        <TextBlock x:Name="YoloTaskLabel" Grid.Row="0" Grid.Column="0" Text="任务类型：" VerticalAlignment="Center" />
                         <ComboBox x:Name="YoloTaskCombo" Grid.Row="0" Grid.Column="1" Margin="4,2,0,6"
                                   SelectionChanged="YoloTaskCombo_SelectionChanged">
                             <ComboBoxItem Content="目标检测" Tag="detect" />
@@ -119,7 +132,7 @@
                         <Button Grid.Row="1" Grid.Column="2" x:Name="ImportModelButton"
                                 Content="导入模型..." Click="ImportModel_Click" Margin="0,2,0,6" />
                         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ModelStatusText"
-                                   Foreground="#666" Text="请选择或导入模型文件（.pt/.onnx）" Margin="4,0,0,6" />
+                                   Foreground="#666" Text="请选择或导入模型文件（.engine/.pt/.onnx）" Margin="4,0,0,6" />
                     </Grid>
                 </GroupBox>
                 <GroupBox Header="计数模式">
@@ -147,13 +160,6 @@
                         </StackPanel>
                     </StackPanel>
                 </GroupBox>
-                <GroupBox x:Name="AdvancedSettingsGroup" Header="专家选项：插件参数（JSON）">
-                    <StackPanel>
-                        <TextBlock x:Name="AdvancedHintText" Foreground="#996600" TextWrapping="Wrap" />
-                    <TextBox x:Name="SettingsText" Height="72" TextWrapping="Wrap" AcceptsReturn="True"
-                             VerticalScrollBarVisibility="Auto" Text="{}" />
-                    </StackPanel>
-                </GroupBox>
                 <GroupBox Header="ROI（归一化 0~1；全部 0 表示整幅图）">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="X" VerticalAlignment="Center" />
@@ -173,8 +179,51 @@
                     </StackPanel>
                 </GroupBox>
                 <GroupBox Header="判定规则（RUL-001~005）">
-                    <DataGrid x:Name="RulesGrid" AutoGenerateColumns="False" CanUserAddRows="True"
-                              CanUserDeleteRows="True" MinHeight="120" Height="180">
+                    <StackPanel>
+                        <StackPanel Margin="0,0,0,8">
+                            <TextBlock Text="后处理方式" FontWeight="SemiBold" Margin="0,0,0,4" />
+                            <StackPanel Orientation="Horizontal">
+                                <ComboBox x:Name="PostProcessModeCombo" Width="150"
+                                          SelectionChanged="PostProcessMode_SelectionChanged">
+                                    <ComboBoxItem Content="可视化规则" Tag="VisualRules" IsSelected="True" />
+                                    <ComboBoxItem Content="Python 脚本" Tag="PythonScript" />
+                                </ComboBox>
+                                <Button x:Name="EditPostProcessScriptButton" Content="编辑 Python 脚本"
+                                        Click="EditPostProcessScript_Click" Margin="8,0,0,0"
+                                        Padding="12,5" IsEnabled="False" />
+                            </StackPanel>
+                            <TextBlock x:Name="PostProcessHintText" Margin="0,5,0,0"
+                                       Text="使用面积、直径、数量等可视化规则进行筛选。"
+                                       Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button x:Name="AddRuleButton" Content="＋ 添加规则" Click="AddRule_Click" HorizontalAlignment="Left"
+                                Margin="0,0,0,8" Padding="12,5" />
+                        <DataGrid x:Name="RulesGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                              CanUserDeleteRows="True" MinHeight="120" Height="180"
+                              Background="{DynamicResource SurfaceBrush}"
+                              Foreground="{DynamicResource TextBrush}"
+                              RowBackground="{DynamicResource SurfaceBrush}"
+                              AlternatingRowBackground="{DynamicResource SurfaceAltBrush}">
+                        <DataGrid.Resources>
+                            <Style TargetType="DataGridRow">
+                                <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                            <Style TargetType="DataGridCell">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                            </Style>
+                        </DataGrid.Resources>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="规则ID" Binding="{Binding RuleId}" Width="110" />
                             <DataGridComboBoxColumn Header="类型" SelectedItemBinding="{Binding Kind}" Width="130">
@@ -187,16 +236,117 @@
                                         <sys:String>ClassRequired</sys:String>
                                         <sys:String>ClassForbidden</sys:String>
                                         <sys:String>LowConfidence</sys:String>
+                                        <sys:String>AreaRange</sys:String>
+                                        <sys:String>DiameterRange</sys:String>
+                                        <sys:String>CountRange</sys:String>
                                     </x:Array>
                                 </DataGridComboBoxColumn.ItemsSource>
                             </DataGridComboBoxColumn>
-                            <DataGridTextColumn Header="类别" Binding="{Binding ClassId}" Width="90" />
-                            <DataGridTextColumn Header="期望数量" Binding="{Binding ExpectedCount}" Width="70" />
-                            <DataGridTextColumn Header="最低置信度" Binding="{Binding MinConfidence}" Width="80" />
+                            <DataGridTextColumn Header="最小值" Binding="{Binding Minimum, UpdateSourceTrigger=PropertyChanged}" Width="70" />
+                            <DataGridTextColumn Header="最大值" Binding="{Binding Maximum, UpdateSourceTrigger=PropertyChanged}" Width="70" />
+                            <DataGridTextColumn Header="类别（ID）" Binding="{Binding ClassId}" Width="90" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="期望数量" Width="70">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ExpectedCount}" HorizontalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountEquals"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountAtLeast"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountAtMost"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding ExpectedCount, UpdateSourceTrigger=PropertyChanged}">
+                                            <TextBox.Style>
+                                                <Style TargetType="TextBox">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountEquals"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountAtLeast"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountAtMost"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBox.Style>
+                                        </TextBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="最低置信度" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding MinConfidence}" HorizontalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="LowConfidence"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding MinConfidence, UpdateSourceTrigger=PropertyChanged}">
+                                            <TextBox.Style>
+                                                <Style TargetType="TextBox">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="LowConfidence"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBox.Style>
+                                        </TextBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridCheckBoxColumn Header="启用" Binding="{Binding Enabled}" Width="50" />
-                            <DataGridCheckBoxColumn Header="失败转待确认" Binding="{Binding DowngradeToReview}" Width="90" />
+                            <DataGridTemplateColumn Header="失败转待确认" Width="90">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding DowngradeToReview}" HorizontalAlignment="Center">
+                                            <CheckBox.Style>
+                                                <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="AreaRange"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="DiameterRange"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountRange"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </CheckBox.Style>
+                                        </CheckBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding DowngradeToReview}" HorizontalAlignment="Center">
+                                            <CheckBox.Style>
+                                                <Style TargetType="CheckBox">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="AreaRange"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="DiameterRange"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Kind}" Value="CountRange"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </CheckBox.Style>
+                                        </CheckBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
-                    </DataGrid>
+                        </DataGrid>
+                    </StackPanel>
                 </GroupBox>
                 <GroupBox x:Name="BehaviorGroup" Header="行为识别（自定义模型/规则）">
                     <StackPanel>

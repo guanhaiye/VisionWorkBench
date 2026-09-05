@@ -9,6 +9,7 @@ using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Cameras.Files;
 using VisionWorkbench.Cameras.Usb;
+using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Infrastructure.Imaging;
 using VisionWorkbench.Infrastructure.Logging;
 using VisionWorkbench.Persistence;
@@ -20,6 +21,8 @@ public sealed class AppSettings
 {
     public string DataDirectory { get; set; } =
         Path.Combine(FindProjectRoot(), "data");
+    /// <summary>标注平台新建数据集的独立存储根目录，默认使用 E 盘。</summary>
+    public string DatasetDirectory { get; set; } = @"E:\";
     public string? PluginsRoot { get; set; }
     public string? PythonExecutable { get; set; }
     public string? YoloeModelPath { get; set; }
@@ -28,10 +31,20 @@ public sealed class AppSettings
     public string? Sam3ModelPath { get; set; }
     public string ExecutionProvider { get; set; } = "cpu";
     public string CurrentRole { get; set; } = "engineer";
-    public string OperatorName { get; set; } = Environment.UserName;
+    public string OperatorName { get; set; } = "";
+    public string? AvatarPath { get; set; }
+    public string? PasswordHash { get; set; }
+    public List<UserAccount> Accounts { get; set; } = [];
     public string ThemeMode { get; set; } = "light";
     public double UiScale { get; set; } = 1.0;
     public string? ResultWebhookUrl { get; set; }
+    public bool EnableHistory { get; set; } = true;
+    /// <summary>实时检测页面的窗口布局。</summary>
+    public string LiveLayout { get; set; } = "grid";
+    /// <summary>实时检测页面上次添加的任务面板。</summary>
+    public List<long> LiveTaskIds { get; set; } = [];
+    /// <summary>实时检测页面按任务保存的运行时 ROI 覆盖设置。</summary>
+    public Dictionary<long, NormalizedRect?> LiveRois { get; set; } = [];
 
     private static string FindProjectRoot()
     {
@@ -76,6 +89,9 @@ public sealed class AppServices
     public DatasetCatalogService Datasets { get; private set; } = null!;
     public SmartAnnotationService SmartAnnotations { get; private set; } = null!;
     public Yolo11TrainingService Yolo11Training { get; private set; } = null!;
+    public Atu5TrainingService Atu5Training { get; private set; } = null!;
+    public Atu5ModelTestService Atu5ModelTest { get; private set; } = null!;
+    public YoloModelTestService YoloModelTest { get; private set; } = null!;
     public BehaviorTrainingService BehaviorTraining { get; private set; } = null!;
     public ProjectCommunicationManager TcpCommunication { get; private set; } = null!;
     public string SettingsFile { get; private set; } = "";
@@ -96,6 +112,10 @@ public sealed class AppServices
         if (string.IsNullOrWhiteSpace(Settings.DataDirectory))
         {
             Settings.DataDirectory = new AppSettings().DataDirectory;
+        }
+        if (string.IsNullOrWhiteSpace(Settings.DatasetDirectory))
+        {
+            Settings.DatasetDirectory = @"E:\";
         }
         Settings.PluginsRoot = string.IsNullOrWhiteSpace(Settings.PluginsRoot) ? null : Settings.PluginsRoot;
         Settings.PythonExecutable = string.IsNullOrWhiteSpace(Settings.PythonExecutable) ? null : Settings.PythonExecutable;
@@ -121,6 +141,8 @@ public sealed class AppServices
                 // 用户配置损坏 → 用默认
             }
         }
+
+        EnsureAccounts();
 
         // 2. 日志（DIA-003：application / algorithm-manager / database / camera 分文件）
         var logsDir = Path.Combine(Settings.DataDirectory, "logs");
@@ -171,6 +193,9 @@ public sealed class AppServices
             Settings.YoloeModelPath,
             Settings.Sam1ModelPath ?? Settings.Sam3ModelPath);
         Yolo11Training = new Yolo11TrainingService(pluginsRoot, Settings.PythonExecutable);
+        Atu5Training = new Atu5TrainingService(pluginsRoot, Settings.PythonExecutable);
+        Atu5ModelTest = new Atu5ModelTestService(pluginsRoot, Settings.PythonExecutable);
+        YoloModelTest = new YoloModelTestService(pluginsRoot, Settings.PythonExecutable);
         BehaviorTraining = new BehaviorTrainingService(pluginsRoot, Settings.PythonExecutable);
         AlgorithmManager = new AlgorithmManager(new AlgorithmManagerOptions
         {
@@ -182,7 +207,9 @@ public sealed class AppServices
         ReInference = new ReInferenceService(Records, Recipes, AlgorithmManager);
         StationRuns = new StationRunCoordinator(
             Records, Batches, TempImages, ResultPublisher,
-            loggerFactory.CreateLogger<StationRunCoordinator>(), loggerFactory);
+            loggerFactory.CreateLogger<StationRunCoordinator>(), loggerFactory,
+            () => Settings.EnableHistory,
+            () => Settings.EnableHistory);
         TcpCommunication.TaskExecutor = new TcpTaskExecutionService(this).ExecuteAsync;
 
         // 7. DI 容器（页面按需取服务）
@@ -196,6 +223,38 @@ public sealed class AppServices
     {
         var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(SettingsFile, json);
+    }
+
+    private void EnsureAccounts()
+    {
+        Settings.Accounts ??= [];
+        var changed = false;
+
+        // 将旧版本的单用户配置迁移为普通账户，避免升级后原有用户无法登录。
+        if (!string.IsNullOrWhiteSpace(Settings.OperatorName)
+            && !string.Equals(Settings.OperatorName, "未登录", StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(Settings.PasswordHash)
+            && Settings.Accounts.All(account =>
+                !string.Equals(account.UserName, Settings.OperatorName.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            Settings.Accounts.Add(new UserAccount
+            {
+                UserName = Settings.OperatorName.Trim(),
+                Role = Settings.CurrentRole,
+                AvatarPath = Settings.AvatarPath,
+                PasswordHash = Settings.PasswordHash,
+                IsEnabled = true,
+            });
+            changed = true;
+        }
+
+        foreach (var account in Settings.Accounts)
+        {
+            account.UserName = AccountRules.NormalizeUserName(account.UserName);
+            if (account.IsSuperAdmin) account.Role = "superadmin";
+        }
+
+        if (changed) SaveUserSettings();
     }
 
     /// <summary>开发态：从 cwd 向上找 workers 目录；找不到用 exe 旁 plugins。</summary>

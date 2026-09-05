@@ -90,6 +90,7 @@ def test_instance_output_contains_individual_mask(tmp_path: Path):
     assert output["segmentations"][0]["mode"] == "instance"
     assert output["segmentations"][0]["classId"] == "1"
     assert len(output["segmentations"][0]["contours"][0]) == 4
+    assert output["segmentations"][0]["contours"][0][0] == {"x": 0.1, "y": 0.1}
 
 
 def test_semantic_output_merges_same_class_masks(tmp_path: Path):

@@ -90,15 +90,41 @@ public sealed class CountingService
 
     public CounterState State => _state;
 
-    /// <summary>批量应用算法产生的计数事件。</summary>
-    public IReadOnlyList<CountingEvent> ApplyOutput(AlgorithmOutput output)
+    /// <summary>
+    /// 应用算法产生的计数事件。快照模式下，普通检测模型通常只返回检测结果/数量指标，
+    /// 不会额外生成 CountingEvents，因此在没有事件时按本帧对象数量补一条 Appeared 事件。
+    /// </summary>
+    public IReadOnlyList<CountingEvent> ApplyOutput(AlgorithmOutput output, bool snapshotFallback = false)
     {
         ArgumentNullException.ThrowIfNull(output);
-        foreach (var evt in output.CountingEvents)
+
+        IReadOnlyList<CountingEvent> events = output.CountingEvents;
+        if (snapshotFallback && events.Count == 0)
+        {
+            var count = Math.Max(0, output.GetCount());
+            if (count > 0)
+            {
+                events =
+                [
+                    new CountingEvent
+                    {
+                        EventId = $"snapshot-{output.OutputId}",
+                        CounterId = _state.CounterId,
+                        Type = CountingEventType.Appeared,
+                        Delta = count,
+                        Confidence = 1.0,
+                        FrameSequence = output.Sequence,
+                        OccurredAt = output.Timestamp,
+                    },
+                ];
+            }
+        }
+
+        foreach (var evt in events)
         {
             _state.Apply(evt);
         }
-        return output.CountingEvents;
+        return events;
     }
 
     /// <summary>

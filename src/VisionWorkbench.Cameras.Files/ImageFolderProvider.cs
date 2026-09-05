@@ -27,6 +27,7 @@ internal sealed class ImageFolderSession(
 {
     private static readonly string[] Extensions = [".jpg", ".jpeg", ".png", ".bmp"];
     private readonly CancellationTokenSource _cts = new();
+    private readonly AsyncPauseGate _pauseGate = new();
     private Task? _loopTask;
     private long _sequence;
     private int _badFiles;
@@ -81,6 +82,26 @@ internal sealed class ImageFolderSession(
         return Task.CompletedTask;
     }
 
+    public Task PauseAsync(CancellationToken cancellationToken)
+    {
+        if (State == CameraSessionState.Streaming)
+        {
+            _pauseGate.Pause();
+            State = CameraSessionState.Paused;
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task ResumeAsync(CancellationToken cancellationToken)
+    {
+        if (State == CameraSessionState.Paused)
+        {
+            _pauseGate.Resume();
+            State = CameraSessionState.Streaming;
+        }
+        return Task.CompletedTask;
+    }
+
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _cts.Cancel();
@@ -109,6 +130,7 @@ internal sealed class ImageFolderSession(
             }
         }
         _cts.Dispose();
+        _pauseGate.Dispose();
         State = CameraSessionState.Closed;
     }
 
@@ -124,6 +146,7 @@ internal sealed class ImageFolderSession(
                 {
                     return;
                 }
+                await _pauseGate.WaitIfPausedAsync(ct);
                 var mat = FrameConvert.DecodeFile(file);
                 if (mat is null || mat.Empty())
                 {

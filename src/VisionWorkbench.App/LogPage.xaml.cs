@@ -63,11 +63,11 @@ public partial class LogPage : UserControl
     {
         if (LogsGrid.SelectedItem is not LogEntry entry)
         {
-            MessageBox.Show("请先右键点击一条日志记录。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先右键点击一条日志记录。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        var confirmation = MessageBox.Show(
+        var confirmation = ThemedMessageBox.Show(
             $"确定删除这条日志吗？\n\n时间：{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff}\n内容：{entry.Message}",
             "确认删除日志",
             MessageBoxButton.OKCancel,
@@ -85,7 +85,7 @@ public partial class LogPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"删除日志失败：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"删除日志失败：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -93,7 +93,7 @@ public partial class LogPage : UserControl
     {
         if (LogsGrid.SelectedItem is not LogEntry entry)
         {
-            MessageBox.Show("请先右键点击一条日志记录。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先右键点击一条日志记录。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -101,7 +101,7 @@ public partial class LogPage : UserControl
         {
             if (!File.Exists(entry.FilePath))
             {
-                MessageBox.Show("对应的日志文件不存在，请先刷新日志列表。", "日志管理",
+                ThemedMessageBox.Show("对应的日志文件不存在，请先刷新日志列表。", "日志管理",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -114,7 +114,7 @@ public partial class LogPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"无法打开日志文件：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"无法打开日志文件：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -132,11 +132,11 @@ public partial class LogPage : UserControl
                 : [];
             if (files.Length == 0)
             {
-                MessageBox.Show("当前没有可清除的日志。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
+                ThemedMessageBox.Show("当前没有可清除的日志。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
-            var confirmation = MessageBox.Show(
+            var confirmation = ThemedMessageBox.Show(
                 $"确定清除全部日志吗？\n\n将清空 {files.Length} 个日志文件的内容，但保留文件本身，程序后续仍会继续记录日志。此操作不可恢复。",
                 "确认清除全部日志",
                 MessageBoxButton.OKCancel,
@@ -172,7 +172,7 @@ public partial class LogPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"清除全部日志失败：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"清除全部日志失败：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -232,7 +232,7 @@ public partial class LogPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"无法打开日志目录：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"无法打开日志目录：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -240,7 +240,7 @@ public partial class LogPage : UserControl
     {
         if (LogsGrid.ItemsSource is not IEnumerable<LogEntry> entries)
         {
-            MessageBox.Show("当前没有可导出的日志。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("当前没有可导出的日志。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -260,11 +260,11 @@ public partial class LogPage : UserControl
             var lines = entries.Select(entry =>
                 $"[{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff}] [{entry.Level}] [{entry.Source}] {entry.Message}");
             File.WriteAllLines(dialog.FileName, lines, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
-            MessageBox.Show("当前筛选结果已导出。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("当前筛选结果已导出。", "日志管理", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"导出日志失败：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"导出日志失败：{ex.Message}", "日志管理", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

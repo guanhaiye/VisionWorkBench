@@ -10,6 +10,8 @@ public interface ICameraSession : IAsyncDisposable
     Task OpenAsync(CameraOpenOptions options, CancellationToken cancellationToken);
 
     Task StartAsync(CancellationToken cancellationToken);
+    Task PauseAsync(CancellationToken cancellationToken);
+    Task ResumeAsync(CancellationToken cancellationToken);
     Task StopAsync(CancellationToken cancellationToken);
 
     Task ApplyParametersAsync(

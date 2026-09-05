@@ -1,0 +1,27 @@
+{
+  "manifestVersion": "1.0",
+  "id": "com.vision.atu5",
+  "name": "ATU5/FPN 语义分割",
+  "version": "1.0.0",
+  "protocolVersion": "1.0",
+  "minimumHostVersion": "0.1.0",
+  "description": "基于 ATU5/FPN 的原生语义分割实时推理插件。",
+  "author": "VisionWorkbench",
+  "runtime": {
+    "type": "python",
+    "entry": "worker.py"
+  },
+  "capabilities": {
+    "inputModes": ["single-image", "frame-stream"],
+    "outputs": ["segmentation", "metrics"],
+    "stateful": false,
+    "realtime": true
+  },
+  "streaming": {
+    "preferredFps": 10,
+    "queuePolicy": "latest",
+    "maximumQueueLength": 3
+  },
+  "executionProviders": ["cpu", "cuda"],
+  "settingsSchema": "settings.schema.json"
+}

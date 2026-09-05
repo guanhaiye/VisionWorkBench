@@ -14,7 +14,8 @@ public sealed record Yolo11TrainingRequest(
     string Device,
     string OutputDirectory,
     string RunName,
-    bool Resume);
+    bool Resume,
+    bool ExportTensorRt);
 
 public sealed record Yolo11TrainingProgress(
     string Event,
@@ -24,7 +25,7 @@ public sealed record Yolo11TrainingProgress(
     double? ValLoss,
     string Message);
 
-public sealed record Yolo11TrainingResult(string ModelPath, string RunDirectory);
+public sealed record Yolo11TrainingResult(string ModelPath, string RunDirectory, string? EnginePath);
 public sealed record Yolo11GpuMemory(bool Available, long FreeBytes, long TotalBytes);
 
 /// <summary>运行 YOLO11 训练 worker，并把每轮训练事件转发给桌面端。</summary>
@@ -35,19 +36,22 @@ public sealed class Yolo11TrainingService : IDisposable
     private readonly string _workingDirectory;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Process? _process;
+    private volatile bool _paused;
 
     public Yolo11TrainingService(string workersRoot, string? configuredPython)
     {
         var yoloDirectory = Path.Combine(workersRoot, "yolo11");
         _workingDirectory = yoloDirectory;
         _scriptPath = Path.Combine(yoloDirectory, "train_worker.py");
-        _python = ResolvePython(configuredPython, yoloDirectory, workersRoot);
+        _python = PythonProcessSupport.ResolvePython(configuredPython, yoloDirectory, workersRoot);
     }
 
     public bool IsModelAvailable(string modelPath) =>
         File.Exists(Path.IsPathRooted(modelPath) ? modelPath : Path.Combine(_workingDirectory, modelPath));
 
     public bool IsRunning => _process is { HasExited: false };
+
+    public bool IsPaused => _paused && IsRunning;
 
     public async Task<Yolo11TrainingResult> RunAsync(
         Yolo11TrainingRequest request,
@@ -75,9 +79,10 @@ public sealed class Yolo11TrainingService : IDisposable
             startInfo.ArgumentList.Add(_scriptPath);
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             _process = process;
+            _paused = false;
             if (!process.Start()) throw new InvalidOperationException("无法启动 YOLO11 训练 worker。");
 
-            using var cancellationRegistration = cancellationToken.Register(() => TryKill(process));
+            using var cancellationRegistration = cancellationToken.Register(() => PythonProcessSupport.TryKill(process));
             await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(
                 request,
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)));
@@ -86,11 +91,12 @@ public sealed class Yolo11TrainingService : IDisposable
             var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
             string? modelPath = null;
             string? runDirectory = null;
+            string? enginePath = null;
             string? workerError = null;
             string? line;
             while ((line = await process.StandardOutput.ReadLineAsync(cancellationToken)) is not null)
             {
-                if (!TryParseEvent(line, out var json)) continue;
+                if (!PythonProcessSupport.TryParseEvent(line, out var json)) continue;
                 var eventName = json.RootElement.TryGetProperty("event", out var eventProperty)
                     ? eventProperty.GetString() ?? "log"
                     : "log";
@@ -105,6 +111,7 @@ public sealed class Yolo11TrainingService : IDisposable
                 {
                     modelPath = ReadString(json, "modelPath");
                     runDirectory = ReadString(json, "runDirectory");
+                    enginePath = ReadString(json, "enginePath");
                 }
                 if (eventName == "error") workerError = message;
                 progress?.Report(new Yolo11TrainingProgress(
@@ -121,21 +128,44 @@ public sealed class Yolo11TrainingService : IDisposable
                     : errorOutput.Trim());
             if (string.IsNullOrWhiteSpace(modelPath) || string.IsNullOrWhiteSpace(runDirectory))
                 throw new InvalidOperationException("YOLO11 训练未返回模型保存路径。");
-            return new Yolo11TrainingResult(modelPath, runDirectory);
+            return new Yolo11TrainingResult(modelPath, runDirectory, enginePath);
         }
         finally
         {
-            if (_process is { HasExited: false } running) TryKill(running);
+            if (_process is { HasExited: false } running) PythonProcessSupport.TryKill(running);
             _process?.Dispose();
             _process = null;
+            _paused = false;
             _gate.Release();
         }
     }
 
     public Task CancelAsync()
     {
-        if (_process is { HasExited: false } process) TryKill(process);
+        if (_process is { HasExited: false } process)
+        {
+            ProcessPauseController.TryResume(process);
+            PythonProcessSupport.TryKill(process);
+        }
+        _paused = false;
         return Task.CompletedTask;
+    }
+
+    public Task<bool> PauseAsync()
+    {
+        if (_process is not { HasExited: false } process || _paused)
+            return Task.FromResult(false);
+        _paused = ProcessPauseController.TrySuspend(process);
+        return Task.FromResult(_paused);
+    }
+
+    public Task<bool> ResumeAsync()
+    {
+        if (_process is not { HasExited: false } process || !_paused)
+            return Task.FromResult(false);
+        var resumed = ProcessPauseController.TryResume(process);
+        if (resumed) _paused = false;
+        return Task.FromResult(resumed);
     }
 
     public async Task<Yolo11GpuMemory> QueryGpuMemoryAsync(CancellationToken cancellationToken = default)
@@ -179,23 +209,13 @@ public sealed class Yolo11TrainingService : IDisposable
 
     public void Dispose()
     {
-        if (_process is { HasExited: false } process) TryKill(process);
+        if (_process is { HasExited: false } process)
+        {
+            ProcessPauseController.TryResume(process);
+            PythonProcessSupport.TryKill(process);
+        }
+        _paused = false;
         _gate.Dispose();
-    }
-
-    private static bool TryParseEvent(string line, out JsonDocument json)
-    {
-        try
-        {
-            json = JsonDocument.Parse(line);
-            return json.RootElement.ValueKind == JsonValueKind.Object &&
-                   json.RootElement.TryGetProperty("event", out _);
-        }
-        catch (JsonException)
-        {
-            json = null!;
-            return false;
-        }
     }
 
     private static int ReadInt(JsonDocument json, string name) =>
@@ -208,19 +228,4 @@ public sealed class Yolo11TrainingService : IDisposable
     private static string? ReadString(JsonDocument json, string name) =>
         json.RootElement.TryGetProperty(name, out var property) ? property.GetString() : null;
 
-    private static string ResolvePython(string? configured, string yoloDirectory, string workersRoot)
-    {
-        if (!string.IsNullOrWhiteSpace(configured)) return configured;
-        var candidates = new[]
-        {
-            Path.Combine(yoloDirectory, ".venv", "Scripts", "python.exe"),
-            Path.Combine(workersRoot, ".venv", "Scripts", "python.exe"),
-        };
-        return candidates.FirstOrDefault(File.Exists) ?? "python";
-    }
-
-    private static void TryKill(Process process)
-    {
-        try { if (!process.HasExited) process.Kill(true); } catch { }
-    }
 }

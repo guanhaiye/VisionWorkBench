@@ -38,7 +38,7 @@ public partial class BehaviorAnnotationPage : UserControl
         if (dialog.ShowDialog() != true) return;
         if (!BehaviorDatasetStore.TryLoadFromRoot(dialog.FolderName, out var dataset) || dataset is null)
         {
-            MessageBox.Show("该目录没有 .visionworkbench/behavior-dataset.json。", "加载行为数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("该目录没有 .visionworkbench/behavior-dataset.json。", "加载行为数据集", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         _dataset = dataset;
@@ -58,7 +58,7 @@ public partial class BehaviorAnnotationPage : UserControl
         var relative = Path.GetRelativePath(_dataset.RootDirectory, selectedRoot);
         if (relative.StartsWith("..", StringComparison.Ordinal))
         {
-            MessageBox.Show("图片序列目录必须位于行为数据集目录内。请先用该目录新建数据集，或把图片复制到数据集目录。", "导入图片序列", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show("图片序列目录必须位于行为数据集目录内。请先用该目录新建数据集，或把图片复制到数据集目录。", "导入图片序列", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         var normalized = BehaviorDatasetStore.NormalizeRelative(relative == "." ? "" : relative);
@@ -92,7 +92,7 @@ public partial class BehaviorAnnotationPage : UserControl
     {
         if (_dataset is null)
         {
-            MessageBox.Show("请先新建或加载行为数据集。", "导入视频", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先新建或加载行为数据集。", "导入视频", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         var dialog = new OpenFileDialog
@@ -134,7 +134,7 @@ public partial class BehaviorAnnotationPage : UserControl
         catch (Exception ex)
         {
             StatusText.Text = "视频导入失败";
-            MessageBox.Show(ex.Message, "导入视频失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show(ex.Message, "导入视频失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -166,7 +166,7 @@ public partial class BehaviorAnnotationPage : UserControl
     {
         if (!TryReadDatasetFields(out var error))
         {
-            MessageBox.Show(error, "保存行为数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show(error, "保存行为数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         SaveDataset();
@@ -244,7 +244,7 @@ public partial class BehaviorAnnotationPage : UserControl
         if (_dataset is null || _activeSource is null) return;
         if (!int.TryParse(StartFrameText.Text, out var start) || !int.TryParse(EndFrameText.Text, out var end))
         {
-            MessageBox.Show("请输入有效的起止帧。", "时间片段", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show("请输入有效的起止帧。", "时间片段", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         start = Math.Clamp(start, 0, Math.Max(0, _framePaths.Count - 1));
@@ -252,7 +252,7 @@ public partial class BehaviorAnnotationPage : UserControl
         var label = LabelCombo.Text.Trim();
         if (string.IsNullOrWhiteSpace(label) || end - start + 1 < 2)
         {
-            MessageBox.Show("请设置至少 2 帧的时间片段，并填写行为类别。", "行为标注", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请设置至少 2 帧的时间片段，并填写行为类别。", "行为标注", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         var selected = ClipList.SelectedItem as BehaviorClipDefinition;
@@ -286,7 +286,7 @@ public partial class BehaviorAnnotationPage : UserControl
     private void DeleteClip_Click(object sender, RoutedEventArgs e)
     {
         if (_dataset is null || ClipList.SelectedItem is not BehaviorClipDefinition clip) return;
-        if (MessageBox.Show($"确认删除行为片段“{clip.Label}”？", "删除行为片段", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        if (ThemedMessageBox.Show($"确认删除行为片段“{clip.Label}”？", "删除行为片段", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         _dataset.Clips.Remove(clip);
         SaveDataset(); RefreshClipList(); ClipInfoText.Clear();
         StatusText.Text = "行为片段已删除。";

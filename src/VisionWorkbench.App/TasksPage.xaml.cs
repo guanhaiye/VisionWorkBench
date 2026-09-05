@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
@@ -27,8 +28,15 @@ public partial class TasksPage : UserControl
     private CancellationTokenSource? _cameraPreviewCts;
     private readonly Dictionary<string, CheckBox> _customBehaviorChecks = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _customBehaviorClasses = [];
+    private string _settingsJson = "{}";
+    private PostProcessMode _postProcessMode = PostProcessMode.VisualRules;
+    private string _postProcessScript = "";
+    private bool _syncingSemanticPlugin;
 
-    private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId);
+    private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId)
+    {
+        public override string ToString() => DisplayName;
+    }
 
     private sealed record TaskRow(long Id, string StationCode, string TaskName)
     {
@@ -43,6 +51,8 @@ public partial class TasksPage : UserControl
         public string? ClassId { get; set; }
         public long ExpectedCount { get; set; }
         public double MinConfidence { get; set; } = 0.6;
+        public double Minimum { get; set; }
+        public double Maximum { get; set; }
         public bool Enabled { get; set; } = true;
         public bool DowngradeToReview { get; set; }
     }
@@ -55,6 +65,7 @@ public partial class TasksPage : UserControl
             YoloTaskCombo.Items.Add(new ComboBoxItem { Content = "人体姿态（Pose）", Tag = "pose" });
         }
         RulesGrid.ItemsSource = _rules;
+        UpdatePostProcessUi();
         Loaded += (_, _) => Refresh();
         Unloaded += TasksPage_Unloaded;
     }
@@ -82,7 +93,7 @@ public partial class TasksPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"刷新失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"刷新失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -102,7 +113,7 @@ public partial class TasksPage : UserControl
         StationCodeText.Text = recipe.StationCode;
         NameText.Text = recipe.Name;
         DescriptionText.Text = recipe.Description;
-        SelectTaskType(recipe.TaskType == InspectionTaskType.Counting
+        SelectTaskType(recipe.TaskType.IsCounting()
             && recipe.Behavior.Enabled
             && recipe.Behavior.Zones.Count > 0
             ? InspectionTaskType.BehaviorRecognition
@@ -116,7 +127,10 @@ public partial class TasksPage : UserControl
             PluginCombo.Text = recipe.PluginId; // 插件不在列表时仍显示
         }
         SelectExecutionProvider(recipe.ExecutionProvider);
-        SettingsText.Text = recipe.SettingsJson;
+        _settingsJson = string.IsNullOrWhiteSpace(recipe.SettingsJson) ? "{}" : recipe.SettingsJson;
+        _postProcessMode = recipe.PostProcess.Mode;
+        _postProcessScript = recipe.PostProcess.Script ?? "";
+        SelectPostProcessMode(_postProcessMode);
         LoadYoloSettings();
         RoiXText.Text = recipe.Roi?.X.ToString("0.###") ?? "0";
         RoiYText.Text = recipe.Roi?.Y.ToString("0.###") ?? "0";
@@ -144,6 +158,8 @@ public partial class TasksPage : UserControl
                 ClassId = rule.ClassId,
                 ExpectedCount = rule.ExpectedCount,
                 MinConfidence = rule.MinConfidence,
+                Minimum = rule.Minimum,
+                Maximum = rule.Maximum,
                 Enabled = rule.Enabled,
                 DowngradeToReview = rule.DowngradeToReview,
             });
@@ -155,7 +171,7 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            MessageBox.Show("操作员模式不能修改任务配置，请切换到工程师或专家模式。", "权限限制");
+            ThemedMessageBox.Show("操作员模式不能修改任务配置，请切换到工程师或专家模式。", "权限限制");
             return;
         }
         TaskList.SelectedItem = null;
@@ -169,7 +185,10 @@ public partial class TasksPage : UserControl
         UpdateDevicePreview();
         PluginCombo.SelectedIndex = PluginCombo.Items.Count > 0 ? 0 : -1;
         SelectExecutionProvider(AppServices.Instance.Settings.ExecutionProvider);
-        SettingsText.Text = "{}";
+        _settingsJson = "{}";
+        _postProcessMode = PostProcessMode.VisualRules;
+        _postProcessScript = "";
+        SelectPostProcessMode(_postProcessMode);
         LoadYoloSettings();
         RoiXText.Text = RoiYText.Text = RoiWText.Text = RoiHText.Text = "0";
         RoiPolicyCombo.SelectedIndex = 0;
@@ -183,20 +202,23 @@ public partial class TasksPage : UserControl
         _rules.Clear();
         _rules.Add(new RuleRow { RuleId = "count-check", Kind = nameof(RuleKind.CountEquals), ExpectedCount = 1 });
         EditorPanel.IsEnabled = true;
+        TaskEditorScrollViewer.ScrollToTop();
+        NameText.Focus();
+        NameText.SelectAll();
     }
 
     private async void Delete_Click(object sender, RoutedEventArgs e)
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            MessageBox.Show("操作员模式不能删除任务。", "权限限制");
+            ThemedMessageBox.Show("操作员模式不能删除任务。", "权限限制");
             return;
         }
         if (TaskList.SelectedItem is not TaskRow row)
         {
             return;
         }
-        if (MessageBox.Show($"删除任务「{row.Name}」？", "确认", MessageBoxButton.OKCancel, MessageBoxImage.Warning)
+        if (ThemedMessageBox.Show($"删除任务「{row.Name}」？", "确认", MessageBoxButton.OKCancel, MessageBoxImage.Warning)
             != MessageBoxResult.OK)
         {
             return;
@@ -209,13 +231,13 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            MessageBox.Show("操作员模式不能保存任务配置。", "权限限制");
+            ThemedMessageBox.Show("操作员模式不能保存任务配置。", "权限限制");
             return;
         }
         if (!double.TryParse(RoiXText.Text, out var roiX) || !double.TryParse(RoiYText.Text, out var roiY)
             || !double.TryParse(RoiWText.Text, out var roiW) || !double.TryParse(RoiHText.Text, out var roiH))
         {
-            MessageBox.Show("ROI 必须是数字", "校验失败");
+            ThemedMessageBox.Show("ROI 必须是数字", "校验失败");
             return;
         }
         Contracts.Results.NormalizedRect? roi =
@@ -228,16 +250,25 @@ public partial class TasksPage : UserControl
             ClassId = string.IsNullOrWhiteSpace(r.ClassId) ? null : r.ClassId.Trim(),
             ExpectedCount = r.ExpectedCount,
             MinConfidence = r.MinConfidence,
+            Minimum = r.Minimum,
+            Maximum = r.Maximum,
             Enabled = r.Enabled,
             DowngradeToReview = r.DowngradeToReview,
         }).ToArray();
 
         if (!HasTaskTypeSelection())
         {
-            MessageBox.Show("请先选择任务类型，再配置对应参数。", "任务配置", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("请先选择任务类型，再配置对应参数。", "任务配置", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         var taskType = SelectedTaskType();
+        _postProcessMode = SelectedPostProcessMode();
+        if (_postProcessMode == PostProcessMode.PythonScript && string.IsNullOrWhiteSpace(_postProcessScript))
+        {
+            ThemedMessageBox.Show("请先点击“编辑 Python 脚本”并填写后处理脚本。", "配置校验失败",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
 
         var policy = (RoiPolicyCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "CenterInside";
         var mode = SelectedCountingMode();
@@ -248,7 +279,7 @@ public partial class TasksPage : UserControl
                 || !double.TryParse(LineBxText.Text, out var bx) || !double.TryParse(LineByText.Text, out var by)
                 || !double.TryParse(HysteresisText.Text, out var hysteresis))
             {
-                MessageBox.Show("检测线参数必须是数字", "校验失败");
+                ThemedMessageBox.Show("检测线参数必须是数字", "校验失败");
                 return;
             }
             line = new CountingLineConfig
@@ -262,10 +293,11 @@ public partial class TasksPage : UserControl
         try
         {
             settingsJson = BuildSettingsJson();
+            _settingsJson = settingsJson;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"模型/插件参数无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"模型/插件参数无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -276,7 +308,7 @@ public partial class TasksPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"行为识别配置无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"行为识别配置无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -293,15 +325,20 @@ public partial class TasksPage : UserControl
             SettingsJson = settingsJson,
             Roi = roi,
             RoiPolicy = Enum.TryParse<RoiBoundaryPolicy>(policy, out var p) ? p : RoiBoundaryPolicy.CenterInside,
-            CountingMode = mode,
-            CountingLine = line,
+            CountingMode = taskType.IsRegion() ? CountingMode.Snapshot : mode,
+            CountingLine = taskType.IsRegion() ? null : line,
             Behavior = behavior,
-            Rules = rules,
+            PostProcess = new PostProcessConfig
+            {
+                Mode = _postProcessMode,
+                Script = _postProcessScript.Trim(),
+            },
+            Rules = taskType.IsCounting() || taskType.IsRegion() ? rules : [],
         };
         try
         {
             await AppServices.Instance.Recipes.SaveAsync(recipe, _editingId);
-            MessageBox.Show("已保存", "任务配置");
+            ThemedMessageBox.Show("已保存", "任务配置");
             Refresh();
         }
         catch (Exception ex)
@@ -309,7 +346,7 @@ public partial class TasksPage : UserControl
             var detail = ex is DbUpdateException && ex.InnerException is not null
                 ? ex.InnerException.Message
                 : ex.Message;
-            MessageBox.Show($"保存失败：{detail}", "任务配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show($"保存失败：{detail}", "任务配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -363,6 +400,211 @@ public partial class TasksPage : UserControl
         UpdateTaskTypeVisibility();
     }
 
+    private async void AddRule_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RolePolicy.CanEditRecipe)
+        {
+            return;
+        }
+
+        var dialog = new RuleAddDialog(await ReadRuleClassOptionsAsync())
+        {
+            Owner = Window.GetWindow(this),
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var prefix = dialog.Kind switch
+        {
+            RuleKind.AreaRange => "area",
+            RuleKind.DiameterRange => "diameter",
+            RuleKind.CountRange => "count",
+            _ => "rule",
+        };
+        var number = 1;
+        string ruleId;
+        do
+        {
+            ruleId = $"{prefix}-{number++}";
+        }
+        while (_rules.Any(rule => string.Equals(rule.RuleId, ruleId, StringComparison.OrdinalIgnoreCase)));
+
+        var row = new RuleRow
+        {
+            RuleId = ruleId,
+            Kind = dialog.Kind.ToString(),
+            ClassId = dialog.ClassId,
+            Minimum = dialog.Minimum,
+            Maximum = dialog.Maximum,
+            Enabled = true,
+        };
+        _rules.Add(row);
+        RulesGrid.ScrollIntoView(row);
+        RulesGrid.SelectedItem = row;
+    }
+
+    private async Task<IReadOnlyList<RuleClassOption>> ReadRuleClassOptionsAsync()
+    {
+        var options = new List<RuleClassOption>
+        {
+            new("", "所有类别"),
+        };
+        if (ModelCombo.SelectedItem is not string modelPath || string.IsNullOrWhiteSpace(modelPath))
+        {
+            return options;
+        }
+
+        var candidates = new List<string>
+        {
+            Path.ChangeExtension(modelPath, ".json"),
+            modelPath + ".meta.json",
+            Path.ChangeExtension(modelPath, ".engine.meta.json"),
+        };
+        var directory = Path.GetDirectoryName(modelPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            var current = new DirectoryInfo(directory);
+            for (var level = 0; level < 3 && current is not null; level++, current = current.Parent)
+            {
+                candidates.Add(Path.Combine(current.FullName, "classes.json"));
+            }
+        }
+
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(candidate))
+            {
+                continue;
+            }
+            try
+            {
+                var root = JsonNode.Parse(File.ReadAllText(candidate));
+                var classNode = root is JsonObject obj
+                    ? obj["classes"] ?? obj["names"]
+                    : root;
+                AddRuleClasses(classNode, options);
+                if (options.Count > 1)
+                {
+                    break;
+                }
+            }
+            catch
+            {
+                // Ignore an invalid sidecar and continue searching other supported metadata files.
+            }
+        }
+        if (options.Count == 1)
+        {
+            var modelClasses = await ReadModelClassesAsync(modelPath);
+            AddRuleClasses(modelClasses, options);
+        }
+        return options;
+    }
+
+    private async Task<JsonNode?> ReadModelClassesAsync(string modelPath)
+    {
+        var yoloPlugin = AppServices.Instance.AlgorithmManager.ScanPlugins()
+            .FirstOrDefault(plugin => string.Equals(plugin.Manifest?.Id, "com.vision.yolo11", StringComparison.OrdinalIgnoreCase));
+        if (yoloPlugin is null)
+        {
+            return null;
+        }
+        var helperPath = Path.Combine(yoloPlugin.Directory, "model_metadata.py");
+        if (!File.Exists(helperPath))
+        {
+            return null;
+        }
+
+        var pluginPythonCandidates = new[]
+        {
+            Path.Combine(yoloPlugin.Directory, ".venv", "Scripts", "python.exe"),
+            Path.Combine(yoloPlugin.Directory, "..", "atu5", ".venv", "Scripts", "python.exe"),
+            Path.Combine(yoloPlugin.Directory, "..", ".venv", "Scripts", "python.exe"),
+        };
+        var python = pluginPythonCandidates.FirstOrDefault(File.Exists) ?? "python";
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = python,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            },
+        };
+        process.StartInfo.ArgumentList.Add(helperPath);
+        process.StartInfo.ArgumentList.Add(modelPath);
+        try
+        {
+            if (!process.Start())
+            {
+                return null;
+            }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var output = await process.StandardOutput.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            var jsonLine = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Reverse()
+                .FirstOrDefault(line => line.TrimStart().StartsWith("{"));
+            if (string.IsNullOrWhiteSpace(jsonLine))
+            {
+                return null;
+            }
+            var root = JsonNode.Parse(jsonLine);
+            return root is JsonObject obj ? obj["classes"] ?? obj["names"] : root;
+        }
+        catch
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            return null;
+        }
+    }
+
+    private static void AddRuleClasses(JsonNode? node, ICollection<RuleClassOption> options)
+    {
+        if (node is JsonArray array)
+        {
+            for (var index = 0; index < array.Count; index++)
+            {
+                var name = array[index]?.GetValue<string>()?.Trim();
+                if (string.IsNullOrWhiteSpace(name)
+                    || (index == 0 && string.Equals(name, "background", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+                options.Add(new RuleClassOption(index.ToString(CultureInfo.InvariantCulture),
+                    $"{name}（ID {index}）"));
+            }
+            return;
+        }
+
+        if (node is not JsonObject map)
+        {
+            return;
+        }
+        foreach (var pair in map)
+        {
+            if (pair.Value is null || !int.TryParse(pair.Key, out var id))
+            {
+                continue;
+            }
+            var name = pair.Value.GetValue<string>()?.Trim();
+            if (string.IsNullOrWhiteSpace(name)
+                || (id == 0 && string.Equals(name, "background", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+            options.Add(new RuleClassOption(id.ToString(CultureInfo.InvariantCulture),
+                $"{name}（ID {id}）"));
+        }
+    }
+
     private bool HasTaskTypeSelection() =>
         Enum.TryParse<InspectionTaskType>((TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string, out _);
 
@@ -371,7 +613,7 @@ public partial class TasksPage : UserControl
         var tag = (TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string;
         return Enum.TryParse<InspectionTaskType>(tag, out var type)
             ? type
-            : InspectionTaskType.Counting;
+            : InspectionTaskType.Detection;
     }
 
     private void SelectTaskType(InspectionTaskType? type)
@@ -393,11 +635,37 @@ public partial class TasksPage : UserControl
         {
             return;
         }
-        var isCounting = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.Counting;
-        var isBehavior = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.BehaviorRecognition;
+        var selectedType = SelectedTaskType();
+        var isCounting = HasTaskTypeSelection() && selectedType.IsCounting();
+        var isRegion = HasTaskTypeSelection() && selectedType.IsRegion();
+        var isBehavior = HasTaskTypeSelection() && selectedType.IsBehavior();
+        var isSemantic = HasTaskTypeSelection()
+            && selectedType.Normalize() == InspectionTaskType.SemanticSegmentation;
+        if (isRegion && _rules.Count == 1
+            && string.Equals(_rules[0].RuleId, "count-check", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_rules[0].Kind, nameof(RuleKind.CountEquals), StringComparison.OrdinalIgnoreCase)
+            && _rules[0].ExpectedCount == 1)
+        {
+            _rules.Clear();
+        }
+        else if (isCounting && _rules.Count == 0)
+        {
+            _rules.Add(new RuleRow { RuleId = "count-check", Kind = nameof(RuleKind.CountEquals), ExpectedCount = 1 });
+        }
+        EnsureSemanticPluginBinding(isSemantic);
+        GeneralPluginSelectorPanel.Visibility = isSemantic ? Visibility.Collapsed : Visibility.Visible;
+        SemanticPluginFixedText.Visibility = isSemantic ? Visibility.Visible : Visibility.Collapsed;
+        if (isRegion && IsYoloPlugin)
+        {
+            var modelTask = selectedType.Normalize() == InspectionTaskType.SemanticSegmentation ? "semantic" : "instance";
+            var modelTaskItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, modelTask, StringComparison.OrdinalIgnoreCase));
+            if (modelTaskItem is not null) YoloTaskCombo.SelectedItem = modelTaskItem;
+        }
+        YoloTaskCombo.IsEnabled = !isRegion;
         SetGroupVisibility(ModeCombo, isCounting);
         SetGroupVisibility(RoiXText, isCounting);
-        SetGroupVisibility(RulesGrid, isCounting);
+        SetGroupVisibility(RulesGrid, isCounting || isRegion);
         UpdateTaskParameterVisibility();
     }
 
@@ -432,6 +700,7 @@ public partial class TasksPage : UserControl
             return;
         }
         LoadYoloSettings();
+        UpdateTaskTypeVisibility();
     }
 
     private void YoloTaskCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -695,7 +964,7 @@ public partial class TasksPage : UserControl
         var plugin = SelectedPlugin();
         if (plugin is null)
         {
-            MessageBox.Show("请先选择有效的 YOLO11 插件。", "时序模型导入");
+            ThemedMessageBox.Show("请先选择有效的 YOLO11 插件。", "时序模型导入");
             return;
         }
         var dialog = new OpenFileDialog
@@ -716,7 +985,7 @@ public partial class TasksPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"时序模型导入失败：{ex.Message}", "时序模型导入", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"时序模型导入失败：{ex.Message}", "时序模型导入", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -724,19 +993,19 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            MessageBox.Show("当前角色无权导入模型，请切换到工程师或专家模式。", "权限限制");
+            ThemedMessageBox.Show("当前角色无权导入模型，请切换到工程师或专家模式。", "权限限制");
             return;
         }
         var plugin = SelectedPlugin();
         if (plugin is null)
         {
-            MessageBox.Show("请先选择有效的 YOLO11 插件。", "模型导入");
+            ThemedMessageBox.Show("请先选择有效的 YOLO11 插件。", "模型导入");
             return;
         }
         var dialog = new OpenFileDialog
         {
             Title = "选择 YOLO 模型文件",
-            Filter = "模型文件 (*.pt;*.onnx)|*.pt;*.onnx|所有文件 (*.*)|*.*",
+            Filter = "YOLO 模型 (*.engine;*.pt;*.onnx)|*.engine;*.pt;*.onnx|TensorRT Engine (*.engine)|*.engine|所有文件 (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false,
         };
@@ -749,7 +1018,7 @@ public partial class TasksPage : UserControl
             var absolutePath = Path.GetFullPath(dialog.FileName);
             if (IsBehaviorModelPath(absolutePath))
             {
-                MessageBox.Show("这是行为时序模型，不能作为顶部 YOLO11 主模型使用。请在行为识别区域的‘行为时序模型’位置导入。", "模型类型不匹配", MessageBoxButton.OK, MessageBoxImage.Warning);
+                ThemedMessageBox.Show("这是行为时序模型，不能作为顶部 YOLO11 主模型使用。请在行为识别区域的‘行为时序模型’位置导入。", "模型类型不匹配", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             if (!ModelCombo.Items.Contains(absolutePath))
@@ -761,7 +1030,7 @@ public partial class TasksPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"模型导入失败：{ex.Message}", "模型导入", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"模型导入失败：{ex.Message}", "模型导入", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -798,6 +1067,34 @@ public partial class TasksPage : UserControl
         (PluginCombo.SelectedItem as string) ?? PluginCombo.Text,
         "com.vision.yolo11", StringComparison.OrdinalIgnoreCase);
 
+    private bool IsAtu5Plugin => string.Equals(
+        (PluginCombo.SelectedItem as string) ?? PluginCombo.Text,
+        "com.vision.atu5", StringComparison.OrdinalIgnoreCase);
+
+    private void EnsureSemanticPluginBinding(bool isSemantic)
+    {
+        if (!isSemantic || _syncingSemanticPlugin || IsAtu5Plugin || PluginCombo is null)
+        {
+            return;
+        }
+        var atu5 = PluginCombo.Items.OfType<string>()
+            .FirstOrDefault(id => string.Equals(id, "com.vision.atu5", StringComparison.OrdinalIgnoreCase));
+        if (atu5 is null)
+        {
+            SemanticPluginFixedText.Text = "ATU5/FPN 语义分割插件未找到，请检查 workers/atu5。";
+            return;
+        }
+        try
+        {
+            _syncingSemanticPlugin = true;
+            PluginCombo.SelectedItem = atu5;
+        }
+        finally
+        {
+            _syncingSemanticPlugin = false;
+        }
+    }
+
     private Contracts.Plugins.DiscoveredPlugin? SelectedPlugin() =>
         AppServices.Instance.AlgorithmManager.ScanPlugins().FirstOrDefault(p =>
             p.Status == Contracts.Plugins.PluginStatus.Valid
@@ -810,26 +1107,32 @@ public partial class TasksPage : UserControl
         {
             return;
         }
-        ModelGroup.Visibility = IsYoloPlugin ? Visibility.Visible : Visibility.Collapsed;
+        var usesModelPlugin = IsYoloPlugin || IsAtu5Plugin;
+        ModelGroup.Visibility = usesModelPlugin ? Visibility.Visible : Visibility.Collapsed;
+        YoloTaskLabel.Visibility = IsYoloPlugin ? Visibility.Visible : Visibility.Collapsed;
+        YoloTaskCombo.Visibility = IsYoloPlugin ? Visibility.Visible : Visibility.Collapsed;
         UpdateTaskParameterVisibility();
-        if (!IsYoloPlugin)
+        if (!usesModelPlugin)
         {
             return;
         }
         try
         {
-            var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(SettingsText.Text) ? "{}" : SettingsText.Text)
+            var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(_settingsJson) ? "{}" : _settingsJson)
                 as JsonObject;
-            var task = settings?["task"]?.GetValue<string>() ?? "detect";
-            YoloTaskCombo.SelectedItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
-                .FirstOrDefault(item => string.Equals(item.Tag as string, task, StringComparison.OrdinalIgnoreCase));
+            if (IsYoloPlugin)
+            {
+                var task = settings?["task"]?.GetValue<string>() ?? "detect";
+                YoloTaskCombo.SelectedItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
+                    .FirstOrDefault(item => string.Equals(item.Tag as string, task, StringComparison.OrdinalIgnoreCase));
+            }
             LoadModelChoices();
             UpdateTaskParameterVisibility();
             var modelPath = settings?["modelPath"]?.GetValue<string>();
             if (!string.IsNullOrWhiteSpace(modelPath))
             {
                 var absoluteModelPath = ToAbsoluteModelPath(modelPath);
-                if (IsBehaviorModelPath(absoluteModelPath))
+                if (IsYoloPlugin && IsBehaviorModelPath(absoluteModelPath))
                 {
                     var defaultModel = PreferredYoloModelPath();
                     ModelCombo.SelectedItem = defaultModel;
@@ -847,7 +1150,7 @@ public partial class TasksPage : UserControl
         }
         catch
         {
-            ModelStatusText.Text = "专家参数不是有效 JSON，请检查后再保存";
+            ModelStatusText.Text = "插件配置不是有效 JSON，无法加载模型设置";
         }
     }
 
@@ -860,13 +1163,28 @@ public partial class TasksPage : UserControl
 
         var task = IsYoloPlugin
             ? (YoloTaskCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "detect"
+            : IsAtu5Plugin ? "semantic"
             : "detect";
         var isDetection = string.Equals(task, "detect", StringComparison.OrdinalIgnoreCase);
         var isPose = string.Equals(task, "pose", StringComparison.OrdinalIgnoreCase);
         var isSegmentation = string.Equals(task, "instance", StringComparison.OrdinalIgnoreCase)
             || string.Equals(task, "semantic", StringComparison.OrdinalIgnoreCase);
-        var isCountingTask = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.Counting;
-        var isBehaviorTask = HasTaskTypeSelection() && SelectedTaskType() == InspectionTaskType.BehaviorRecognition;
+        var selectedType = SelectedTaskType();
+        var isCountingTask = HasTaskTypeSelection() && selectedType.IsCounting();
+        var isRegionTask = HasTaskTypeSelection() && selectedType.IsRegion();
+        var isBehaviorTask = HasTaskTypeSelection() && selectedType.IsBehavior();
+
+        var selectedModelTask = selectedType.Normalize() == InspectionTaskType.SemanticSegmentation ? "semantic" : "instance";
+        if (isRegionTask && IsYoloPlugin && !string.Equals(task, selectedModelTask, StringComparison.OrdinalIgnoreCase))
+        {
+            var modelTaskItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, selectedModelTask, StringComparison.OrdinalIgnoreCase));
+            if (modelTaskItem is not null)
+            {
+                YoloTaskCombo.SelectedItem = modelTaskItem;
+                return;
+            }
+        }
 
         // 行为识别必须取得人体关键点；用户选择行为任务后自动切换到 YOLO11 Pose，避免
         // 仍停留在 detect 导致时序模型没有输入。
@@ -882,8 +1200,8 @@ public partial class TasksPage : UserControl
         }
 
         SetGroupVisibility(ModeCombo, isDetection && isCountingTask);
-        SetGroupVisibility(RoiXText, isCountingTask);
-        SetGroupVisibility(RulesGrid, isDetection && isCountingTask);
+        SetGroupVisibility(RoiXText, isCountingTask || isRegionTask);
+        SetGroupVisibility(RulesGrid, (isDetection && isCountingTask) || isRegionTask);
         BehaviorGroup.Visibility = isBehaviorTask && (isDetection || isPose)
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -919,7 +1237,7 @@ public partial class TasksPage : UserControl
 
     private void LoadModelChoices()
     {
-        if (!IsYoloPlugin)
+        if (!IsYoloPlugin && !IsAtu5Plugin)
         {
             return;
         }
@@ -932,12 +1250,16 @@ public partial class TasksPage : UserControl
         var plugin = SelectedPlugin();
         if (plugin is not null)
         {
-            var modelsDirectory = Path.Combine(plugin.Directory, "models");
-            if (Directory.Exists(modelsDirectory))
+            var modelDirectories = IsAtu5Plugin
+                ? new[] { plugin.Directory, Path.Combine(plugin.Directory, "models") }
+                : new[] { Path.Combine(plugin.Directory, "models") };
+            foreach (var modelsDirectory in modelDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
             {
+                if (!Directory.Exists(modelsDirectory)) continue;
                 foreach (var file in Directory.EnumerateFiles(modelsDirectory)
                              .Where(file => Path.GetExtension(file).Equals(".pt", StringComparison.OrdinalIgnoreCase)
-                                 || Path.GetExtension(file).Equals(".onnx", StringComparison.OrdinalIgnoreCase))
+                                 || Path.GetExtension(file).Equals(".onnx", StringComparison.OrdinalIgnoreCase)
+                                 || Path.GetExtension(file).Equals(".engine", StringComparison.OrdinalIgnoreCase))
                              .OrderBy(file => file, StringComparer.OrdinalIgnoreCase))
                 {
                     ModelCombo.Items.Add(Path.GetFullPath(file));
@@ -948,7 +1270,7 @@ public partial class TasksPage : UserControl
         {
             ModelCombo.SelectedItem = selected;
         }
-        else if (PreferredYoloModelPath() is { } preferred)
+        else if (IsYoloPlugin && PreferredYoloModelPath() is { } preferred)
         {
             ModelCombo.SelectedItem = preferred;
         }
@@ -1005,19 +1327,30 @@ public partial class TasksPage : UserControl
 
     private string BuildSettingsJson()
     {
-        if (!IsYoloPlugin)
+        if (!IsYoloPlugin && !IsAtu5Plugin)
         {
-            return SettingsText.Text;
+            return string.IsNullOrWhiteSpace(_settingsJson) ? "{}" : _settingsJson;
         }
-        var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(SettingsText.Text) ? "{}" : SettingsText.Text)
+        var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(_settingsJson) ? "{}" : _settingsJson)
             as JsonObject ?? new JsonObject();
-        var task = (YoloTaskCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "detect";
+        var task = IsAtu5Plugin
+            ? "semantic"
+            : (YoloTaskCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "detect";
         settings["task"] = task;
         if (ModelCombo.SelectedItem is string modelPath && !string.IsNullOrWhiteSpace(modelPath))
         {
             settings["modelPath"] = IsBehaviorModelPath(modelPath)
                 ? PreferredYoloModelPath() ?? modelPath
                 : modelPath;
+        }
+        if (IsAtu5Plugin)
+        {
+            if (ModelCombo.SelectedItem is not string atu5Model || string.IsNullOrWhiteSpace(atu5Model))
+            {
+                throw new InvalidOperationException("语义分割任务必须选择 ATU5 .pt 或 .engine 模型。");
+            }
+            settings["device"] = SelectedExecutionProvider();
+            return settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         }
         settings["temporalModelType"] = (TemporalModelTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "stgcn";
         settings["temporalSequenceLength"] = 30;
@@ -1035,7 +1368,7 @@ public partial class TasksPage : UserControl
         }
         try
         {
-            var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(SettingsText.Text) ? "{}" : SettingsText.Text)
+            var settings = JsonNode.Parse(string.IsNullOrWhiteSpace(_settingsJson) ? "{}" : _settingsJson)
                 as JsonObject;
             var type = settings?["temporalModelType"]?.GetValue<string>() ?? "stgcn";
             TemporalModelTypeCombo.SelectedItem = TemporalModelTypeCombo.Items.OfType<ComboBoxItem>()
@@ -1043,7 +1376,7 @@ public partial class TasksPage : UserControl
                 ?? TemporalModelTypeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
             var savedPath = settings?["temporalModelPath"]?.GetValue<string>() ?? "";
             if (HasTaskTypeSelection()
-                && SelectedTaskType() == InspectionTaskType.BehaviorRecognition
+                && SelectedTaskType().IsBehavior()
                 && (string.IsNullOrWhiteSpace(savedPath)
                     || !File.Exists(ResolveTemporalModelPath(savedPath))))
             {
@@ -1207,17 +1540,62 @@ public partial class TasksPage : UserControl
     {
         var canEdit = RolePolicy.CanEditRecipe;
         EditorPanel.IsEnabled = canEdit;
-        AdvancedSettingsGroup.Visibility = canEdit ? Visibility.Visible : Visibility.Collapsed;
-        SettingsText.IsEnabled = RolePolicy.CanEditAdvanced;
-        AdvancedHintText.Text = RolePolicy.CanEditAdvanced
-            ? "专家可直接编辑插件 JSON；YOLO11 的任务类型和模型文件可在上方配置。"
-            : "当前角色只能查看专家参数；如需修改请切换到专家模式。";
         SaveButton.IsEnabled = canEdit;
         ProviderCombo.IsEnabled = canEdit;
         BrowseDeviceButton.IsEnabled = canEdit;
         ImportModelButton.IsEnabled = canEdit;
         BrowseTemporalModelButton.IsEnabled = canEdit;
+        UpdatePostProcessUi();
         UpdateDevicePreview();
+    }
+
+    private PostProcessMode SelectedPostProcessMode() =>
+        (PostProcessModeCombo.SelectedItem as ComboBoxItem)?.Tag is string tag
+        && Enum.TryParse<PostProcessMode>(tag, out var mode)
+            ? mode
+            : PostProcessMode.VisualRules;
+
+    private void SelectPostProcessMode(PostProcessMode mode)
+    {
+        var item = PostProcessModeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(candidate => string.Equals(candidate.Tag as string, mode.ToString(), StringComparison.OrdinalIgnoreCase));
+        PostProcessModeCombo.SelectedItem = item ?? PostProcessModeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        UpdatePostProcessUi();
+    }
+
+    private void PostProcessMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (PostProcessModeCombo is null)
+            return;
+        _postProcessMode = SelectedPostProcessMode();
+        UpdatePostProcessUi();
+    }
+
+    private void UpdatePostProcessUi()
+    {
+        if (PostProcessModeCombo is null || EditPostProcessScriptButton is null || AddRuleButton is null || RulesGrid is null)
+            return;
+        _postProcessMode = SelectedPostProcessMode();
+        var scriptMode = _postProcessMode == PostProcessMode.PythonScript;
+        var canEdit = RolePolicy.CanEditRecipe;
+        EditPostProcessScriptButton.IsEnabled = canEdit && scriptMode;
+        AddRuleButton.IsEnabled = canEdit && !scriptMode;
+        RulesGrid.IsEnabled = canEdit && !scriptMode;
+        PostProcessHintText.Text = scriptMode
+            ? "脚本将接收 JSON 检测结果，并返回保留对象索引及最终 OK/NG。点击右侧按钮编辑脚本。"
+            : "使用面积、直径、数量等可视化规则进行筛选。";
+    }
+
+    private void EditPostProcessScript_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new PythonScriptDialog(_postProcessScript)
+        {
+            Owner = Window.GetWindow(this),
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            _postProcessScript = dialog.ScriptText;
+        }
     }
 
     private void LoadBehavior(BehaviorRecognitionConfig behavior)

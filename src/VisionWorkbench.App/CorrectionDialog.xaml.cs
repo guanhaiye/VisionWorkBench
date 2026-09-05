@@ -30,14 +30,14 @@ public partial class CorrectionDialog : Window
         {
             if (!long.TryParse(DeltaText.Text.Trim(), out var delta) || delta == 0)
             {
-                MessageBox.Show(this, "调整量必须是非零整数", "校验失败");
+                ThemedMessageBox.Show(this, "调整量必须是非零整数", "校验失败");
                 return;
             }
             Delta = delta;
         }
         if (string.IsNullOrWhiteSpace(Reason))
         {
-            MessageBox.Show(this, "修正原因必填（CNT-S-010）", "校验失败");
+            ThemedMessageBox.Show(this, "修正原因必填（CNT-S-010）", "校验失败");
             return;
         }
         DialogResult = true;

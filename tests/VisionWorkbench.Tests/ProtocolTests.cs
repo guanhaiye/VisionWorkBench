@@ -151,4 +151,32 @@ public sealed class ProtocolTests
         Assert.Equal(2, output.GetCount("a"));
         Assert.Equal(1, output.GetCount("b"));
     }
+
+    [Fact]
+    public void AlgorithmOutput_Deserializes_SegmentationContourPoints()
+    {
+        var json = """
+            {
+              "outputId": "o1",
+              "inputId": "i1",
+              "segmentations": [
+                {
+                  "mode": "instance",
+                  "classId": "1",
+                  "contours": [[{"x":0.1,"y":0.2},{"x":0.3,"y":0.2},{"x":0.3,"y":0.4}]],
+                  "areaRatio": 0.02
+                }
+              ]
+            }
+            """;
+
+        var output = JsonSerializer.Deserialize<Contracts.Results.AlgorithmOutput>(
+            json, ProtocolMessage.JsonOptions);
+
+        Assert.NotNull(output);
+        var contour = Assert.Single(Assert.Single(output!.Segmentations).Contours);
+        var point = contour[0];
+        Assert.Equal(0.1, point.X);
+        Assert.Equal(0.2, point.Y);
+    }
 }

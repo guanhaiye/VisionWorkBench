@@ -1,0 +1,4 @@
+# AI 字符识别平台运行时（PaddleOCR 官方 PaddleOCR-VL-1.6）
+paddlepaddle>=3.2.1
+paddleocr[doc-parser]>=3.3.0
+opencv-contrib-python-headless>=4.10

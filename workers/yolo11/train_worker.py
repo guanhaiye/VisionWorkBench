@@ -7,7 +7,9 @@ Ultralytics 自身的文本日志会同时输出，但宿主只消费带 event �
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 from typing import Any
@@ -123,12 +125,65 @@ def train(request: dict[str, Any]) -> None:
     model_path_result = best_path if best_path.is_file() else last_path
     if not model_path_result.is_file():
         raise FileNotFoundError(f"训练完成但没有找到模型文件: {model_path_result}")
+    for saved_model in (best_path, last_path):
+        if saved_model.is_file():
+            stamp_model_metadata(saved_model, imgsz, expected_model_task, getattr(model, "names", {}))
+    engine_path = None
+    if bool(request.get("exportTensorRt", True)):
+        emit("log", message="训练完成，正在导出 TensorRT Engine…")
+        try:
+            target_engine = model_path_result.with_suffix(".engine")
+            with tempfile.TemporaryDirectory(prefix="visionworkbench_trt_") as temp_directory:
+                temporary_model = Path(temp_directory) / model_path_result.name
+                shutil.copy2(model_path_result, temporary_model)
+                exported = YOLO(str(temporary_model)).export(format="engine", imgsz=imgsz, device="0")
+                temporary_engine = Path(str(exported)).resolve()
+                shutil.copy2(temporary_engine, target_engine)
+            engine_path = str(target_engine)
+            target_engine.with_suffix(".engine.task").write_text(expected_model_task, encoding="utf-8")
+            target_engine.with_suffix(".engine.meta.json").write_text(
+                json.dumps({"imageSize": imgsz, "task": expected_model_task,
+                            "classes": _class_names(getattr(model, "names", {}))},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            emit("log", message=f"TensorRT Engine 已导出：{engine_path}")
+        except Exception as export_error:  # noqa: BLE001
+            emit("log", message=f"模型训练成功，但 TensorRT Engine 导出失败：{export_error}")
     emit(
         "completed",
         modelPath=str(model_path_result),
         runDirectory=str(save_dir),
-        message=f"训练完成，模型已保存到 {model_path_result}",
+        enginePath=engine_path,
+        message=f"训练完成，模型已保存到 {model_path_result}" + (f"，Engine 已保存到 {engine_path}" if engine_path else ""),
     )
+
+
+def _class_names(names: Any) -> list[str]:
+    if isinstance(names, dict):
+        ordered = sorted(names.items(), key=lambda pair: (0, int(pair[0]))
+                         if str(pair[0]).isdigit() else (1, str(pair[0])))
+        return [str(value) for _, value in ordered]
+    if isinstance(names, (list, tuple)):
+        return [str(value) for value in names]
+    return []
+
+
+def stamp_model_metadata(model_path: Path, image_size: int, task: str, names: Any) -> None:
+    """Store VisionWorkbench inference metadata inside each YOLO checkpoint."""
+    import torch  # type: ignore
+
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"YOLO model format does not support metadata: {model_path}")
+    metadata = dict(checkpoint.get("visionWorkbench") or {})
+    classes = _class_names(names)
+    metadata.update({"imageSize": int(image_size), "task": task, "classes": classes})
+    checkpoint["visionWorkbench"] = metadata
+    torch.save(checkpoint, model_path)
+    model_path.with_suffix(".json").write_text(
+        json.dumps({"imageSize": int(image_size), "task": task, "classes": classes},
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8")
 
 
 def main() -> int:

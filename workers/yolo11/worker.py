@@ -51,7 +51,7 @@ class Yolo11Worker(AlgorithmWorker):
             raise WorkerError("INPUT_INVALID", "submit 负载缺少 imagePath")
         try:
             output = self._engine.predict(
-                str(image_path), int(payload.get("frameSequence", 0))
+                str(image_path), int(payload.get("frameSequence", 0)), payload.get("roi")
             )
         except FileNotFoundError as error:
             raise WorkerError("INPUT_INVALID", str(error)) from error

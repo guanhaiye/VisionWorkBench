@@ -17,7 +17,7 @@ public partial class ReInferenceDialog : Window
     {
         if (string.IsNullOrWhiteSpace(ModelVersion))
         {
-            MessageBox.Show("模型版本不能为空", "校验失败");
+            ThemedMessageBox.Show("模型版本不能为空", "校验失败");
             return;
         }
         DialogResult = true;

@@ -37,7 +37,7 @@ public partial class PluginsPage : UserControl
     {
         if (PluginsGrid.SelectedItem is not PluginRow row || string.IsNullOrEmpty(row.Id))
         {
-            MessageBox.Show("先选择一个插件", "提示");
+            ThemedMessageBox.Show("先选择一个插件", "提示");
             return;
         }
         var logsDir = Path.Combine(AppServices.Instance.Settings.DataDirectory, "logs");

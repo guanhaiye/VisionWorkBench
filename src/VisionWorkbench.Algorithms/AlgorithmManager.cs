@@ -139,7 +139,19 @@ public sealed class AlgorithmManager
         var pluginVenv = OperatingSystem.IsWindows()
             ? Path.Combine(pluginDirectory, ".venv", "Scripts", "python.exe")
             : Path.Combine(pluginDirectory, ".venv", "bin", "python");
-        var python = File.Exists(pluginVenv) ? pluginVenv : _options.PythonExecutable;
+        // ATU5 uses the same PyTorch/CUDA runtime as the YOLO11 plugin.  In the
+        // development layout that heavyweight environment is installed once in
+        // workers/yolo11/.venv, while workers/.venv contains only lightweight
+        // worker dependencies.  Prefer that shared environment for ATU5 so a
+        // semantic task can actually start instead of failing with "torch not found".
+        var sharedVisionPython = manifest.Id.Equals("com.vision.atu5", StringComparison.OrdinalIgnoreCase)
+            ? (OperatingSystem.IsWindows()
+                ? Path.Combine(pluginDirectory, "..", "yolo11", ".venv", "Scripts", "python.exe")
+                : Path.Combine(pluginDirectory, "..", "yolo11", ".venv", "bin", "python"))
+            : null;
+        var python = File.Exists(pluginVenv) ? pluginVenv
+            : sharedVisionPython is not null && File.Exists(sharedVisionPython) ? sharedVisionPython
+            : _options.PythonExecutable;
         if (string.IsNullOrWhiteSpace(python))
         {
             var bundled = Path.Combine(pluginDirectory, "runtime", "python.exe");

@@ -27,6 +27,7 @@ internal sealed class VideoFileSession(
     CameraDescriptor descriptor, ILogger? logger) : ICameraSession
 {
     private readonly CancellationTokenSource _cts = new();
+    private readonly AsyncPauseGate _pauseGate = new();
     private Task? _loopTask;
     private VideoCapture? _capture;
     private long _sequence;
@@ -140,6 +141,26 @@ internal sealed class VideoFileSession(
         return Task.CompletedTask;
     }
 
+    public Task PauseAsync(CancellationToken cancellationToken)
+    {
+        if (State == CameraSessionState.Streaming)
+        {
+            _pauseGate.Pause();
+            State = CameraSessionState.Paused;
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task ResumeAsync(CancellationToken cancellationToken)
+    {
+        if (State == CameraSessionState.Paused)
+        {
+            _pauseGate.Resume();
+            State = CameraSessionState.Streaming;
+        }
+        return Task.CompletedTask;
+    }
+
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _cts.Cancel();
@@ -169,6 +190,7 @@ internal sealed class VideoFileSession(
         }
         _capture?.Dispose();
         _capture = null;
+        _pauseGate.Dispose();
         if (_asciiFallbackPath is not null)
         {
             try
@@ -193,6 +215,7 @@ internal sealed class VideoFileSession(
 
         while (!ct.IsCancellationRequested)
         {
+            await _pauseGate.WaitIfPausedAsync(ct);
             var readOk = false;
             try
             {

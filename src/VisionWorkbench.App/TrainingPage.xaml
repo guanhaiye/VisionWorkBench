@@ -6,10 +6,11 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="220" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <DockPanel Grid.Row="0" Margin="0,0,0,8">
-            <TextBlock Text="YOLO11 训练平台" FontSize="20" FontWeight="Bold" />
-            <TextBlock x:Name="TrainingStatusText" DockPanel.Dock="Right" Foreground="DarkGreen" VerticalAlignment="Center" />
+            <TextBlock Text="训练平台" FontSize="20" FontWeight="Bold" />
         </DockPanel>
         <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" Padding="8" Margin="0,0,0,8">
             <WrapPanel>
@@ -17,56 +18,84 @@
                 <ComboBox x:Name="DatasetCombo" Width="220" DisplayMemberPath="Name" SelectionChanged="DatasetCombo_SelectionChanged"
                           HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
                 <TextBlock x:Name="TaskTypeText" Text="任务：未选择" Margin="12,0,16,0" VerticalAlignment="Center" />
-                <TextBlock Text="模型：" VerticalAlignment="Center" />
-                <ComboBox x:Name="ModelCombo" Width="330" SelectionChanged="ModelCombo_SelectionChanged"
-                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
             </WrapPanel>
         </Border>
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="370" MinWidth="340" />
+                <ColumnDefinition Width="340" MinWidth="300" />
+                <ColumnDefinition Width="360" MinWidth="330" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,14,0">
+            <GroupBox Grid.Column="0" Header="模型节点" Padding="8" Margin="2,0,18,8">
+                <DockPanel>
+                        <Button x:Name="NewModelButton" DockPanel.Dock="Top" Content="新建模型"
+                                Click="NewModel_Click" Padding="12,5" HorizontalAlignment="Left" />
+                    <ListBox x:Name="ModelNodeList" DisplayMemberPath="Name" Margin="0,8,0,0" MinHeight="96"
+                             SelectionChanged="ModelNodeList_SelectionChanged"
+                             PreviewMouseRightButtonDown="ModelNodeList_PreviewMouseRightButtonDown"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="打开权重文件" Click="OpenModelWeightsMenu_Click" />
+                                <MenuItem Header="复制模型路径" Click="CopyModelPathMenu_Click" />
+                                <Separator />
+                                <MenuItem Header="删除模型节点" Click="DeleteModelNodeMenu_Click" />
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+                    </ListBox>
+                </DockPanel>
+            </GroupBox>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,14,0">
                 <StackPanel Margin="2,0,4,8">
                     <GroupBox Header="训练超参数" Padding="8">
                         <Grid Margin="6">
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="44" />
-                                <RowDefinition Height="44" />
-                                <RowDefinition Height="44" />
-                                <RowDefinition Height="44" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="学习次数（Epochs）" Margin="0,0,12,0" VerticalAlignment="Center" TextAlignment="Right" />
-                            <TextBox x:Name="EpochsText" Grid.Column="1" Text="100" Margin="0,4" MinHeight="34"
-                                     TextAlignment="Center" VerticalContentAlignment="Center" />
-                            <TextBlock Text="批大小（Batch）" Grid.Row="1" Margin="0,0,12,0" VerticalAlignment="Center" TextAlignment="Right" />
-                            <ComboBox x:Name="BatchSizeCombo" Grid.Row="1" Grid.Column="1" SelectedIndex="0" Margin="0,4" MinHeight="34"
-                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
-                            <TextBlock Text="图像尺寸" Grid.Row="2" Margin="0,0,12,0" VerticalAlignment="Center" TextAlignment="Right" />
-                            <TextBox x:Name="ImageSizeText" Grid.Row="2" Grid.Column="1" Text="640" Margin="0,4" MinHeight="34"
-                                     TextAlignment="Center" VerticalContentAlignment="Center" LostFocus="ImageSizeText_LostFocus" />
-                            <TextBlock Text="计算设备" Grid.Row="3" Margin="0,0,12,0" VerticalAlignment="Center" TextAlignment="Right" />
-                            <ComboBox x:Name="DeviceCombo" Grid.Row="3" Grid.Column="1" SelectedIndex="0" SelectionChanged="DeviceCombo_SelectionChanged"
-                                      Margin="0,4" MinHeight="34" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                            <TextBlock Text="预模型" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
+                            <ComboBox x:Name="ModelCombo" Grid.Column="1" SelectionChanged="ModelCombo_SelectionChanged"
+                                      Margin="0,5" MinHeight="38" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
+                            <TextBlock Text="学习次数（Epochs）" Grid.Row="1" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
+                            <TextBox x:Name="EpochsText" Grid.Row="1" Grid.Column="1" Text="100" Margin="0,5" MinHeight="38"
+                                     HorizontalAlignment="Stretch" TextAlignment="Center" VerticalContentAlignment="Center" />
+                            <TextBlock Text="批大小（Batch）" Grid.Row="2" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
+                            <ComboBox x:Name="BatchSizeCombo" Grid.Row="2" Grid.Column="1" SelectedIndex="0" Margin="0,5" MinHeight="38"
+                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
+                            <TextBlock Text="图像尺寸" Grid.Row="3" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
+                            <TextBox x:Name="ImageSizeText" Grid.Row="3" Grid.Column="1" Text="640" Margin="0,5" MinHeight="38"
+                                     HorizontalAlignment="Stretch" TextAlignment="Center" VerticalContentAlignment="Center" LostFocus="ImageSizeText_LostFocus" />
+                            <TextBlock Text="计算设备" Grid.Row="4" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
+                            <ComboBox x:Name="DeviceCombo" Grid.Row="4" Grid.Column="1" SelectedIndex="0" SelectionChanged="DeviceCombo_SelectionChanged"
+                                      Margin="0,5" MinHeight="38" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                 <ComboBoxItem Content="自动选择（GPU 优先）" Tag="auto" HorizontalContentAlignment="Center" />
                                 <ComboBoxItem Content="CPU" Tag="cpu" HorizontalContentAlignment="Center" />
                                 <ComboBoxItem Content="CUDA 0" Tag="0" HorizontalContentAlignment="Center" />
                             </ComboBox>
-                            <TextBlock x:Name="BatchMemoryHintText" Grid.Row="4" Grid.ColumnSpan="2" Foreground="{DynamicResource MutedTextBrush}"
+                            <TextBlock x:Name="BatchMemoryHintText" Grid.Row="5" Grid.ColumnSpan="2" Foreground="{DynamicResource MutedTextBrush}"
                                        TextWrapping="Wrap" TextAlignment="Center" Margin="4,10,4,4" />
                         </Grid>
                     </GroupBox>
+                    <CheckBox x:Name="ExportTensorRtCheckBox" Content="训练完成后自动导出 TensorRT（.engine）"
+                              IsChecked="True" Visibility="Collapsed" Margin="8,10,4,0"
+                              ToolTip="需要 NVIDIA GPU、CUDA 和 TensorRT 环境" />
                     <TextBlock x:Name="ModelHintText" Foreground="#666" TextWrapping="Wrap" Margin="4,8,4,0" />
                     <StackPanel Orientation="Vertical" Margin="0,12,0,0">
                         <Button x:Name="StartButton" Content="开始训练" Click="StartTraining_Click"
                                 Width="120" HorizontalAlignment="Left" Padding="14,6" />
-                        <Button x:Name="StopButton" Content="停止训练" Click="StopTraining_Click"
+                        <Button x:Name="PauseButton" Content="暂停训练" Click="PauseTraining_Click"
+                                IsEnabled="False" Width="120" HorizontalAlignment="Left"
+                                Margin="0,6,0,0" Padding="14,6" />
+                        <Button x:Name="StopButton" Content="终止训练" Click="StopTraining_Click"
                                 IsEnabled="False" Width="120" HorizontalAlignment="Left"
                                 Margin="0,6,0,0" Padding="14,6" />
                         <Button Content="打开本地目录" Click="OpenLocalDirectory_Click"
@@ -76,10 +105,9 @@
                     <TextBlock x:Name="OutputPathText" TextWrapping="Wrap" Foreground="DarkGreen" Margin="4,10,4,0" />
                 </StackPanel>
             </ScrollViewer>
-            <Grid Grid.Column="1">
+            <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="250" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <DockPanel Grid.Row="0" Margin="0,0,0,6">
@@ -89,10 +117,13 @@
                 <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource SurfaceBrush}">
                     <Canvas x:Name="LossCanvas" SizeChanged="LossCanvas_SizeChanged" />
                 </Border>
-                <GroupBox Grid.Row="2" Header="训练日志" Margin="0,8,0,0">
-                    <ListBox x:Name="TrainingLogList" />
-                </GroupBox>
             </Grid>
         </Grid>
+        <GroupBox Grid.Row="3" Header="训练日志" Margin="0,8,0,0">
+            <ListBox x:Name="TrainingLogList" />
+        </GroupBox>
+        <Border Grid.Row="4" BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,8,0,0">
+            <TextBlock x:Name="TrainingStatusText" Foreground="DarkGreen" TextWrapping="Wrap" />
+        </Border>
     </Grid>
 </UserControl>

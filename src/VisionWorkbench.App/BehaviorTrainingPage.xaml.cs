@@ -78,7 +78,24 @@ public partial class BehaviorTrainingPage : UserControl
     private void OpenAnnotation_Click(object sender, RoutedEventArgs e)
     {
         var page = new BehaviorAnnotationPage();
-        var window = new Window { Title = "行为标注平台", Content = page, Width = 1200, Height = 760, WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = Window.GetWindow(this) };
+        var frame = new Border
+        {
+            Background = (Brush)FindResource("SurfaceBrush"),
+            BorderBrush = (Brush)FindResource("BorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(10),
+            Child = page,
+        };
+        var window = new Window
+        {
+            Title = "行为标注平台",
+            Content = frame,
+            Width = 1200,
+            Height = 760,
+            Style = (Style)FindResource("ThemedDialogWindow"),
+            Owner = Window.GetWindow(this),
+        };
         window.ShowDialog();
         RefreshDatasets();
     }
@@ -94,19 +111,19 @@ public partial class BehaviorTrainingPage : UserControl
         if (_dataset is null) return;
         if (_dataset.Dataset.Classes.Count < 2 || _dataset.Dataset.Clips.Count < 2)
         {
-            MessageBox.Show("自定义行为训练至少需要 2 个类别和 2 个行为片段。", "行为训练", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show("自定义行为训练至少需要 2 个类别和 2 个行为片段。", "行为训练", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (!int.TryParse(EpochsText.Text, out var epochs) || epochs <= 0 || !int.TryParse(SequenceLengthText.Text, out var sequenceLength) || sequenceLength < 8)
         {
-            MessageBox.Show("学习次数必须大于 0，序列长度不能小于 8。", "行为训练", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show("学习次数必须大于 0，序列长度不能小于 8。", "行为训练", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         var poseModel = PoseModelText.Text.Trim();
         if (!File.Exists(poseModel) && !Path.IsPathRooted(poseModel)) poseModel = Path.GetFullPath(poseModel);
         if (!File.Exists(poseModel))
         {
-            MessageBox.Show("找不到 YOLO11-Pose 基础模型，请先选择 yolo11n-pose.pt。", "行为训练", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show("找不到 YOLO11-Pose 基础模型，请先选择 yolo11n-pose.pt。", "行为训练", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         var batch = int.Parse(((ComboBoxItem)BatchCombo.SelectedItem).Tag.ToString()!);
@@ -142,7 +159,7 @@ public partial class BehaviorTrainingPage : UserControl
         {
             StatusText.Text = "训练失败";
             AddLog($"训练失败：{ex.Message}");
-            MessageBox.Show(ex.Message, "行为训练失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ThemedMessageBox.Show(ex.Message, "行为训练失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
         {

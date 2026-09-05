@@ -52,7 +52,7 @@ public partial class App : System.Windows.Application
                 File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "startup-error.log"), ex.ToString());
             }
             catch { }
-            MessageBox.Show(ex.ToString(), "VisionWorkbench 启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show(ex.ToString(), "VisionWorkbench 启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
             return;
         }
@@ -77,7 +77,7 @@ public partial class App : System.Windows.Application
         catch (Exception ex)
         {
             try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "startup-error.log"), ex.ToString()); } catch { }
-            MessageBox.Show(ex.ToString(), "VisionWorkbench 界面启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show(ex.ToString(), "VisionWorkbench 界面启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             splash.Close();
             Shutdown(-1);
             return;
@@ -101,7 +101,7 @@ public partial class App : System.Windows.Application
     {
         try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "unhandled-error.log"), e.Exception.ToString()); } catch { }
         e.Handled = true;
-        MessageBox.Show(e.Exception.ToString(), "VisionWorkbench 运行错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        ThemedMessageBox.Show(e.Exception.ToString(), "VisionWorkbench 运行错误", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
@@ -167,6 +167,14 @@ public partial class App : System.Windows.Application
         catch (Exception)
         {
             // 训练 Worker 关闭失败不影响应用退出
+        }
+        try
+        {
+            AppServices.Instance.Atu5Training.Dispose();
+        }
+        catch (Exception)
+        {
+            // ATU5 Worker 关闭失败不影响应用退出
         }
         if (_ownsSingleInstanceMutex)
         {

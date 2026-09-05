@@ -1,0 +1,89 @@
+<Window x:Class="VisionWorkbench.App.UserManagementWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="超级管理员 - 用户管理"
+        Width="980" Height="650" MinWidth="820" MinHeight="520"
+        WindowStartupLocation="CenterOwner" WindowStyle="None"
+        AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False">
+    <Border Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+            CornerRadius="10" Padding="18">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.25" Color="#000000" />
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,14" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <StackPanel>
+                    <TextBlock Text="超级管理员" FontSize="20" FontWeight="Bold"
+                               Foreground="{DynamicResource TextBrush}" />
+                    <TextBlock Text="用户账户管理" Margin="0,4,0,0"
+                               Foreground="{DynamicResource MutedTextBrush}" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="×" Width="36" Height="32"
+                        HorizontalAlignment="Right" Click="Close_Click"
+                        Style="{StaticResource TitleBarButton}" />
+            </Grid>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="300" />
+                </Grid.ColumnDefinitions>
+
+                <DataGrid x:Name="UsersGrid" Grid.Column="0" Margin="0,0,14,0"
+                          AutoGenerateColumns="False" IsReadOnly="True"
+                          SelectionMode="Single" SelectionChanged="UsersGrid_SelectionChanged"
+                          HeadersVisibility="Column" CanUserAddRows="False"
+                          Background="{DynamicResource SurfaceAltBrush}"
+                          BorderBrush="{DynamicResource BorderBrush}"
+                          Foreground="{DynamicResource TextBrush}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="用户名" Binding="{Binding UserName}" Width="*" />
+                        <DataGridTextColumn Header="角色" Binding="{Binding RoleDisplay}" Width="120" />
+                        <DataGridTextColumn Header="状态" Binding="{Binding StatusDisplay}" Width="90" />
+                        <DataGridTextColumn Header="创建时间" Binding="{Binding CreatedAt, StringFormat=yyyy-MM-dd HH:mm}" Width="150" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <Border Grid.Column="1" Padding="16" Background="{DynamicResource SurfaceAltBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                    <StackPanel>
+                        <TextBlock x:Name="EditorTitle" Text="新建用户" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextBrush}" Margin="0,0,0,14" />
+                        <TextBlock Text="用户名" />
+                        <TextBox x:Name="AccountNameText" Margin="0,5,0,12" />
+                        <TextBlock Text="角色" />
+                        <ComboBox x:Name="AccountRoleCombo" Margin="0,5,0,12">
+                            <ComboBoxItem Content="操作员" Tag="operator" />
+                            <ComboBoxItem Content="工程师" Tag="engineer" />
+                            <ComboBoxItem Content="专家" Tag="expert" />
+                        </ComboBox>
+                        <TextBlock Text="新密码（新建必填，修改时留空表示不变）"
+                                   TextWrapping="Wrap" />
+                        <PasswordBox x:Name="AccountPasswordBox" Margin="0,5,0,12" />
+                        <CheckBox x:Name="AccountEnabledCheck" Content="允许登录" IsChecked="True"
+                                  Margin="0,0,0,18" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="新建" Click="NewUser_Click" Style="{StaticResource SecondaryButton}" />
+                            <Button Content="保存" Click="SaveUser_Click" />
+                        </StackPanel>
+                        <Button Content="删除选中账号" Click="DeleteUser_Click"
+                                Style="{StaticResource SecondaryButton}" Margin="4,12,4,0" />
+                        <TextBlock Text="用户名不可重复；密码至少 8 位，且必须包含字母和数字。"
+                                   Foreground="{DynamicResource MutedTextBrush}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,16,0,0" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <TextBlock Grid.Row="2" Text="超级管理员可以创建、修改、停用和删除普通账号。"
+                       Foreground="{DynamicResource MutedTextBrush}" Margin="0,14,0,0" />
+        </Grid>
+    </Border>
+</Window>

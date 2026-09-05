@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -14,7 +15,7 @@ using VisionWorkbench.Persistence;
 
 namespace VisionWorkbench.App;
 
-/// <summary>实时检测页（文档 §8.2）：预览+叠加、结果面板、批次控制、人工修正。</summary>
+/// <summary>实时检测页（文档 §8.2）：预览+叠加、结果面板和批次控制。</summary>
 public partial class LiveTaskPanel : UserControl
 {
     private readonly PreviewRenderer _preview = new();
@@ -24,7 +25,7 @@ public partial class LiveTaskPanel : UserControl
     private ICameraSession? _cameraSession;
     private long _okCount;
     private long _ngCount;
-    private long _reviewCount;
+    private readonly Queue<string> _detectionLog = new();
     private DateTimeOffset _algoFpsWindow = DateTimeOffset.UtcNow;
     private int _algoFpsFrames;
     private double _algoFps;
@@ -32,16 +33,29 @@ public partial class LiveTaskPanel : UserControl
     private AlgorithmOutput? _lastOutput;
     private int _reconnectInProgress;
     private int _singleFrameNextIndex;
-    private bool _singleFrameRun;
-    private bool _singleFrameReceived;
+    private int _offlineImageTotal;
+    private int _offlineImageStartIndex;
     private bool _singleFrameBusy;
+    private bool _startInProgress;
     private bool _overlayRedrawPending;
+    // 结果返回前允许显示预览；首个结果返回后，只显示已经完成推理的帧，
+    // 避免下一帧预览覆盖上一帧的检测结果。
+    private long _lastRenderedResultSequence = -1;
+    private long _lastRenderedPreviewSequence = -1;
+    private bool _roiDrawing;
+    private bool _roiOverrideSet;
+    private Point _roiDragStart;
+    private NormalizedRect? _roiOverride;
+    private NormalizedRect? _draftRoi;
+    private long _preparedTaskId;
+    private readonly SemaphoreSlim _modelPrepareGate = new(1, 1);
     private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
 
     private IReadOnlyList<LiveTaskItem> _availableTasks = [];
 
     public event EventHandler? RemoveRequested;
     public event EventHandler? TaskSelectionChanged;
+    public event EventHandler? SettingsChanged;
 
     public LiveTaskPanel(IReadOnlyList<LiveTaskItem> tasks)
     {
@@ -54,6 +68,26 @@ public partial class LiveTaskPanel : UserControl
     public long TaskId => (TaskCombo.SelectedItem as LiveTaskItem)?.Id ?? 0;
 
     public string SelectedTaskName => (TaskCombo.SelectedItem as LiveTaskItem)?.Name ?? "未选择任务";
+
+    public bool HasRoiOverride => _roiOverrideSet;
+
+    public NormalizedRect? RoiOverride => _roiOverride;
+
+    public void SelectTask(long taskId)
+    {
+        TaskCombo.SelectedItem = _availableTasks.FirstOrDefault(task => task.Id == taskId);
+    }
+
+    public void RestoreRoi(bool hasOverride, NormalizedRect? roi)
+    {
+        _roiDrawing = false;
+        _draftRoi = null;
+        _roiOverrideSet = hasOverride;
+        _roiOverride = roi;
+        RoiButton.Content = roi is null ? "绘制检测区域" : "重新绘制区域";
+        ClearRoiButton.IsEnabled = roi is not null;
+        RenderRoi();
+    }
 
     public void SetAvailableTasks(IReadOnlyList<LiveTaskItem> tasks)
     {
@@ -79,22 +113,162 @@ public partial class LiveTaskPanel : UserControl
     public async Task ShutdownAsync()
     {
         _statusTimer.Stop();
-        await CleanupAsync();
+        await CleanupAsync(disposeAlgorithm: true);
+    }
+
+    /// <summary>启动实时检测面板时预先启动 Worker 并加载模型。</summary>
+    public async Task PrepareModelAsync()
+    {
+        if (TaskCombo.SelectedItem is not LiveTaskItem item || _run is not null)
+        {
+            return;
+        }
+
+        await _modelPrepareGate.WaitAsync();
+        try
+        {
+            if (_algorithmSession is { State: AlgorithmSessionState.Ready }
+                && _preparedTaskId == item.Id)
+            {
+                return;
+            }
+
+            if (_algorithmSession is not null)
+            {
+                await _algorithmSession.DisposeAsync();
+                _algorithmSession = null;
+                _preparedTaskId = 0;
+            }
+
+            var found = await AppServices.Instance.Recipes.FindAsync(item.Id);
+            if (found is not { } pair)
+            {
+                throw new InvalidOperationException("任务数据无效");
+            }
+
+            var recipe = pair.Recipe with { Roi = _roiOverrideSet ? _roiOverride : pair.Recipe.Roi };
+            StatusText.Text = "正在预加载模型…";
+            var session = await AppServices.Instance.AlgorithmManager.CreateSessionAsync(
+                recipe.PluginId, CancellationToken.None);
+            try
+            {
+                await session.InitializeAsync(new AlgorithmInitialization
+                {
+                    Settings = DetectionRunService.BuildAlgorithmSettings(recipe),
+                    ExecutionProvider = recipe.ExecutionProvider,
+                }, CancellationToken.None);
+            }
+            catch
+            {
+                await session.DisposeAsync();
+                throw;
+            }
+
+            _algorithmSession = session;
+            _preparedTaskId = item.Id;
+            StatusText.Text = "模型已加载，等待开始检测";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"模型预加载失败：{ex.Message}";
+            throw;
+        }
+        finally
+        {
+            _modelPrepareGate.Release();
+        }
+    }
+
+    private async void PrepareModelInBackground()
+    {
+        try
+        {
+            await PrepareModelAsync();
+        }
+        catch
+        {
+            // 预加载失败时保留页面状态，用户点击开始仍可看到明确错误并重试。
+        }
     }
 
     private void Remove_Click(object sender, RoutedEventArgs e)
         => RemoveRequested?.Invoke(this, EventArgs.Empty);
 
     private void TaskCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        => TaskSelectionChanged?.Invoke(this, EventArgs.Empty);
+    {
+        _roiDrawing = false;
+        _roiOverrideSet = false;
+        _roiOverride = null;
+        _draftRoi = null;
+        RoiButton.Content = "绘制检测区域";
+        ClearRoiButton.IsEnabled = false;
+        RenderRoi();
+        ResetStatistics();
+        ClearDetectionLog();
+        TaskSelectionChanged?.Invoke(this, EventArgs.Empty);
+        PrepareModelInBackground();
+    }
 
-    private async void Start_Click(object sender, RoutedEventArgs e) => await StartRunAsync(singleFrame: false);
+    private void Roi_Click(object sender, RoutedEventArgs e)
+    {
+        _roiDrawing = !_roiDrawing;
+        _draftRoi = null;
+        RoiButton.Content = _roiDrawing ? "取消绘制" : "绘制检测区域";
+        StatusText.Text = _roiDrawing
+            ? "请在预览图像内拖拽绘制检测区域"
+            : "已取消检测区域绘制";
+        RenderRoi();
+    }
+
+    private void ClearRoi_Click(object sender, RoutedEventArgs e)
+    {
+        _roiDrawing = false;
+        _roiOverrideSet = true;
+        _roiOverride = null;
+        _draftRoi = null;
+        RoiButton.Content = "绘制检测区域";
+        ClearRoiButton.IsEnabled = false;
+            ApplyRoiToActiveRun();
+            StatusText.Text = "已清除检测区域，将检测全图";
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        RenderRoi();
+    }
+
+    private async void Start_Click(object sender, RoutedEventArgs e)
+    {
+        if (_run?.State == DetectionRunState.Paused)
+        {
+            await _run.ResumeAsync();
+            StatusText.Text = "检测已恢复";
+            SetButtons(running: true);
+            return;
+        }
+
+        // 模型初始化可能需要几秒；在初始化期间禁止重复启动，避免多个 Worker
+        // 并发接管同一个面板，导致预览正常但结果会话被提前关闭。
+        if (_startInProgress || _run is not null)
+        {
+            return;
+        }
+
+        _startInProgress = true;
+        SetButtons(running: false);
+        try
+        {
+            await StartRunAsync(singleFrame: false);
+        }
+        finally
+        {
+            _startInProgress = false;
+            SetButtons(running: _run is not null);
+        }
+    }
 
     private async Task StartRunAsync(bool singleFrame)
     {
         if (TaskCombo.SelectedItem is not LiveTaskItem item)
         {
-            MessageBox.Show("请先在当前任务面板中选择任务。", "实时检测");
+            ThemedMessageBox.Show("请先在当前任务面板中选择任务。", "实时检测");
             return;
         }
         if (singleFrame && _singleFrameBusy)
@@ -111,26 +285,34 @@ public partial class LiveTaskPanel : UserControl
         {
             _singleFrameBusy = false;
             SetButtons(running: false);
-            MessageBox.Show("任务数据无效", "错误");
+            ThemedMessageBox.Show("任务数据无效", "错误");
             return;
         }
         var (entity, recipe) = pair;
-        if (singleFrame && recipe.CameraProviderId is not ("image-folder" or "video-file"))
-        {
-            _singleFrameBusy = false;
-            SetButtons(running: false);
-            MessageBox.Show("当前输入源不是图片目录或视频文件。实时相机请先点击“开始”，再使用“单次检测”。", "单次检测", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
+        recipe = recipe with { Roi = _roiOverrideSet ? _roiOverride : recipe.Roi };
         _activeRecipe = recipe;
+        ConfigureOfflineProgress(recipe, singleFrame);
+        // 离线图片单次检测按目录顺序逐张读取；处理完最后一张后，下一次点击从第一张重新开始。
+        if (singleFrame
+            && string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase)
+            && _offlineImageTotal > 0
+            && _singleFrameNextIndex >= _offlineImageTotal)
+        {
+            _singleFrameNextIndex = 0;
+            _offlineImageStartIndex = 0;
+            OfflineProgressText.Text = $"离线图片：0 / {_offlineImageTotal}";
+        }
         if (!singleFrame)
         {
             _singleFrameNextIndex = 0;
         }
-        _singleFrameRun = singleFrame;
-        _singleFrameReceived = false;
+        _lastRenderedResultSequence = -1;
+        _lastRenderedPreviewSequence = -1;
+        _lastOutput = null;
+        ClearDetectionLog();
         if (singleFrame)
         {
+            ClearSingleResultDisplay();
             OverlayCanvas.Children.Clear();
             StatusText.Text = "单次检测处理中，请稍候…";
         }
@@ -139,40 +321,59 @@ public partial class LiveTaskPanel : UserControl
 
         try
         {
+            // 启动阶段通常已经完成预加载；若用户立即点击开始，则等待同一
+            // 个预加载任务完成，避免再次创建 Worker 或重复加载模型。
+            await PrepareModelAsync();
+            if (_algorithmSession is null)
+            {
+                throw new InvalidOperationException("算法模型尚未加载");
+            }
+
             // 1. 相机会话（虚拟源参数：间隔 200ms）
             _cameraSession = await OpenCameraAsync(recipe, CancellationToken.None, singleFrame);
 
-            // 2. 算法会话
-            _algorithmSession = await svcs.AlgorithmManager.CreateSessionAsync(
-                recipe.PluginId, CancellationToken.None);
-
-            // 3. 检测运行时 + 批次：优先恢复上次异常退出遗留的 running 批次
+            // 2. 检测运行时 + 批次：优先恢复上次异常退出遗留的 running 批次
             _run = new DetectionRunService(svcs.Records, svcs.TempImages,
-                svcs.LoggerFactory.CreateLogger<DetectionRunService>(), $"task-{entity.Id}", svcs.ResultPublisher);
+                svcs.LoggerFactory.CreateLogger<DetectionRunService>(), $"task-{entity.Id}", svcs.ResultPublisher,
+                () => svcs.Settings.EnableHistory,
+                () => svcs.Settings.EnableHistory,
+                svcs.Settings.PythonExecutable);
             var batch = await svcs.BatchService.ResumeOrStartAsync(
                 entity.Id, _run.Counting, svcs.Records);
-            _run.PreviewReceived += (_, frame) => RenderPreview(frame);
+            if (!singleFrame)
+            {
+                _run.PreviewReceived += (_, frame) => RenderPreview(frame);
+            }
             _run.RecordCompleted += OnRecordCompleted;
             _run.Faulted += OnRunFaulted;
-            _run.SourceCompleted += async (_, _) => await Dispatcher.InvokeAsync(StopFromSourceEnd);
-            await _run.StartAsync(recipe, entity.Id, _cameraSession, _algorithmSession, batch.Id);
+            if (!singleFrame)
+            {
+                _run.SourceCompleted += async (_, _) => await Dispatcher.InvokeAsync(StopFromSourceEnd);
+            }
+            await _run.StartAsync(
+                recipe, entity.Id, _cameraSession, _algorithmSession, batch.Id,
+                startProcessingLoop: !singleFrame);
 
-            _okCount = _ngCount = _reviewCount = 0;
-            VisibleText.Text = "当前可见: 0";
-            TotalText.Text = "累计: 0";
-            ForwardText.Text = "正向: 0";
-            ReverseText.Text = "反向: 0";
+            UpdateStatisticsText();
             BatchText.Text = $"批次: {batch.BatchNumber}";
             StatusText.Text = singleFrame
-                ? "单次检测已启动：图片/视频源只处理一帧。"
+                ? IsFiniteInputSource(recipe)
+                    ? "单次检测已启动：将处理下一张离线图片。"
+                    : "单次检测已启动：等待相机采集一帧。"
                 : "批量检测已启动：图片/视频源将按顺序处理全部内容。";
             SetButtons(running: true);
+
+            if (singleFrame)
+            {
+                await CompleteStandaloneSingleAsync(recipe, batch.Id);
+            }
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "开始检测失败");
-            MessageBox.Show($"开始检测失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-            await CleanupAsync();
+            ThemedMessageBox.Show($"开始检测失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            _singleFrameBusy = false;
+            await CleanupAsync(disposeAlgorithm: true);
         }
     }
 
@@ -185,12 +386,14 @@ public partial class LiveTaskPanel : UserControl
         if (_run.State == DetectionRunState.Running)
         {
             await _run.PauseAsync();
-            PauseButton.Content = "继续";
+            StatusText.Text = "检测已暂停";
+            SetButtons(running: true);
         }
         else if (_run.State == DetectionRunState.Paused)
         {
             await _run.ResumeAsync();
-            PauseButton.Content = "暂停";
+            StatusText.Text = "检测已恢复";
+            SetButtons(running: true);
         }
     }
 
@@ -202,36 +405,30 @@ public partial class LiveTaskPanel : UserControl
         }
         if (_run is not null && _run.State is (DetectionRunState.Running or DetectionRunState.Paused))
         {
-            if (_activeRecipe?.CameraProviderId is ("image-folder" or "video-file"))
+            _singleFrameBusy = true;
+            SetButtons(running: true);
+            ClearSingleResultDisplay();
+            try
             {
-                _singleFrameBusy = true;
-                SetButtons(running: true);
-                _singleFrameRun = true;
-                _singleFrameReceived = false;
-                try
-                {
-                    _cameraSession = await OpenCameraAsync(_activeRecipe, CancellationToken.None, true);
-                    await _run.RestartCameraAsync(_cameraSession, CancellationToken.None);
-                    StatusText.Text = "\u5355\u6b21\u68c0\u6d4b\u5904\u7406\u4e2d\uff08\u5df2\u590d\u7528\u6a21\u578b\uff09\u2026";
-                }
-                catch (Exception ex)
-                {
-                    _singleFrameBusy = false;
-                    _singleFrameRun = false;
-                    SetButtons(running: true);
-                    StatusText.Text = $"\u5355\u6b21\u68c0\u6d4b\u542f\u52a8\u5931\u8d25\uff1a{ex.Message}";
-                    if (_cameraSession is not null)
-                    {
-                        await _cameraSession.DisposeAsync();
-                        _cameraSession = null;
-                    }
-                }
-                return;
+                var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
+                // OnRecordCompleted 使用 BeginInvoke 更新界面；先等待本次结果渲染完成，
+                // 再解除单次检测期间的预览屏蔽，避免下一帧抢先覆盖结果。
+                await Dispatcher.InvokeAsync(() => { });
+                StatusText.Text = result is null
+                    ? "单次检测：等待帧超时或输入源已结束"
+                    : IsFiniteInputSource(_activeRecipe)
+                        ? "单次检测已完成：已处理一张离线图片"
+                        : "单次检测已完成：已采集一帧相机图像";
             }
-
-            var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(10));
-            if (result is null)
-                StatusText.Text = "单次检测：等待帧超时或源已播完";
+            catch (Exception ex)
+            {
+                StatusText.Text = $"单次检测失败：{ex.Message}";
+            }
+            finally
+            {
+                _singleFrameBusy = false;
+                SetButtons(running: _run?.State is DetectionRunState.Running or DetectionRunState.Paused);
+            }
             return;
         }
         await StartRunAsync(singleFrame: true);
@@ -239,34 +436,12 @@ public partial class LiveTaskPanel : UserControl
 
     private async void Stop_Click(object sender, RoutedEventArgs e) => await StopBatchAsync();
 
-    private async void Adjust_Click(object sender, RoutedEventArgs e)
-    {
-        if (_run is null)
-        {
-            return;
-        }
-        var dialog = new CorrectionDialog("人工修正计数") { Owner = Window.GetWindow(this) };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-        try
-        {
-            var adjustment = await _run.AdjustCountAsync(
-                dialog.Delta, dialog.Reason, AppServices.Instance.Settings.OperatorName);
-            TotalText.Text = $"累计: {adjustment.After}";
-        }
-        catch (ArgumentException ex)
-        {
-            MessageBox.Show(ex.Message, "校验失败");
-        }
-    }
-
     /// <summary>计数清零（CNT-S-010 / CNT-L-012）：原因必填；流模式同步清 worker 跟踪记忆。</summary>
     private async void ResetCount_Click(object sender, RoutedEventArgs e)
     {
         if (_run is null)
         {
+            ThemedMessageBox.Show("请先点击“开始”启动检测任务。", "清零");
             return;
         }
         var dialog = new CorrectionDialog("计数清零", hideDelta: true) { Owner = Window.GetWindow(this) };
@@ -276,13 +451,13 @@ public partial class LiveTaskPanel : UserControl
         }
         try
         {
-            var adjustment = await _run.ResetCountAsync(
+            await _run.ResetCountAsync(
                 dialog.Reason, AppServices.Instance.Settings.OperatorName);
-            TotalText.Text = $"累计: {adjustment.After}";
+            ResetStatistics();
         }
         catch (ArgumentException ex)
         {
-            MessageBox.Show(ex.Message, "校验失败");
+            ThemedMessageBox.Show(ex.Message, "校验失败");
         }
     }
 
@@ -299,6 +474,34 @@ public partial class LiveTaskPanel : UserControl
         BatchText.Text = "批次: 已结束";
     }
 
+    private async Task CompleteStandaloneSingleAsync(Recipe recipe, long batchId)
+    {
+        var result = await _run!.SubmitSingleAsync(TimeSpan.FromSeconds(30));
+
+        // OnRecordCompleted 使用 BeginInvoke 更新结果面板；先让这次结果的 UI
+        // 回调执行完，再释放单次会话，避免刚显示结果就被清理流程覆盖。
+        await Dispatcher.InvokeAsync(() => { });
+
+        if (result is not null && IsFiniteInputSource(recipe))
+        {
+            _singleFrameNextIndex++;
+        }
+
+        var total = _run.Counting.State.CurrentTotal;
+        await _run.StopAsync();
+        await AppServices.Instance.BatchService.EndAsync(total);
+        await CleanupAsync();
+
+        StatusText.Text = result is null
+            ? "单次检测未获得有效帧：离线图片已处理完或相机采集超时"
+            : IsFiniteInputSource(recipe)
+                ? $"单次检测已完成：已处理离线图片第 {_singleFrameNextIndex} 张"
+                : "单次检测已完成：已采集一帧相机图像";
+    }
+
+    private static bool IsFiniteInputSource(Recipe? recipe) =>
+        recipe?.CameraProviderId is "image-folder" or "video-file";
+
     private async Task StopFromSourceEnd()
     {
         // 先等待已进入调度器的帧处理完成，避免单帧模式在源结束时丢失唯一图片。
@@ -314,34 +517,10 @@ public partial class LiveTaskPanel : UserControl
             }
         }
         // 有限源（图片目录/视频）播完：自动结束批次
-        if (_singleFrameRun)
-        {
-            if (_singleFrameReceived)
-            {
-                _singleFrameNextIndex++;
-                StatusText.Text = "\u5355\u6b21\u68c0\u6d4b\u5df2\u5b8c\u6210\uff0c\u53ef\u7ee7\u7eed\u70b9\u51fb\u5355\u6b21\u68c0\u6d4b\uff08\u6a21\u578b\u5df2\u590d\u7528\uff09";
-            }
-            else
-            {
-                StatusText.Text = "\u56fe\u7247\u6e90\u5df2\u5904\u7406\u5b8c\u6bd5";
-            }
-            _singleFrameRun = false;
-            _singleFrameReceived = false;
-            _singleFrameBusy = false;
-            SetButtons(running: true);
-            return;
-        }
-
-        if (_singleFrameRun && _singleFrameReceived)
-        {
-            _singleFrameNextIndex++;
-        }
-        _singleFrameRun = false;
-        _singleFrameReceived = false;
         await StopBatchAsync();
     }
 
-    private async Task CleanupAsync()
+    private async Task CleanupAsync(bool disposeAlgorithm = false)
     {
         if (_run is not null)
         {
@@ -350,10 +529,12 @@ public partial class LiveTaskPanel : UserControl
             await _run.DisposeAsync();
             _run = null;
         }
-        if (_algorithmSession is not null)
+        if (_algorithmSession is not null
+            && (disposeAlgorithm || _algorithmSession.State == AlgorithmSessionState.Faulted))
         {
             await _algorithmSession.DisposeAsync();
             _algorithmSession = null;
+            _preparedTaskId = 0;
         }
         if (_cameraSession is not null)
         {
@@ -361,13 +542,12 @@ public partial class LiveTaskPanel : UserControl
             _cameraSession = null;
         }
         _singleFrameBusy = false;
-        _singleFrameRun = false;
-        _singleFrameReceived = false;
         await Dispatcher.InvokeAsync(() => SetButtons(running: false));
     }
 
     private async void OnRunFaulted(object? sender, RunFaultedEventArgs e)
     {
+        var reconnecting = false;
         await Dispatcher.InvokeAsync(() =>
         {
             StatusText.Text = $"故障[{e.Source}] {e.Code}: {e.Message}";
@@ -377,11 +557,19 @@ public partial class LiveTaskPanel : UserControl
                 && _activeRecipe is not null
                 && Interlocked.Exchange(ref _reconnectInProgress, 1) == 0)
             {
+                reconnecting = true;
                 _ = ReconnectCameraAfterFaultAsync();
                 return;
             }
             SetButtons(running: false);
         });
+
+        // 算法故障后释放当前会话，保证用户可以直接重新点击“开始”，而不是
+        // 留下已故障的 _run 占住面板。
+        if (!reconnecting)
+        {
+            await CleanupAsync(disposeAlgorithm: true);
+        }
     }
 
     private async Task ReconnectCameraAfterFaultAsync()
@@ -441,12 +629,214 @@ public partial class LiveTaskPanel : UserControl
     {
         Dispatcher.BeginInvoke(() =>
         {
+            if (_singleFrameBusy)
+            {
+                return;
+            }
+            // 实时推理存在延迟，后续预览帧可能先于结果回调进入 UI 队列。
+            // 一旦已有结果，只允许显示不超过最后结果序号的帧，保证图像和叠加层配对。
+            if (_lastOutput is not null && frame.Sequence > _lastRenderedResultSequence)
+            {
+                return;
+            }
+            if (frame.Sequence < _lastRenderedPreviewSequence)
+            {
+                return;
+            }
             _preview.Render(PreviewImage, frame);
+            _lastRenderedPreviewSequence = frame.Sequence;
+            if (_offlineImageTotal > 0)
+            {
+                var currentIndex = Math.Min(
+                    (long)_offlineImageTotal,
+                    _offlineImageStartIndex + frame.Sequence);
+            OfflineProgressText.Text = $"离线图片：{currentIndex} / {_offlineImageTotal}";
+            }
         });
+    }
+
+    private void ClearSingleResultDisplay()
+    {
+        PreviewImage.Source = null;
+        OverlayCanvas.Children.Clear();
+        RoiCanvas.Children.Clear();
+        _lastOutput = null;
+        _lastRenderedResultSequence = -1;
+        _lastRenderedPreviewSequence = -1;
+    }
+
+    private void ClearDetectionLog()
+    {
+        _detectionLog.Clear();
+        if (DetectionListText is not null)
+        {
+            DetectionListText.Text = "暂无检测记录";
+        }
+    }
+
+    private void ResetStatistics()
+    {
+        _okCount = 0;
+        _ngCount = 0;
+        UpdateStatisticsText();
+    }
+
+    private void UpdateStatisticsText()
+    {
+        var total = _okCount + _ngCount;
+        if (TotalText is not null)
+        {
+            TotalText.Text = $"累计: {total}";
+            OkCountText.Text = $"OK: {_okCount}";
+            NgCountText.Text = $"NG: {_ngCount}";
+        }
+    }
+
+    private void AppendDetectionLog(string message)
+    {
+        _detectionLog.Enqueue(message);
+        while (_detectionLog.Count > 100)
+        {
+            _detectionLog.Dequeue();
+        }
+
+        DetectionListText.Text = string.Join(Environment.NewLine, _detectionLog);
+        DetectionLogScrollViewer.UpdateLayout();
+        DetectionLogScrollViewer.ScrollToEnd();
+    }
+
+    private void ConfigureOfflineProgress(Recipe recipe, bool singleFrame)
+    {
+        if (!string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase)
+            || !Directory.Exists(recipe.CameraDeviceId))
+        {
+            _offlineImageTotal = 0;
+            _offlineImageStartIndex = 0;
+            OfflineProgressText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        _offlineImageTotal = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
+            .Count(file => OfflineImageExtensions.Contains(
+                System.IO.Path.GetExtension(file), StringComparer.OrdinalIgnoreCase));
+        _offlineImageStartIndex = singleFrame ? _singleFrameNextIndex : 0;
+        OfflineProgressText.Text = $"离线图片：{_offlineImageStartIndex} / {_offlineImageTotal}";
+        OfflineProgressText.Visibility = Visibility.Visible;
+    }
+
+    private static readonly string[] OfflineImageExtensions = [".jpg", ".jpeg", ".png", ".bmp"];
+
+    private void PreviewSurface_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (!_roiDrawing || PreviewImage.Source is null) return;
+        var point = e.GetPosition(PreviewSurface);
+        if (!TryGetNormalizedPoint(point, clampToImage: false, out _roiDragStart)) return;
+        _draftRoi = new NormalizedRect { X = _roiDragStart.X, Y = _roiDragStart.Y, Width = 0, Height = 0 };
+        PreviewSurface.CaptureMouse();
+        RenderRoi();
+        e.Handled = true;
+    }
+
+    private void PreviewSurface_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_roiDrawing || !PreviewSurface.IsMouseCaptured || PreviewImage.Source is null) return;
+        var point = e.GetPosition(PreviewSurface);
+        if (!TryGetNormalizedPoint(point, clampToImage: true, out var end)) return;
+        _draftRoi = CreateNormalizedRect(_roiDragStart, end);
+        RenderRoi();
+        e.Handled = true;
+    }
+
+    private void PreviewSurface_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (!_roiDrawing || !PreviewSurface.IsMouseCaptured) return;
+        PreviewSurface.ReleaseMouseCapture();
+        if (_draftRoi is { Width: > 0.005, Height: > 0.005 } roi)
+        {
+            _roiOverrideSet = true;
+            _roiOverride = roi;
+            _roiDrawing = false;
+            RoiButton.Content = "重新绘制区域";
+            ClearRoiButton.IsEnabled = true;
+            ApplyRoiToActiveRun();
+            StatusText.Text = "检测区域已设置，区域外不参与检测";
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        else
+        {
+            _draftRoi = null;
+            StatusText.Text = "检测区域太小，未保存";
+        }
+        RenderRoi();
+        e.Handled = true;
+    }
+
+    private void ApplyRoiToActiveRun()
+    {
+        if (_activeRecipe is not { } recipe) return;
+        var roi = _roiOverrideSet ? _roiOverride : recipe.Roi;
+        _activeRecipe = recipe with { Roi = roi };
+        _run?.UpdateRoi(roi);
+    }
+
+    private bool TryGetNormalizedPoint(Point point, bool clampToImage, out Point normalized)
+    {
+        normalized = default;
+        if (PreviewImage.Source is null || PreviewSurface.ActualWidth <= 0 || PreviewSurface.ActualHeight <= 0)
+            return false;
+        var sourceWidth = PreviewImage.Source.Width;
+        var sourceHeight = PreviewImage.Source.Height;
+        var scale = Math.Min(PreviewSurface.ActualWidth / sourceWidth, PreviewSurface.ActualHeight / sourceHeight);
+        var drawWidth = sourceWidth * scale;
+        var drawHeight = sourceHeight * scale;
+        var offsetX = (PreviewSurface.ActualWidth - drawWidth) / 2;
+        var offsetY = (PreviewSurface.ActualHeight - drawHeight) / 2;
+        var x = (point.X - offsetX) / drawWidth;
+        var y = (point.Y - offsetY) / drawHeight;
+        if (!clampToImage && (x < 0 || x > 1 || y < 0 || y > 1)) return false;
+        normalized = new Point(Math.Clamp(x, 0, 1), Math.Clamp(y, 0, 1));
+        return true;
+    }
+
+    private static NormalizedRect CreateNormalizedRect(Point start, Point end) => new()
+    {
+        X = Math.Min(start.X, end.X),
+        Y = Math.Min(start.Y, end.Y),
+        Width = Math.Abs(end.X - start.X),
+        Height = Math.Abs(end.Y - start.Y),
+    };
+
+    private void RenderRoi()
+    {
+        RoiCanvas.Children.Clear();
+        var roi = _draftRoi ?? (_roiOverrideSet ? _roiOverride : _activeRecipe?.Roi);
+        if (roi is null || PreviewImage.Source is null || RoiCanvas.ActualWidth <= 0 || RoiCanvas.ActualHeight <= 0)
+            return;
+        var sourceWidth = PreviewImage.Source.Width;
+        var sourceHeight = PreviewImage.Source.Height;
+        var scale = Math.Min(RoiCanvas.ActualWidth / sourceWidth, RoiCanvas.ActualHeight / sourceHeight);
+        var drawWidth = sourceWidth * scale;
+        var drawHeight = sourceHeight * scale;
+        var offsetX = (RoiCanvas.ActualWidth - drawWidth) / 2;
+        var offsetY = (RoiCanvas.ActualHeight - drawHeight) / 2;
+        var rectangle = new Rectangle
+        {
+            Width = Math.Max(1, roi.Width * drawWidth),
+            Height = Math.Max(1, roi.Height * drawHeight),
+            Stroke = _roiDrawing ? Brushes.Gold : Brushes.DodgerBlue,
+            StrokeThickness = 2,
+            StrokeDashArray = [6, 3],
+            Fill = new SolidColorBrush(Color.FromArgb(24, 30, 144, 255)),
+            IsHitTestVisible = false,
+        };
+        Canvas.SetLeft(rectangle, offsetX + roi.X * drawWidth);
+        Canvas.SetTop(rectangle, offsetY + roi.Y * drawHeight);
+        RoiCanvas.Children.Add(rectangle);
     }
 
     private void PreviewSurface_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        RenderRoi();
         if (_lastOutput is null || _overlayRedrawPending)
         {
             return;
@@ -469,10 +859,6 @@ public partial class LiveTaskPanel : UserControl
 
     private void OnRecordCompleted(object? sender, RecordCompletedEventArgs e)
     {
-        if (_singleFrameRun)
-        {
-            _singleFrameReceived = true;
-        }
         _algoFpsFrames++;
         var now = DateTimeOffset.UtcNow;
         if (now - _algoFpsWindow >= TimeSpan.FromSeconds(1))
@@ -484,7 +870,13 @@ public partial class LiveTaskPanel : UserControl
 
         Dispatcher.BeginInvoke(() =>
         {
+            var resultSequence = e.Frame?.Sequence ?? e.Output.Sequence;
+            if (resultSequence < _lastRenderedResultSequence)
+            {
+                return;
+            }
             _lastOutput = e.Output;
+            _lastRenderedResultSequence = resultSequence;
             var (text, color) = e.Decision.Status switch
             {
                 DecisionStatus.Ok => ("OK", Brushes.Green),
@@ -511,41 +903,36 @@ public partial class LiveTaskPanel : UserControl
                 : $"工位 {e.StationCode} · {e.Decision.Summary}";
             CountText.Text = $"数量: {e.Output.GetCount()}";
             ElapsedText.Text = $"算法耗时: {e.Output.Performance?.TotalMs ?? 0:0.#} ms";
-            DetectionListText.Text = behaviorResults.Length > 0
-                ? string.Join("\n", behaviorResults.Select(item => $"行为 {item}"))
-                : string.Join("\n", e.Output.Detections.Take(8)
+            var detectionSummary = behaviorResults.Length > 0
+                ? string.Join("、", behaviorResults)
+                : string.Join("、", e.Output.Detections.Take(8)
                     .Select(d => $"{d.ClassName} {d.Confidence:0.00}"));
-            TotalText.Text = $"累计: {e.CountAfter}";
-            VisibleText.Text = $"当前可见: {e.Output.GetCount()}";
-            var state = _run?.Counting.State;
-            ForwardText.Text = $"正向: {state?.ForwardTotal ?? 0}";
-            ReverseText.Text = $"反向: {state?.ReverseTotal ?? 0}";
+            AppendDetectionLog(
+                $"{DateTime.Now:HH:mm:ss.fff}  帧 {e.Frame?.Sequence ?? e.Output.Sequence}  "
+                + $"工位 {e.StationCode}  {text}  数量 {e.Output.GetCount()}"
+                + (string.IsNullOrWhiteSpace(detectionSummary) ? "" : $"  {detectionSummary}"));
             switch (e.Decision.Status)
             {
                 case DecisionStatus.Ok: _okCount++; break;
                 case DecisionStatus.Ng: _ngCount++; break;
-                case DecisionStatus.ReviewRequired: _reviewCount++; break;
             }
-            RecordStatsText.Text = $"OK {_okCount} / NG {_ngCount} / 待确认 {_reviewCount}";
+            UpdateStatisticsText();
 
             // 结果必须绘制在本次推理对应的原始帧上，避免批量处理时错叠到下一张图片。
             if (e.Frame is not null)
             {
                 _preview.Render(PreviewImage, e.Frame, force: true);
+                _lastRenderedPreviewSequence = e.Frame.Sequence;
+                RenderRoi();
+                if (_offlineImageTotal > 0)
+                {
+                    var currentIndex = Math.Min(
+                        (long)_offlineImageTotal,
+                        _offlineImageStartIndex + e.Frame.Sequence);
+                    OfflineProgressText.Text = $"离线图片：{currentIndex} / {_offlineImageTotal}";
+                }
             }
             DrawOverlay(e.Output);
-            if (e.Decision.Status is DecisionStatus.Ng or DecisionStatus.ReviewRequired
-                && e.Record.AnnotatedImagePath is { } path && File.Exists(path))
-            {
-                try
-                {
-                    EvidenceImage.Source = new System.Windows.Media.Imaging.BitmapImage(new Uri(path));
-                }
-                catch (IOException)
-                {
-                    // 图片被清理时忽略
-                }
-            }
         });
     }
 
@@ -683,24 +1070,6 @@ public partial class LiveTaskPanel : UserControl
         }
 
         // ROI 框（配置了 ROI 时显示）
-        if (_activeRecipe?.Roi is { } roi)
-        {
-            var roiRect = new System.Windows.Rect(
-                offsetX + roi.X * drawW, offsetY + roi.Y * drawH,
-                roi.Width * drawW, roi.Height * drawH);
-            var box = new Rectangle
-            {
-                Width = Math.Max(1, roiRect.Width),
-                Height = Math.Max(1, roiRect.Height),
-                Stroke = Brushes.DodgerBlue,
-                StrokeThickness = 1.2,
-                StrokeDashArray = [4, 2],
-            };
-            Canvas.SetLeft(box, roiRect.X);
-            Canvas.SetTop(box, roiRect.Y);
-            OverlayCanvas.Children.Add(box);
-        }
-
         // 检测线（实线）+ 滞回带边界（虚线）：LineCrossing 模式；未配置时按插件默认竖直中线
         CountingLineConfig? line = _activeRecipe?.CountingLine;
         if (_activeRecipe?.CountingMode == CountingMode.LineCrossing)
@@ -764,14 +1133,17 @@ public partial class LiveTaskPanel : UserControl
 
     private void SetButtons(bool running)
     {
-        StartButton.IsEnabled = !running;
-        PauseButton.IsEnabled = running;
+        // 开始与暂停始终互斥：初始化/停止时只能开始，运行时只能暂停。
+        var paused = running && _run?.State == DetectionRunState.Paused;
+        var canStart = (!running || paused) && !_startInProgress;
+        var canPause = running && !paused && !_startInProgress;
+        StartButton.IsEnabled = canStart;
+        PauseButton.IsEnabled = canPause;
         PauseButton.Content = "暂停";
-        SingleButton.IsEnabled = !_singleFrameBusy;
+        SingleButton.IsEnabled = !_singleFrameBusy && (!_startInProgress || running);
         StopButton.IsEnabled = running;
-        AdjustButton.IsEnabled = running;
-        ResetCountButton.IsEnabled = running;
-        TaskCombo.IsEnabled = !running;
+        ResetCountButton.IsEnabled = true;
+        TaskCombo.IsEnabled = !running && !_startInProgress;
     }
 
 }

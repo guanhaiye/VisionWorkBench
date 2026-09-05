@@ -5,14 +5,20 @@
     <Grid Background="{DynamicResource SurfaceAltBrush}">
         <Ellipse Width="520" Height="520" Fill="#142563EB" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-230,-170,0"/>
         <Ellipse Width="360" Height="360" Fill="#0D14B8A6" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-160,0,0,-190"/>
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <Grid MinHeight="650" Margin="54,42">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      CanContentScroll="False"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch">
+            <Grid MinHeight="650" Margin="54,42"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Stretch">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="780">
                     <Border Width="154" Height="154" CornerRadius="34" Background="White" Padding="18">
                         <Border.Effect>
                             <DropShadowEffect Color="#2563EB" BlurRadius="30" ShadowDepth="7" Opacity="0.22"/>
                         </Border.Effect>
-                        <Image Source="/Assets/Branding/visionworkbench-logo-v1.png" Stretch="Uniform"/>
+                        <Image Source="/Assets/Branding/logo.png" Stretch="Uniform"/>
                     </Border>
                     <TextBlock Text="VisionWorkbench" FontSize="38" FontWeight="Bold"
                                Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center" Margin="0,26,0,0"/>

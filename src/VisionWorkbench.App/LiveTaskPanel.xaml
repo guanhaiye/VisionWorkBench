@@ -1,72 +1,168 @@
 <UserControl x:Class="VisionWorkbench.App.LiveTaskPanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Margin="4" MinWidth="520" MinHeight="460">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:VisionWorkbench.App">
+    <UserControl.Resources>
+        <Style x:Key="InfoCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="MetricCaption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+        </Style>
+        <Style x:Key="MetricValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        </Style>
+    </UserControl.Resources>
+        <Grid Margin="4" MinWidth="0" MinHeight="0"
+          HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" MinHeight="460" />
+            <RowDefinition Height="38" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" Margin="0,0,0,6">
-            <TextBlock Text="任务：" VerticalAlignment="Center" />
-            <ComboBox x:Name="TaskCombo" Width="220" DisplayMemberPath="Name" Margin="6,0,0,0"
-                      SelectionChanged="TaskCombo_SelectionChanged" />
-            <Button x:Name="StartButton" Content="开始" Click="Start_Click" Margin="8,0,0,0" Padding="10,3" />
+        <WrapPanel Grid.Row="0" Margin="0,0,0,6">
+            <TextBlock Text="任务：" VerticalAlignment="Center" Margin="0,0,0,4" />
+            <ComboBox x:Name="TaskCombo" MinWidth="140" Width="220"
+                      DisplayMemberPath="Name" Margin="6,0,4,0" SelectionChanged="TaskCombo_SelectionChanged" />
+            <Button x:Name="StartButton" Content="开始" Click="Start_Click" Margin="4,0" Padding="10,3" />
             <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False" Padding="10,3" />
             <Button x:Name="SingleButton" Content="单次检测" Click="Single_Click" Padding="10,3" />
             <Button x:Name="StopButton" Content="结束批次" Click="Stop_Click" IsEnabled="False" Padding="10,3" />
-            <Button x:Name="AdjustButton" Content="人工修正" Click="Adjust_Click" IsEnabled="False" Padding="10,3" />
-            <Button x:Name="ResetCountButton" Content="清零" Click="ResetCount_Click" IsEnabled="False" Padding="10,3" />
+            <Button x:Name="ResetCountButton" Content="清零" Click="ResetCount_Click" Padding="10,3" />
             <Button x:Name="RemoveButton" Content="移除任务" Click="Remove_Click" Margin="8,0,0,0" Padding="10,3" />
-        </DockPanel>
+            <Button x:Name="RoiButton" Content="绘制检测区域" Click="Roi_Click" Margin="4,0,0,0" Padding="10,3" />
+            <Button x:Name="ClearRoiButton" Content="清除区域" Click="ClearRoi_Click" IsEnabled="False" Margin="4,0,0,0" Padding="10,3" />
+        </WrapPanel>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="1.05*" MinWidth="210" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="#111111" MinHeight="360">
-                <Grid SizeChanged="PreviewSurface_SizeChanged">
-                    <Image x:Name="PreviewImage" Stretch="Uniform" />
-                    <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False" />
-                </Grid>
+            <Border Grid.Column="0" Background="#111111" MinHeight="220">
+                <local:ImageViewer x:Name="PreviewViewer">
+                    <Grid x:Name="PreviewSurface"
+                          MinWidth="1" MinHeight="1"
+                          HorizontalAlignment="Left" VerticalAlignment="Top"
+                          SizeChanged="PreviewSurface_SizeChanged"
+                          PreviewMouseLeftButtonDown="PreviewSurface_MouseLeftButtonDown"
+                          PreviewMouseMove="PreviewSurface_MouseMove"
+                          PreviewMouseLeftButtonUp="PreviewSurface_MouseLeftButtonUp">
+                        <Image x:Name="PreviewImage" Stretch="Uniform" />
+                        <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False" />
+                        <Canvas x:Name="RoiCanvas" IsHitTestVisible="False" />
+                        <TextBlock x:Name="OfflineProgressText"
+                                   Panel.ZIndex="10"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Top"
+                                   Margin="10"
+                                   Padding="8,4"
+                                   Background="#CC111827"
+                                   Foreground="White"
+                                   FontSize="13"
+                                   Visibility="Collapsed"
+                                   Text="离线图片：0 / 0" />
+                    </Grid>
+                </local:ImageViewer>
             </Border>
 
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
                 <StackPanel>
-                    <GroupBox Header="当前判定">
+                    <Border Style="{StaticResource InfoCard}">
                         <StackPanel>
-                            <TextBlock x:Name="DecisionText" Text="-" FontSize="30" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,6" />
-                            <TextBlock x:Name="SummaryText" TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="4,0,4,6" />
+                            <TextBlock Text="当前判定" Style="{StaticResource CardTitle}" />
+                            <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="8" Margin="0,0,0,8">
+                                <TextBlock x:Name="DecisionText" Text="-" FontSize="30" FontWeight="Bold"
+                                           HorizontalAlignment="Center" Foreground="{DynamicResource AccentBrush}" />
+                            </Border>
+                            <TextBlock x:Name="SummaryText" TextWrapping="Wrap" FontSize="12"
+                                       Foreground="{DynamicResource MutedTextBrush}" />
                         </StackPanel>
-                    </GroupBox>
-                    <GroupBox Header="检测结果">
+                    </Border>
+
+                    <Border Style="{StaticResource InfoCard}">
                         <StackPanel>
-                            <TextBlock x:Name="CountText" Text="数量：-" FontSize="16" Margin="0,3" />
-                            <TextBlock x:Name="ElapsedText" Text="算法耗时：-" Margin="0,2" />
-                            <TextBlock x:Name="DetectionListText" TextWrapping="Wrap" FontSize="11" Foreground="#555" MaxHeight="120" />
+                            <TextBlock Text="检测结果" Style="{StaticResource CardTitle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="本帧数量" Style="{StaticResource MetricCaption}" />
+                                    <TextBlock x:Name="CountText" Text="数量：-" Style="{StaticResource MetricValue}" Margin="0,2,4,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="处理耗时" Style="{StaticResource MetricCaption}" />
+                                    <TextBlock x:Name="ElapsedText" Text="算法耗时：-" FontSize="12"
+                                               Foreground="{DynamicResource TextBrush}" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
-                    </GroupBox>
-                    <GroupBox Header="累计">
+                    </Border>
+
+                    <Border Style="{StaticResource InfoCard}">
                         <StackPanel>
-                            <TextBlock x:Name="VisibleText" Text="当前可见：0" Margin="0,2" />
-                            <TextBlock x:Name="TotalText" Text="累计：0" FontSize="20" Margin="0,3" />
-                            <TextBlock x:Name="ForwardText" Text="正向：0" Margin="0,2" />
-                            <TextBlock x:Name="ReverseText" Text="反向：0" Margin="0,2" />
-                            <TextBlock x:Name="BatchText" Text="批次：-" Margin="0,2" />
-                            <TextBlock x:Name="RecordStatsText" Text="OK 0 / NG 0 / 待确认 0" Margin="0,2" />
+                            <TextBlock Text="累计统计" Style="{StaticResource CardTitle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                    <TextBlock Text="累计总数" Style="{StaticResource MetricCaption}" />
+                                    <TextBlock x:Name="TotalText" Text="累计：0" Style="{StaticResource MetricValue}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="4,0">
+                                    <TextBlock Text="OK" Style="{StaticResource MetricCaption}" />
+                                    <TextBlock x:Name="OkCountText" Text="OK：0" Style="{StaticResource MetricValue}" Foreground="#16803C" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="4,0,0,0">
+                                    <TextBlock Text="NG" Style="{StaticResource MetricCaption}" />
+                                    <TextBlock x:Name="NgCountText" Text="NG：0" Style="{StaticResource MetricValue}" Foreground="#C62828" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock x:Name="BatchText" Text="批次：-" FontSize="11"
+                                       Foreground="{DynamicResource MutedTextBrush}" Margin="0,10,0,0" />
                         </StackPanel>
-                    </GroupBox>
-                    <GroupBox Header="NG / 待确认证据图">
-                        <Image x:Name="EvidenceImage" Stretch="Uniform" MaxHeight="140" />
-                    </GroupBox>
+                    </Border>
+
+                    <Border Style="{StaticResource InfoCard}">
+                        <StackPanel>
+                            <TextBlock Text="检测日志（最近 100 条）" Style="{StaticResource CardTitle}" />
+                            <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="6" Padding="8">
+                                <ScrollViewer x:Name="DetectionLogScrollViewer" Height="150"
+                                              VerticalScrollBarVisibility="Auto">
+                                    <TextBlock x:Name="DetectionListText" Text="暂无检测记录" TextWrapping="Wrap"
+                                               FontSize="11" Foreground="{DynamicResource MutedTextBrush}" />
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
                 </StackPanel>
             </ScrollViewer>
         </Grid>
 
-        <Border Grid.Row="2" BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,6,0,0">
+        <Border Grid.Row="2" Height="32" VerticalAlignment="Top"
+                BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,6,0,0">
             <TextBlock x:Name="StatusText" Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接" TextWrapping="Wrap" />
         </Border>
     </Grid>

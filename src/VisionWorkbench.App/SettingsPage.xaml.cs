@@ -19,6 +19,7 @@ public partial class SettingsPage : UserControl
     {
         var s = AppServices.Instance.Settings;
         DataDirText.Text = s.DataDirectory;
+        DatasetDirText.Text = string.IsNullOrWhiteSpace(s.DatasetDirectory) ? @"E:\" : s.DatasetDirectory;
         PythonText.Text = s.PythonExecutable ?? "";
         PluginsRootText2.Text = s.PluginsRoot ?? "";
         foreach (var item in BackendCombo.Items.OfType<ComboBoxItem>()
@@ -32,6 +33,7 @@ public partial class SettingsPage : UserControl
             RoleCombo.SelectedItem = item;
         }
         OperatorNameText.Text = s.OperatorName;
+        EnableHistoryCheck.IsChecked = s.EnableHistory;
         ThemeCombo.SelectedItem = ThemeCombo.Items.OfType<ComboBoxItem>()
             .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.ThemeMode, StringComparison.OrdinalIgnoreCase));
         if (ThemeCombo.SelectedItem is null) ThemeCombo.SelectedIndex = 0;
@@ -45,29 +47,35 @@ public partial class SettingsPage : UserControl
     {
         var s = AppServices.Instance.Settings;
         var newDataDir = DataDirText.Text.Trim();
+        var newDatasetDir = DatasetDirText.Text.Trim();
         if (string.IsNullOrWhiteSpace(newDataDir))
         {
-            MessageBox.Show("数据目录不能为空", "校验失败");
+            ThemedMessageBox.Show("数据目录不能为空", "校验失败");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(newDatasetDir))
+        {
+            ThemedMessageBox.Show("标注数据集目录不能为空", "校验失败");
             return;
         }
         try
         {
             Path.GetFullPath(newDataDir);
+            Path.GetFullPath(newDatasetDir);
         }
         catch (Exception)
         {
-            MessageBox.Show("数据目录路径无效", "校验失败");
+            ThemedMessageBox.Show("数据目录路径无效", "校验失败");
             return;
         }
         var dataDirChanged = !string.Equals(newDataDir, s.DataDirectory, StringComparison.OrdinalIgnoreCase);
         s.DataDirectory = newDataDir;
+        s.DatasetDirectory = Path.GetFullPath(newDatasetDir);
         s.PythonExecutable = string.IsNullOrWhiteSpace(PythonText.Text.Trim()) ? null : PythonText.Text.Trim();
         s.PluginsRoot = string.IsNullOrWhiteSpace(PluginsRootText2.Text.Trim()) ? null : PluginsRootText2.Text.Trim();
         s.ExecutionProvider = (BackendCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "cpu";
-        s.CurrentRole = (RoleCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "engineer";
-        s.OperatorName = string.IsNullOrWhiteSpace(OperatorNameText.Text.Trim())
-            ? Environment.UserName
-            : OperatorNameText.Text.Trim();
+        // 账号、角色和密码统一由登录与超级管理员用户管理维护，不能从系统设置绕过账号管控。
+        s.EnableHistory = EnableHistoryCheck.IsChecked == true;
         s.ThemeMode = (ThemeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "light";
         s.UiScale = double.TryParse((UiScaleCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
             NumberStyles.Float, CultureInfo.InvariantCulture, out var uiScale)
@@ -77,6 +85,19 @@ public partial class SettingsPage : UserControl
         ThemeManager.Apply(s.ThemeMode);
         ThemeManager.ApplyUiScale(s.UiScale);
         SaveHintText.Text = dataDirChanged ? "已保存（数据目录改动重启后生效）" : "已保存";
+    }
+
+    private void BrowseDatasetDirectory_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "选择标注数据集存储目录",
+            InitialDirectory = Directory.Exists(DatasetDirText.Text) ? DatasetDirText.Text : @"E:\",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true)
+        {
+            DatasetDirText.Text = dialog.FolderName;
+        }
     }
 
     private void Backup_Click(object sender, RoutedEventArgs e)
@@ -97,7 +118,7 @@ public partial class SettingsPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"数据库备份失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"数据库备份失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -111,7 +132,7 @@ public partial class SettingsPage : UserControl
         {
             return;
         }
-        if (MessageBox.Show("恢复会覆盖当前数据库，确认继续吗？恢复后请重启应用。",
+        if (ThemedMessageBox.Show("恢复会覆盖当前数据库，确认继续吗？恢复后请重启应用。",
                 "确认恢复", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
         {
             return;
@@ -123,7 +144,7 @@ public partial class SettingsPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"数据库恢复失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"数据库恢复失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -145,7 +166,7 @@ public partial class SettingsPage : UserControl
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"诊断包导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show($"诊断包导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 }

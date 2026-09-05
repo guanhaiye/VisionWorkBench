@@ -10,6 +10,8 @@ workers/.venv/
 /workers/yolo11/.pip-download/
 /.dotnet-sdk-10/
 /.dotnet-sdk-10b/
+/.dotnet10/
+/.dotnet-cli/
 /.app-run/
 /.app-run-yolo/
 /.app-run-*/
@@ -17,9 +19,13 @@ workers/.venv/
 /.dataset-*/
 /.build-progress/
 /.pytest-yolo/
+/.pytest_cache/
+/workers/.pytest_cache/
+/workers/*/.pytest_cache/
 /workers/yolo11/.runtime/
 /workers/yolo11/persistent_cache.json
 /workers/yolo11/models/*.pt
+/workers/**/*.pt
 /workers/yoloe/models/
 /workers/sam3/models/
 /workers/sam1/models/

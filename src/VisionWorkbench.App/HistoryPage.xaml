@@ -1,6 +1,7 @@
 <UserControl x:Class="VisionWorkbench.App.HistoryPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:VisionWorkbench.App">
     <Grid Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -9,33 +10,42 @@
         </Grid.RowDefinitions>
 
         <!-- 筛选 -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,6">
-            <TextBlock Text="任务：" VerticalAlignment="Center" />
-            <ComboBox x:Name="TaskFilter" Width="180" DisplayMemberPath="Name" />
-            <TextBlock Text="项目：" VerticalAlignment="Center" Margin="12,0,0,0" />
-            <TextBox x:Name="ProjectFilter" Width="110" />
-            <TextBlock Text="工位：" VerticalAlignment="Center" Margin="8,0,0,0" />
-            <TextBox x:Name="StationFilter" Width="90" />
-            <TextBlock Text="模型：" VerticalAlignment="Center" Margin="8,0,0,0" />
-            <TextBox x:Name="ModelFilter" Width="100" />
-            <TextBlock Text="状态：" VerticalAlignment="Center" Margin="16,0,0,0" />
-            <ComboBox x:Name="StatusFilter" Width="120">
-                <ComboBoxItem Content="全部" IsSelected="True" />
-                <ComboBoxItem Content="ok" />
-                <ComboBoxItem Content="ng" />
-                <ComboBoxItem Content="review_required" />
-                <ComboBoxItem Content="error" />
-            </ComboBox>
-            <TextBlock Text="从：" VerticalAlignment="Center" Margin="16,0,0,0" />
-            <DatePicker x:Name="FromDate" Width="130" />
-            <TextBlock Text="到：" VerticalAlignment="Center" Margin="8,0,0,0" />
-            <DatePicker x:Name="ToDate" Width="130" />
-            <Button Content="查询" Click="Query_Click" Margin="16,0,0,0" />
-            <Button Content="导出 CSV" Click="ExportCsv_Click" Margin="8,0,0,0" />
-        </DockPanel>
+        <ScrollViewer Grid.Row="0" Margin="0,0,0,6"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <WrapPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
+                    <TextBlock Text="任务：" VerticalAlignment="Center" />
+                    <ComboBox x:Name="TaskFilter" Width="180" DisplayMemberPath="Name" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
+                    <TextBlock Text="状态：" VerticalAlignment="Center" />
+                    <ComboBox x:Name="StatusFilter" Width="120">
+                        <ComboBoxItem Content="全部" IsSelected="True" />
+                        <ComboBoxItem Content="ok" />
+                        <ComboBoxItem Content="ng" />
+                        <ComboBoxItem Content="review_required" />
+                        <ComboBoxItem Content="error" />
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
+                    <TextBlock Text="从：" VerticalAlignment="Center" />
+                    <DatePicker x:Name="FromDate" Width="170" />
+                    <TextBlock Text="到：" VerticalAlignment="Center" Margin="8,0,0,0" />
+                    <DatePicker x:Name="ToDate" Width="170" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <Button Content="查询" Click="Query_Click" Margin="0,0,8,0" />
+                    <Button Content="导出 CSV" Click="ExportCsv_Click" Margin="0,0,8,0" />
+                    <Button x:Name="ClearAllButton" Content="清理历史记录" Click="ClearAll_Click"
+                            Padding="14,4" />
+                </StackPanel>
+            </WrapPanel>
+        </ScrollViewer>
 
         <DataGrid x:Name="RecordsGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
-                  SelectionChanged="RecordsGrid_SelectionChanged">
+                  SelectionChanged="RecordsGrid_SelectionChanged"
+                  HorizontalScrollBarVisibility="Auto">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="60" />
                 <DataGridTextColumn Header="工位" Binding="{Binding StationCode}" Width="90" />
@@ -46,11 +56,10 @@
                 <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="110" />
                 <DataGridTextColumn Header="算法耗时(ms)" Binding="{Binding AlgorithmElapsedMs, StringFormat=0.#}" Width="100" />
                 <DataGridTextColumn Header="总耗时(ms)" Binding="{Binding TotalElapsedMs, StringFormat=0.#}" Width="90" />
-                <DataGridCheckBoxColumn Header="已纠错" Binding="{Binding WasCorrected}" Width="60" />
             </DataGrid.Columns>
         </DataGrid>
 
-        <!-- 详情 + 分页 + 纠错 -->
+        <!-- 详情 + 分页 -->
         <Grid Grid.Row="2" Margin="0,6,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -58,29 +67,31 @@
                 <ColumnDefinition Width="300" />
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0" Background="#111" Margin="0,0,4,0">
-                <Grid>
-                    <Image x:Name="OriginalImage" Stretch="Uniform" />
-                    <TextBlock Text="原图" Foreground="White" Margin="6,4" VerticalAlignment="Top" />
-                </Grid>
+                <local:ImageViewer x:Name="OriginalImageViewer" Background="#111111">
+                    <Grid MinWidth="1" MinHeight="1">
+                        <Image x:Name="OriginalImage" Stretch="Uniform" />
+                        <TextBlock Text="原图" Foreground="White" Margin="6,4" VerticalAlignment="Top" />
+                    </Grid>
+                </local:ImageViewer>
             </Border>
             <Border Grid.Column="1" Background="#111" Margin="0,0,4,0">
-                <Grid>
-                    <Image x:Name="AnnotatedImage" Stretch="Uniform" />
-                    <TextBlock Text="标注图" Foreground="White" Margin="6,4" VerticalAlignment="Top" />
-                </Grid>
+                <local:ImageViewer x:Name="ResultImageViewer" Background="#111111">
+                    <Grid MinWidth="1" MinHeight="1">
+                        <Image x:Name="AnnotatedImage" Stretch="Uniform" />
+                        <TextBlock Text="检测结果图" Foreground="White" Margin="6,4" VerticalAlignment="Top" />
+                    </Grid>
+                </local:ImageViewer>
             </Border>
             <DockPanel Grid.Column="2">
-                <StackPanel DockPanel.Dock="Top">
-                    <Button Content="纠错此记录" Click="Correct_Click" Margin="0,4" />
-                    <Button Content="重新推理" Click="ReInference_Click" Margin="0,4" />
-                    <Button Content="查看修正历史" Click="HistoryOfCorrections_Click" Margin="0,4" />
-                    <TextBlock x:Name="DetailText" TextWrapping="Wrap" FontSize="11" Foreground="#444" Margin="0,8,0,0" />
-                </StackPanel>
-                <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom"
-                            Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="上一页" Click="PrevPage_Click" />
-                    <TextBlock x:Name="PageText" Text="0 / 0" VerticalAlignment="Center" Margin="8,0" />
-                    <Button Content="下一页" Click="NextPage_Click" />
+                <StackPanel DockPanel.Dock="Top" Height="190">
+                    <ScrollViewer Height="190"
+                                  VerticalScrollBarVisibility="Visible"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False"
+                                  Margin="0,8,0,0">
+                        <TextBlock x:Name="DetailText" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{DynamicResource TextBrush}" />
+                    </ScrollViewer>
                 </StackPanel>
             </DockPanel>
         </Grid>

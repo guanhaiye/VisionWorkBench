@@ -28,7 +28,9 @@ public sealed class StationRunCoordinator(
     TempImageStore tempImages,
     IResultPublisher? publisher = null,
     ILogger<StationRunCoordinator>? logger = null,
-    ILoggerFactory? loggerFactory = null) : IAsyncDisposable
+    ILoggerFactory? loggerFactory = null,
+    Func<bool>? shouldPersist = null,
+    Func<bool>? shouldSaveFullImages = null) : IAsyncDisposable
 {
     private sealed record ActiveRun(StationStartRequest Request, DetectionRunService Run, BatchService Batch);
     private readonly Dictionary<long, ActiveRun> _active = [];
@@ -71,7 +73,7 @@ public sealed class StationRunCoordinator(
         {
             run = new DetectionRunService(records, tempImages,
                 loggerFactory?.CreateLogger<DetectionRunService>(),
-                $"station-{request.Station.Id}", publisher);
+                $"station-{request.Station.Id}", publisher, shouldPersist, shouldSaveFullImages);
             var batch = new BatchService(batches);
             var currentBatch = await batch.ResumeOrStartAsync(
                 request.TaskId, run.Counting, records, request.ProjectId,

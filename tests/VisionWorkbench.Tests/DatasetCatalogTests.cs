@@ -15,6 +15,7 @@ public sealed class DatasetCatalogTests
         Directory.CreateDirectory(imagesRoot);
         File.WriteAllBytes(Path.Combine(imagesRoot, "one.png"), [1, 2, 3]);
         File.WriteAllBytes(Path.Combine(imagesRoot, "two.png"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(imagesRoot, "three.png"), [1, 2, 3]);
         Directory.CreateDirectory(Path.Combine(imagesRoot, ".visionworkbench", "training-data", "run"));
         File.WriteAllBytes(Path.Combine(imagesRoot, ".visionworkbench", "training-data", "run", "one.png"), [1, 2, 3]);
         try
@@ -29,11 +30,8 @@ public sealed class DatasetCatalogTests
             });
             Assert.Equal("instance_segmentation", service.List().Single().TaskType);
             var images = service.ListImages(dataset);
-            Assert.Equal(2, images.Count);
+            Assert.Equal(3, images.Count);
             Assert.All(images, image => Assert.Equal("unassigned", image.Split));
-            dataset = service.AutoSplit(dataset);
-            Assert.Contains(service.ListImages(dataset), image => image.Split == "train");
-            Assert.Contains(service.ListImages(dataset), image => image.Split == "val");
             var image = images[0];
             service.SaveAnnotation(dataset, new DatasetAnnotation
             {
@@ -48,8 +46,26 @@ public sealed class DatasetCatalogTests
                     Height = 0.4,
                 }],
             });
+            service.SaveAnnotation(dataset, new DatasetAnnotation
+            {
+                ImageRelativePath = "two.png",
+                Objects =
+                [new DatasetAnnotationObject
+                {
+                    ClassName = "scratch",
+                    X = 0.2,
+                    Y = 0.2,
+                    Width = 0.2,
+                    Height = 0.2,
+                }],
+            });
 
             Assert.Contains(service.ListImages(dataset), image => image.HasAnnotation);
+            dataset = service.AutoSplit(dataset);
+            var splitImages = service.ListImages(dataset);
+            Assert.Equal(1, splitImages.Count(image => image.Split == "train"));
+            Assert.Equal(1, splitImages.Count(image => image.Split == "val"));
+            Assert.Equal("unassigned", splitImages.Single(image => image.RelativePath == "three.png").Split);
             service.ExportYolo(dataset, exportRoot);
 
             Assert.True(File.Exists(Path.Combine(exportRoot, "data.yaml")));

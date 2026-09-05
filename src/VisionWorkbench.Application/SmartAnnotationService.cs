@@ -52,8 +52,10 @@ public sealed class SmartAnnotationService
         var sam1Directory = Path.Combine(root, "sam1");
         _yoloeScript = Path.Combine(yoloeDirectory, "worker.py");
         _sam1Script = Path.Combine(sam1Directory, "worker.py");
-        _yoloePython = ResolvePython(configuredPython, yoloeDirectory, Path.Combine(root, "yolo11"), root);
-        _sam1Python = ResolvePython(configuredPython, sam1Directory, Path.Combine(root, "yolo11"), root);
+        _yoloePython = PythonProcessSupport.ResolvePython(configuredPython, yoloeDirectory,
+            Path.Combine(root, "yolo11"), root);
+        _sam1Python = PythonProcessSupport.ResolvePython(configuredPython, sam1Directory,
+            Path.Combine(root, "yolo11"), root);
         YoloeModelPath = ResolveModelPath(
             yoloeModelPath,
             Path.Combine(yoloeDirectory, "models", "yoloe-11s-seg.pt"));
@@ -278,12 +280,12 @@ public sealed class SmartAnnotationService
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            TryKill(process);
+            PythonProcessSupport.TryKill(process);
             throw new TimeoutException("智能标注超过 15 分钟未完成，已终止任务。");
         }
         catch
         {
-            TryKill(process);
+            PythonProcessSupport.TryKill(process);
             throw;
         }
 
@@ -401,18 +403,6 @@ public sealed class SmartAnnotationService
         }
     }
 
-    private static string ResolvePython(string? configured, string primary, string fallback, string root)
-    {
-        if (!string.IsNullOrWhiteSpace(configured)) return configured;
-        var candidates = new[]
-        {
-            Path.Combine(primary, ".venv", "Scripts", "python.exe"),
-            Path.Combine(fallback, ".venv", "Scripts", "python.exe"),
-            Path.Combine(root, ".venv", "Scripts", "python.exe"),
-        };
-        return candidates.FirstOrDefault(File.Exists) ?? "python";
-    }
-
     private static string Describe(string script, string python, string model, string name)
     {
         var missing = new List<string>();
@@ -431,11 +421,6 @@ public sealed class SmartAnnotationService
         !string.IsNullOrWhiteSpace(configured) && File.Exists(configured)
             ? Path.GetFullPath(configured)
             : defaultPath;
-
-    private static void TryKill(Process process)
-    {
-        try { if (!process.HasExited) process.Kill(true); } catch { /* best effort */ }
-    }
 
     private sealed class YoloERequest
     {
