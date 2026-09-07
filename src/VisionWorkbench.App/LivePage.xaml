@@ -4,7 +4,10 @@
              xmlns:local="clr-namespace:VisionWorkbench.App"
              Loaded="Page_Loaded"
              Unloaded="Page_Unloaded">
-    <Grid Margin="8">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
+    <Grid Margin="8" TextElement.Foreground="{DynamicResource TextBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />

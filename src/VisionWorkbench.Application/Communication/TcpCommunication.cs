@@ -1,9 +1,14 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
 namespace VisionWorkbench.Application.Communication;
@@ -52,6 +57,18 @@ public sealed class ProjectCommunicationConfig
     public bool HeartbeatEnabled { get; set; }
     public int HeartbeatIntervalMs { get; set; } = 10000;
     public string HeartbeatMessage { get; set; } = "";
+    public bool RequireAuthentication { get; set; }
+    public string ClientId { get; set; } = "";
+    public string SharedSecret { get; set; } = "";
+    public int MaxClockSkewSeconds { get; set; } = 120;
+    public int RequestCacheDays { get; set; } = 7;
+    public bool TlsEnabled { get; set; }
+    public string? ServerCertificatePath { get; set; }
+    public string? TrustedServerCertificateSha256 { get; set; }
+    public bool AllowUntrustedCertificate { get; set; }
+    public List<string> AllowedClientAddresses { get; set; } = [];
+    public int MaxRequestsPerMinute { get; set; } = 1200;
+    public int IdleTimeoutSeconds { get; set; } = 300;
 }
 
 public sealed class TcpConnectionInfo
@@ -195,7 +212,7 @@ public static class TcpMessageCodec
 internal sealed class TcpConnectionSession : IAsyncDisposable
 {
     private readonly TcpClient _client;
-    private readonly NetworkStream _stream;
+    private Stream _stream;
     private readonly TcpFrameDecoder _decoder;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
@@ -214,8 +231,24 @@ internal sealed class TcpConnectionSession : IAsyncDisposable
         var buffer = new byte[81920];
         try
         {
+            if (config.TlsEnabled)
+            {
+                var ssl = new SslStream(_stream, leaveInnerStreamOpen: false, (_, certificate, _, errors) =>
+                    config.AllowUntrustedCertificate || CertificateMatches(certificate, config.TrustedServerCertificateSha256) || errors == SslPolicyErrors.None);
+                if (config.WorkMode == TcpWorkMode.Server)
+                {
+                    if (string.IsNullOrWhiteSpace(config.ServerCertificatePath) || !File.Exists(config.ServerCertificatePath)) throw new InvalidOperationException("TLS 服务端证书不存在");
+                    await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions { ServerCertificate = X509CertificateLoader.LoadCertificateFromFile(config.ServerCertificatePath), EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 }, linked.Token);
+                }
+                else
+                {
+                    await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = config.RemoteAddress, EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13, RemoteCertificateValidationCallback = (_, certificate, _, errors) => config.AllowUntrustedCertificate || CertificateMatches(certificate, config.TrustedServerCertificateSha256) || errors == SslPolicyErrors.None }, linked.Token);
+                }
+                _stream = ssl;
+            }
             while (!linked.Token.IsCancellationRequested)
             {
+                if (config.IdleTimeoutSeconds > 0 && DateTime.UtcNow - Info.LastActivityAt > TimeSpan.FromSeconds(config.IdleTimeoutSeconds)) throw new TimeoutException("TCP 空闲连接超时");
                 var read = await _stream.ReadAsync(buffer, linked.Token);
                 if (read == 0) break;
                 Info.LastActivityAt = DateTime.UtcNow;
@@ -225,6 +258,11 @@ internal sealed class TcpConnectionSession : IAsyncDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex) { Closed?.Invoke(this, ex.Message); return; }
         Closed?.Invoke(this, null);
+    }
+    private static bool CertificateMatches(X509Certificate? certificate, string? expected)
+    {
+        if (certificate is null || string.IsNullOrWhiteSpace(expected)) return false;
+        using var cert = new X509Certificate2(certificate); return string.Equals(cert.GetCertHashString(HashAlgorithmName.SHA256), expected.Replace(":", "", StringComparison.Ordinal), StringComparison.OrdinalIgnoreCase);
     }
     public async Task SendAsync(ReadOnlyMemory<byte> data, CancellationToken ct)
     {
@@ -265,6 +303,8 @@ public sealed class TcpServerTransport : ITcpTransport
             {
                 var client = await listener.AcceptTcpClientAsync(ct);
                 if (_sessions.Count >= Math.Max(1, _config.MaxConnections)) { client.Close(); continue; }
+                var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "";
+                if (_config.AllowedClientAddresses.Count > 0 && !_config.AllowedClientAddresses.Contains(remoteAddress, StringComparer.OrdinalIgnoreCase)) { client.Close(); continue; }
                 var id = Guid.NewGuid().ToString("N")[..12];
                 var session = new TcpConnectionSession(client, _config, id);
                 if (!_sessions.TryAdd(id, session)) { await session.DisposeAsync(); continue; }
@@ -378,7 +418,12 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     private readonly Persistence.TaskRepository _tasks;
     private readonly ILogger<ProjectCommunicationManager>? _logger;
     private readonly string? _logDirectory;
+    private readonly Persistence.CommunicationRequestStore? _requestStore;
     private readonly ConcurrentDictionary<string, string> _completed = new();
+    private TcpSecurityValidator _security = new();
+    private readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> _rateWindows = new(StringComparer.Ordinal);
+    private Channel<TcpFrameReceivedEventArgs> _frameChannel = Channel.CreateBounded<TcpFrameReceivedEventArgs>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
+    private Task? _frameConsumer;
     private ITcpTransport? _transport;
     private ProjectCommunicationConfig _config = new();
     public TcpRuntimeState State => _transport?.State ?? TcpRuntimeState.Stopped;
@@ -386,11 +431,17 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     public event EventHandler<TcpLogEntry>? LogReceived;
     public event EventHandler? StateChanged;
     public Func<Persistence.TaskEntity, CancellationToken, Task<TcpTaskExecutionResult>>? TaskExecutor { get; set; }
-    public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null) { _projects = projects; _tasks = tasks; _logger = logger; _logDirectory = logDirectory; }
+    public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null, Persistence.CommunicationRequestStore? requestStore = null) { _projects = projects; _tasks = tasks; _logger = logger; _logDirectory = logDirectory; _requestStore = requestStore; }
     public async Task StartAsync(ProjectCommunicationConfig config, CancellationToken ct = default)
     {
-        await StopAsync(ct); _config = config;
-        if (!config.Enabled || config.WorkMode == TcpWorkMode.Disabled) { Log("INFO", "SYS", "通讯未启用"); return; }
+        await StopAsync(ct); _config = config; _security = new TcpSecurityValidator(TimeSpan.FromSeconds(Math.Max(1, config.MaxClockSkewSeconds)));
+        _frameChannel = Channel.CreateBounded<TcpFrameReceivedEventArgs>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
+        _frameConsumer = ProcessFramesAsync(_frameChannel.Reader, ct);
+        if (!config.Enabled || config.WorkMode == TcpWorkMode.Disabled)
+        {
+            Log("INFO", "SYS", "TCP/IP 通讯未启用，请先勾选“启用 TCP/IP 通讯”并选择工作模式");
+            return;
+        }
         _transport = config.WorkMode == TcpWorkMode.Server ? new TcpServerTransport() : new TcpClientTransport();
         _transport.FrameReceived += Transport_FrameReceived; _transport.ConnectionChanged += Transport_ConnectionChanged;
         try { await _transport.StartAsync(config, ct); Log("INFO", "SYS", $"TCP {config.WorkMode} 已启动"); StateChanged?.Invoke(this, EventArgs.Empty); }
@@ -398,14 +449,25 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     }
     public async Task StopAsync(CancellationToken ct = default)
     {
-        var old = Interlocked.Exchange(ref _transport, null); if (old is null) return;
+        _frameChannel.Writer.TryComplete();
+        var consumer = Interlocked.Exchange(ref _frameConsumer, null);
+        var old = Interlocked.Exchange(ref _transport, null); if (old is null) { if (consumer is not null) try { await consumer.WaitAsync(TimeSpan.FromSeconds(2), ct); } catch { } return; }
         old.FrameReceived -= Transport_FrameReceived; old.ConnectionChanged -= Transport_ConnectionChanged; await old.DisposeAsync(); Log("INFO", "SYS", "TCP 已停止"); StateChanged?.Invoke(this, EventArgs.Empty);
     }
     private void Transport_ConnectionChanged(object? sender, TcpConnectionChangedEventArgs e) => Log(e.Connected ? "INFO" : "WARN", "SYS", $"{(e.Connected ? "连接建立" : "连接断开")}: {e.Connection.ConnectionId} {e.Connection.RemoteEndpoint} {e.Error}");
-    private async void Transport_FrameReceived(object? sender, TcpFrameReceivedEventArgs e)
+    private void Transport_FrameReceived(object? sender, TcpFrameReceivedEventArgs e)
     {
         var text = TcpMessageCodec.GetEncoding(_config).GetString(e.Data); Log("INFO", "RX", $"[{e.Connection.ConnectionId}] {text}");
-        try { await DispatchAsync(e.Connection.ConnectionId, e.Data, e.Connection.RemoteEndpoint); } catch (Exception ex) { Log("ERROR", "SYS", ex.Message); }
+        if (!_frameChannel.Writer.TryWrite(e)) Log("WARN", "SYS", "TCP 接收队列已满，已丢弃报文");
+    }
+    private async Task ProcessFramesAsync(ChannelReader<TcpFrameReceivedEventArgs> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var frame in reader.ReadAllAsync(ct))
+                try { await DispatchAsync(frame.Connection.ConnectionId, frame.Data, frame.Connection.RemoteEndpoint); } catch (Exception ex) { Log("ERROR", "SYS", ex.Message); }
+        }
+        catch (OperationCanceledException) { }
     }
     public async Task SendTextAsync(string connectionId, string text, CancellationToken ct = default)
     { if (_transport is null) throw new InvalidOperationException("TCP 未启动"); var data = TcpMessageCodec.Encode(text, _config); await _transport.SendAsync(connectionId, data, ct); Log("INFO", "TX", $"[{connectionId}] {text}"); }
@@ -414,6 +476,18 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     private async Task DispatchAsync(string connectionId, byte[] raw, string endpoint)
     {
         var text = TcpMessageCodec.GetEncoding(_config).GetString(raw).Trim();
+        if (!AllowRate(endpoint)) { await SendJsonAsync(connectionId, new { ok = false, code = "rate_limited" }); return; }
+        if (_config.RequireAuthentication)
+        {
+            try
+            {
+                using var authDoc = JsonDocument.Parse(text);
+                if (!_security.Validate(authDoc.RootElement, _config.SharedSecret, DateTimeOffset.UtcNow, out var authError))
+                { await SendJsonAsync(connectionId, new { ok = false, code = authError }); return; }
+            }
+            catch (JsonException)
+            { await SendJsonAsync(connectionId, new { ok = false, code = "authentication_required" }); return; }
+        }
         var tasks = await _tasks.ListAsync();
         var configured = tasks
             .Select(task => (Task: task, Trigger: ParseTrigger(task.TriggerJson)))
@@ -433,6 +507,16 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             var requestId = root.TryGetProperty("requestId", out var r) ? r.GetString() : null;
             if (string.Equals(command, "ping", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(connectionId, new { ok = true, code = "pong", message = "TCP服务正常", requestId, timestamp = DateTimeOffset.UtcNow }); return; }
             if (string.IsNullOrWhiteSpace(requestId)) { await SendJsonAsync(connectionId, new { ok = false, code = "request_id_required", message = "execute 必须提供 requestId" }); return; }
+            var clientId = root.TryGetProperty("clientId", out var client) && client.ValueKind == JsonValueKind.String ? client.GetString() : endpoint;
+            Persistence.CommunicationRequestEntity? persistedRequest = null;
+            if (_requestStore is not null)
+            {
+                var persisted = await _requestStore.BeginAsync(_config.ProjectCode, clientId ?? endpoint, requestId!, command ?? "", text);
+                if (persisted.State == Persistence.CommunicationRequestState.Cached && persisted.ResponseJson is not null) { await SendTextAsync(connectionId, persisted.ResponseJson); return; }
+                if (persisted.State == Persistence.CommunicationRequestState.Conflict) { await SendJsonAsync(connectionId, new { ok = false, code = "request_id_conflict", requestId }); return; }
+                if (persisted.State == Persistence.CommunicationRequestState.Processing) { await SendJsonAsync(connectionId, new { ok = false, code = "request_processing", requestId }); return; }
+                persistedRequest = persisted.Request;
+            }
             if (_completed.TryGetValue($"{_config.ProjectCode}:{requestId}", out var cached)) { await SendTextAsync(connectionId, cached); return; }
             if (!string.Equals(command, "execute", StringComparison.OrdinalIgnoreCase) && !string.Equals(command, "task", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(connectionId, new { ok = false, code = "unsupported_command", requestId }); return; }
             var taskKey = root.TryGetProperty("task", out var t) ? t.GetString() : null;
@@ -440,7 +524,9 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             if (matched is null) { await SendJsonAsync(connectionId, new { ok = false, code = "task_not_configured", requestId, task = taskKey }); return; }
             await SendJsonAsync(connectionId, new { ok = true, code = "accepted", requestId, data = new { task = matched, queuePosition = 0 } });
             var result = JsonSerializer.Serialize(new { ok = true, code = "completed", requestId, responseId = Guid.NewGuid().ToString("N"), data = new { task = matched, status = "received", message = "命令已匹配；请在实时检测任务中启动对应工位" } });
-            _completed[$"{_config.ProjectCode}:{requestId}"] = result; await SendTextAsync(connectionId, result);
+            _completed[$"{_config.ProjectCode}:{requestId}"] = result;
+            if (persistedRequest is not null) await _requestStore!.CompleteAsync(persistedRequest.Id, result);
+            await SendTextAsync(connectionId, result);
         }
     }
     private async Task ExecuteConfiguredTaskAsync(string connectionId, string text, Persistence.TaskEntity task, TaskTcpTriggerConfig trigger)
@@ -491,6 +577,18 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             .Replace("{count}", result.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
             .Replace("{recordId}", result.RecordId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
     private async Task SendJsonAsync(string connectionId, object value) => await SendTextAsync(connectionId, JsonSerializer.Serialize(value));
+    private bool AllowRate(string endpoint)
+    {
+        var limit = Math.Max(1, _config.MaxRequestsPerMinute);
+        var now = DateTimeOffset.UtcNow;
+        var window = _rateWindows.GetOrAdd(endpoint, _ => new Queue<DateTimeOffset>());
+        lock (window)
+        {
+            while (window.Count > 0 && now - window.Peek() >= TimeSpan.FromMinutes(1)) window.Dequeue();
+            if (window.Count >= limit) return false;
+            window.Enqueue(now); return true;
+        }
+    }
     private void Log(string level, string direction, string message)
     {
         var entry = new TcpLogEntry(DateTime.Now, level, direction, "", message);

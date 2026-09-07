@@ -10,6 +10,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -49,16 +50,16 @@ def train(request: dict[str, Any]) -> None:
     task = str(request.get("taskType", "detection"))
     if task == "semantic_segmentation":
         raise ValueError("YOLO11 官方不支持原生语义分割训练，请使用实例分割或其他语义分割模型。")
-    if task not in {"detection", "instance_segmentation"}:
+    if task not in {"detection", "instance_segmentation", "pose"}:
         raise ValueError(f"不支持的数据集类型: {task}")
 
     data_yaml = Path(str(request["dataYaml"])).resolve()
     model_path = str(request["modelPath"])
     model = YOLO(model_path)
-    expected_model_task = "detect" if task == "detection" else "segment"
+    expected_model_task = {"detection": "detect", "instance_segmentation": "segment", "pose": "pose"}[task]
     actual_model_task = str(getattr(model, "task", "")).lower()
     if actual_model_task and actual_model_task != expected_model_task:
-        expected_name = "目标检测" if task == "detection" else "实例分割"
+        expected_name = {"detection": "目标检测", "instance_segmentation": "实例分割", "pose": "关键点检测"}[task]
         raise ValueError(f"当前模型任务为 {actual_model_task}，与数据集类型 {expected_name} 不匹配。")
 
     epochs = int(request.get("epochs", 100))
@@ -76,6 +77,12 @@ def train(request: dict[str, Any]) -> None:
     output_directory = Path(str(request["outputDirectory"])).resolve()
     run_name = str(request["runName"])
     output_directory.mkdir(parents=True, exist_ok=True)
+    pause_file = str(request.get("pauseFilePath") or "").strip()
+
+    def wait_if_paused() -> None:
+        while pause_file and Path(pause_file).is_file():
+            time.sleep(0.2)
+
     total_epochs = epochs
 
     def on_fit_epoch_end(trainer: Any) -> None:
@@ -87,7 +94,7 @@ def train(request: dict[str, Any]) -> None:
         metrics = getattr(trainer, "metrics", {}) or {}
         val_loss = None
         if isinstance(metrics, dict):
-            values = [scalar(metrics.get(key)) for key in ("val/box_loss", "val/seg_loss", "val/cls_loss", "val/dfl_loss")]
+            values = [scalar(metrics.get(key)) for key in ("val/box_loss", "val/seg_loss", "val/pose_loss", "val/kobj_loss", "val/cls_loss", "val/dfl_loss")]
             values = [value for value in values if value is not None]
             val_loss = sum(values) if values else None
         emit(
@@ -99,6 +106,10 @@ def train(request: dict[str, Any]) -> None:
             message=f"第 {epoch}/{total_epochs} 轮完成",
         )
 
+    def on_train_epoch_start(trainer: Any) -> None:
+        wait_if_paused()
+
+    model.add_callback("on_train_epoch_start", on_train_epoch_start)
     model.add_callback("on_fit_epoch_end", on_fit_epoch_end)
     emit(
         "started",

@@ -7,6 +7,23 @@ import time
 from pathlib import Path
 
 
+def pose_keypoints(result, index: int) -> list[dict[str, float]]:
+    keypoints = getattr(result, "keypoints", None)
+    if keypoints is None:
+        return []
+    try:
+        points = keypoints.xyn[index]
+        confidences = getattr(keypoints, "conf", None)
+        confidence_row = confidences[index] if confidences is not None else None
+        output = []
+        for point_index, point in enumerate(points):
+            confidence = float(confidence_row[point_index]) if confidence_row is not None else 1.0
+            output.append({"x": float(point[0]), "y": float(point[1]), "confidence": confidence})
+        return output
+    except (IndexError, TypeError, ValueError):
+        return []
+
+
 def emit(values: dict) -> None:
     print(json.dumps(values, ensure_ascii=False), flush=True)
 
@@ -29,8 +46,8 @@ def main() -> int:
                 task_hint = str(getattr(YOLO(str(sibling_pt)), "task", "")).lower()
         model = YOLO(str(model_path), task=task_hint) if task_hint else YOLO(str(model_path))
         task = str(getattr(model, "task", "")).lower()
-        if task not in {"detect", "segment"}:
-            raise ValueError(f"当前测试平台仅支持 detect/segment，模型类型为：{task or 'unknown'}")
+        if task not in {"detect", "segment", "pose"}:
+            raise ValueError(f"当前测试平台仅支持 detect/segment/pose，模型类型为：{task or 'unknown'}")
         device = str(request.get("device", "auto"))
         if device == "auto":
             device = "0" if torch.cuda.is_available() else "cpu"
@@ -54,7 +71,7 @@ def main() -> int:
                         name = names.get(class_id, str(class_id)) if isinstance(names, dict) else str(class_id)
                         detections.append({"classId": class_id, "className": str(name), "confidence": float(scores[index]),
                                            "x": float(box[0]), "y": float(box[1]), "width": float(box[2]-box[0]),
-                                           "height": float(box[3]-box[1])})
+                                           "height": float(box[3]-box[1]), "keypoints": pose_keypoints(result, index)})
                 masks = []
                 if task == "segment" and result.masks is not None:
                     for index, polygon in enumerate(result.masks.xyn):

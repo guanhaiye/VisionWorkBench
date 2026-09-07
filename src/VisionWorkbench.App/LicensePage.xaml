@@ -1,0 +1,109 @@
+<UserControl x:Class="VisionWorkbench.App.LicensePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
+    <Grid>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      HorizontalContentAlignment="Stretch">
+          <StackPanel Margin="12" HorizontalAlignment="Stretch">
+            <DockPanel Margin="0,0,0,12">
+                <TextBlock Text="许可证管理" FontSize="20" FontWeight="Bold" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="重新校验" Click="Refresh_Click" Margin="6,0,0,0" />
+                    <Button Content="导入许可证" Click="Import_Click" Margin="6,0,0,0" />
+                    <Button Content="导出诊断包" Click="ExportDiagnostics_Click" Margin="6,0,0,0" />
+                </StackPanel>
+            </DockPanel>
+
+            <GroupBox Header="当前授权状态" Margin="0,0,0,10">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="StatusBadge" Grid.Column="0" MinWidth="112" Padding="14,8"
+                            CornerRadius="5" HorizontalAlignment="Left" VerticalAlignment="Top">
+                        <TextBlock x:Name="StatusText" FontSize="15" FontWeight="Bold"
+                                   HorizontalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="16,0,0,0">
+                        <TextBlock x:Name="StatusMessageText" TextWrapping="Wrap" FontSize="14" />
+                        <TextBlock x:Name="CheckedAtText" Foreground="{DynamicResource MutedTextBrush}"
+                                   Margin="0,5,0,0" />
+                    </StackPanel>
+                </Grid>
+            </GroupBox>
+
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <GroupBox Header="许可证信息" Grid.Column="0" Margin="0,0,5,0">
+                    <Grid Margin="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="42" /><RowDefinition Height="42" />
+                            <RowDefinition Height="42" /><RowDefinition Height="42" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="客户" Grid.Row="0" />
+                        <TextBlock x:Name="CustomerText" Grid.Row="0" Grid.Column="1" />
+                        <TextBlock Text="产品 / 版本" Grid.Row="1" />
+                        <TextBlock x:Name="ProductText" Grid.Row="1" Grid.Column="1" TextWrapping="Wrap" />
+                        <TextBlock Text="许可证编号" Grid.Row="2" />
+                        <TextBlock x:Name="LicenseIdText" Grid.Row="2" Grid.Column="1" />
+                        <TextBlock Text="有效期" Grid.Row="3" />
+                        <TextBlock x:Name="ValidityText" Grid.Row="3" Grid.Column="1" TextWrapping="Wrap" />
+                        <TextBlock Text="设备码" Grid.Row="4" />
+                        <TextBox x:Name="MachineFingerprintText" Grid.Row="4" Grid.Column="1"
+                                 IsReadOnly="True" TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" />
+                    </Grid>
+                </GroupBox>
+
+                <GroupBox Header="授权功能与限制" Grid.Column="1" Margin="5,0,0,0">
+                    <Grid Margin="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="已授权功能" FontWeight="SemiBold" />
+                        <ListBox x:Name="FeaturesList" Grid.Row="1" MinHeight="110" Margin="0,5,0,5" />
+                        <TextBlock x:Name="LimitsText" Grid.Row="2" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource MutedTextBrush}" />
+                    </Grid>
+                </GroupBox>
+            </Grid>
+
+            <GroupBox Header="离线授权申请">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="将申请码发送给授权方生成许可证。申请码只包含产品、设备码和申请时间，不包含密码或私钥。"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="RequestHintText" Margin="0,6,0,0"
+                                   Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="复制申请码" Click="CopyActivationRequest_Click" Margin="6,0,0,0" />
+                    </StackPanel>
+                </Grid>
+            </GroupBox>
+          </StackPanel>
+        </ScrollViewer>
+        <Border x:Name="CopyToast" Visibility="Collapsed" Panel.ZIndex="10"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,18"
+                Background="{DynamicResource AccentBrush}" CornerRadius="6" Padding="18,10">
+            <TextBlock x:Name="CopyToastText" Foreground="White" FontWeight="SemiBold" />
+        </Border>
+    </Grid>
+</UserControl>

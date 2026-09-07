@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -14,6 +15,11 @@ namespace VisionWorkbench.App;
 
 public partial class BehaviorCollectionPage : UserControl
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+    };
+    private const string SplitManifestFileName = "behavior-splits.json";
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".jpg", ".jpeg", ".png", ".bmp", ".webp" };
     private readonly PreviewRenderer _previewRenderer = new();
@@ -76,16 +82,133 @@ public partial class BehaviorCollectionPage : UserControl
         StatusText.Text = $"已加载数据集：{dataset.Name}，已有 {dataset.Sources.Count} 个采集源。";
     }
 
+    private void SaveDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dataset is null)
+        {
+            ShowDatasetRequired();
+            return;
+        }
+
+        try
+        {
+            var name = DatasetNameText.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(name)) _dataset.Name = name;
+            BehaviorDatasetStore.Save(_dataset);
+            RegisterInDatasetCatalog();
+            UpdateDatasetUi();
+            StatusText.Text = $"行为数据集已保存：{_dataset.Name}，{_dataset.Sources.Count} 个采集源，{_dataset.Clips.Count} 个行为片段。";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"保存行为数据集失败：{ex.Message}", "行为数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void AutoSplitDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dataset is null)
+        {
+            ShowDatasetRequired();
+            return;
+        }
+
+        var sources = _dataset.Sources
+            .Where(source => !string.IsNullOrWhiteSpace(source.Id))
+            .GroupBy(source => source.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(source => source.Id, StringComparer.Ordinal)
+            .ToList();
+        if (sources.Count == 0)
+        {
+            ThemedMessageBox.Show("当前数据集还没有视频或图片序列来源，无法划分。", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            var validationCount = sources.Count == 1
+                ? 1
+                : Math.Clamp((int)Math.Ceiling(sources.Count * 0.2), 1, sources.Count - 1);
+            var validationIds = sources.Take(validationCount).Select(source => source.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var trainingIds = sources.Skip(validationCount).Select(source => source.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (trainingIds.Count == 0) trainingIds.Add(sources[0].Id);
+            if (validationIds.Count == 0) validationIds.Add(sources[0].Id);
+
+            var manifest = new BehaviorSplitManifest
+            {
+                TrainSourceIds = trainingIds.Order(StringComparer.Ordinal).ToList(),
+                ValidationSourceIds = validationIds.Order(StringComparer.Ordinal).ToList(),
+                UpdatedAt = DateTime.UtcNow,
+            };
+            var manifestPath = Path.Combine(_dataset.RootDirectory, BehaviorDatasetStore.InternalDirectoryName, SplitManifestFileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+            File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions));
+            BehaviorDatasetStore.Save(_dataset);
+            RegisterInDatasetCatalog();
+
+            var trainClips = _dataset.Clips.Count(clip => trainingIds.Contains(clip.SourceId));
+            var validationClips = _dataset.Clips.Count(clip => validationIds.Contains(clip.SourceId));
+            StatusText.Text = $"已按采集来源划分：训练 {trainingIds.Count} 个来源/{trainClips} 个片段，验证 {validationIds.Count} 个来源/{validationClips} 个片段。";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"自动划分失败：{ex.Message}", "数据集划分", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void ExportDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dataset is null)
+        {
+            ShowDatasetRequired();
+            return;
+        }
+
+        var dialog = new OpenFolderDialog { Title = "选择行为数据集导出位置" };
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var parent = Path.GetFullPath(dialog.FolderName);
+            var targetRoot = CreateExportDirectory(parent, _dataset.Name);
+            var exported = JsonSerializer.Deserialize<BehaviorDatasetDefinition>(
+                JsonSerializer.Serialize(_dataset, JsonOptions), JsonOptions)
+                ?? throw new InvalidDataException("无法创建导出数据集副本。");
+            exported.RootDirectory = targetRoot;
+            BehaviorDatasetStore.Save(exported);
+
+            foreach (var source in _dataset.Sources)
+            {
+                CopyDatasetFile(_dataset.RootDirectory, targetRoot, source.RelativeVideoPath);
+                CopyDatasetDirectory(_dataset.RootDirectory, targetRoot, source.RelativeFramesDirectory);
+            }
+
+            var splitPath = Path.Combine(_dataset.RootDirectory, BehaviorDatasetStore.InternalDirectoryName, SplitManifestFileName);
+            CopyDatasetFile(_dataset.RootDirectory, targetRoot,
+                Path.GetRelativePath(_dataset.RootDirectory, splitPath));
+            StatusText.Text = $"行为数据集已导出：{targetRoot}。导出目录可直接通过“加载数据集”打开。";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"导出行为数据集失败：{ex.Message}", "行为数据集", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private async void RefreshCamera_Click(object sender, RoutedEventArgs e) => await RefreshCamerasAsync();
 
     private async Task RefreshCamerasAsync()
     {
         try
         {
+            await StopPreviewAsync();
             var cameras = await AppServices.Instance.Cameras.DiscoverAllAsync(CancellationToken.None);
             CameraCombo.ItemsSource = cameras;
+            CameraCombo.SelectedIndex = -1;
+            PreviewImage.Source = null;
+            PreviewHintText.Visibility = Visibility.Visible;
+            RecordButton.IsEnabled = false;
             CameraStatusText.Text = cameras.Count == 0 ? "未发现可用相机" : $"发现 {cameras.Count} 个相机";
-            if (cameras.Count > 0) CameraCombo.SelectedIndex = 0;
         }
         catch (Exception ex)
         {
@@ -658,6 +781,57 @@ public partial class BehaviorCollectionPage : UserControl
     private void RefreshSourceList() => SourceList.ItemsSource = _dataset?.Sources.ToList() ?? [];
 
     private double SelectedFps() => double.TryParse((FpsCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var fps) ? fps : 10;
+
+    private static string CreateExportDirectory(string parent, string name)
+    {
+        Directory.CreateDirectory(parent);
+        var safeName = string.IsNullOrWhiteSpace(name) ? "behavior-dataset" : name.Trim();
+        foreach (var invalid in Path.GetInvalidFileNameChars()) safeName = safeName.Replace(invalid, '_');
+        var candidate = Path.Combine(parent, safeName);
+        return Directory.Exists(candidate) ? Path.Combine(parent, $"{safeName}-{DateTime.Now:yyyyMMdd-HHmmss-fff}") : candidate;
+    }
+
+    private static void CopyDatasetFile(string sourceRoot, string targetRoot, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return;
+        var sourcePath = ResolveDatasetPath(sourceRoot, relativePath);
+        if (!File.Exists(sourcePath)) return;
+        var targetPath = ResolveDatasetPath(targetRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        File.Copy(sourcePath, targetPath, overwrite: true);
+    }
+
+    private static void CopyDatasetDirectory(string sourceRoot, string targetRoot, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return;
+        var sourceDirectory = ResolveDatasetPath(sourceRoot, relativePath);
+        if (!Directory.Exists(sourceDirectory)) return;
+        foreach (var file in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+        {
+            var relativeFile = Path.GetRelativePath(sourceRoot, file);
+            CopyDatasetFile(sourceRoot, targetRoot, relativeFile);
+        }
+    }
+
+    private static string ResolveDatasetPath(string root, string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath)) throw new InvalidDataException("数据集包含不安全的绝对路径。");
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                       + Path.DirectorySeparatorChar;
+        var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
+        if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"数据集包含越界路径：{relativePath}");
+        return fullPath;
+    }
+
+    private sealed class BehaviorSplitManifest
+    {
+        public int Version { get; set; } = 1;
+        public string Policy { get; set; } = "source-level";
+        public List<string> TrainSourceIds { get; set; } = [];
+        public List<string> ValidationSourceIds { get; set; } = [];
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    }
 
     private void OpenDirectory_Click(object sender, RoutedEventArgs e)
     {

@@ -2,7 +2,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace VisionWorkbench.Persistence;
 
-/// <summary>SQLite + EF Core（文档 §20）。开发期 EnsureCreated，零迁移成本。</summary>
+/// <summary>SQLite + EF Core。保留旧库幂等升级，同时为商用版提供可追踪 schema 版本。</summary>
 public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) : DbContext(options)
 {
     public DbSet<ProjectEntity> Projects => Set<ProjectEntity>();
@@ -13,6 +13,23 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
     public DbSet<CountingEventEntity> CountingEvents => Set<CountingEventEntity>();
     public DbSet<VisionEventEntity> VisionEvents => Set<VisionEventEntity>();
     public DbSet<CorrectionEntity> Corrections => Set<CorrectionEntity>();
+    public DbSet<UserEntity> Users => Set<UserEntity>();
+    public DbSet<RoleEntity> Roles => Set<RoleEntity>();
+    public DbSet<PermissionEntity> Permissions => Set<PermissionEntity>();
+    public DbSet<UserRoleEntity> UserRoles => Set<UserRoleEntity>();
+    public DbSet<RolePermissionEntity> RolePermissions => Set<RolePermissionEntity>();
+    public DbSet<LoginEventEntity> LoginEvents => Set<LoginEventEntity>();
+    public DbSet<AuditEventEntity> AuditEvents => Set<AuditEventEntity>();
+    public DbSet<BackupRecordEntity> BackupRecords => Set<BackupRecordEntity>();
+    public DbSet<HealthSnapshotEntity> HealthSnapshots => Set<HealthSnapshotEntity>();
+    public DbSet<AlertEntity> Alerts => Set<AlertEntity>();
+    public DbSet<CommunicationRequestEntity> CommunicationRequests => Set<CommunicationRequestEntity>();
+    public DbSet<RecipeVersionEntity> RecipeVersions => Set<RecipeVersionEntity>();
+    public DbSet<ModelArtifactEntity> ModelArtifacts => Set<ModelArtifactEntity>();
+    public DbSet<DeploymentBindingEntity> DeploymentBindings => Set<DeploymentBindingEntity>();
+    public DbSet<LicenseEventEntity> LicenseEvents => Set<LicenseEventEntity>();
+    public DbSet<DatasetVersionEntity> DatasetVersions => Set<DatasetVersionEntity>();
+    public DbSet<ReportJobEntity> ReportJobs => Set<ReportJobEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -89,6 +106,29 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
             e.HasIndex(x => x.CorrectedAt);
             e.HasOne(x => x.Record).WithMany().HasForeignKey(x => x.RecordId);
         });
+
+        modelBuilder.Entity<UserEntity>(e => { e.ToTable("Users"); e.HasIndex(x => x.UserName).IsUnique(); });
+        modelBuilder.Entity<RoleEntity>(e => { e.ToTable("Roles"); e.HasIndex(x => x.Code).IsUnique(); });
+        modelBuilder.Entity<PermissionEntity>(e => { e.ToTable("Permissions"); e.HasIndex(x => x.Code).IsUnique(); });
+        modelBuilder.Entity<UserRoleEntity>(e => { e.ToTable("UserRoles"); e.HasKey(x => new { x.UserId, x.RoleId }); });
+        modelBuilder.Entity<RolePermissionEntity>(e => { e.ToTable("RolePermissions"); e.HasKey(x => new { x.RoleId, x.PermissionId }); });
+        modelBuilder.Entity<LoginEventEntity>(e => { e.ToTable("LoginEvents"); e.HasIndex(x => x.OccurredAtUtc); e.HasIndex(x => x.UserName); });
+        modelBuilder.Entity<AuditEventEntity>(e => { e.ToTable("AuditEvents"); e.HasIndex(x => x.OccurredAtUtc); e.HasIndex(x => new { x.ObjectType, x.ObjectId }); e.HasIndex(x => x.Hash); });
+        modelBuilder.Entity<BackupRecordEntity>(e => { e.ToTable("BackupRecords"); e.HasIndex(x => x.CreatedAtUtc); });
+        modelBuilder.Entity<HealthSnapshotEntity>(e => { e.ToTable("HealthSnapshots"); e.HasIndex(x => x.CapturedAtUtc); });
+        modelBuilder.Entity<AlertEntity>(e => { e.ToTable("Alerts"); e.HasIndex(x => new { x.Code, x.Status }).IsUnique(); e.HasIndex(x => x.LastSeenAtUtc); });
+        modelBuilder.Entity<CommunicationRequestEntity>(e =>
+        {
+            e.ToTable("CommunicationRequests");
+            e.HasIndex(x => new { x.ProjectCode, x.ClientId, x.RequestId }).IsUnique();
+            e.HasIndex(x => x.ExpiresAtUtc);
+        });
+        modelBuilder.Entity<RecipeVersionEntity>(e => { e.ToTable("RecipeVersions"); e.HasIndex(x => new { x.RecipeCode, x.Version }).IsUnique(); e.HasIndex(x => new { x.RecipeCode, x.State }); });
+        modelBuilder.Entity<ModelArtifactEntity>(e => { e.ToTable("ModelArtifacts"); e.HasIndex(x => new { x.ModelCode, x.Version }).IsUnique(); e.HasIndex(x => x.Sha256); });
+        modelBuilder.Entity<DeploymentBindingEntity>(e => { e.ToTable("DeploymentBindings"); e.HasIndex(x => x.TargetCode).IsUnique(); });
+        modelBuilder.Entity<LicenseEventEntity>(e => { e.ToTable("LicenseEvents"); e.HasIndex(x => x.OccurredAtUtc); });
+        modelBuilder.Entity<DatasetVersionEntity>(e => { e.ToTable("DatasetVersions"); e.HasIndex(x => new { x.DatasetCode, x.Version }).IsUnique(); e.HasIndex(x => x.Sha256); });
+        modelBuilder.Entity<ReportJobEntity>(e => { e.ToTable("ReportJobs"); e.HasIndex(x => x.CreatedAtUtc); });
     }
 }
 
@@ -132,7 +172,7 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Stations_ProjectId_StationCode ON Stations (ProjectId, StationCode);");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_Stations_ProjectId_IsArchived ON Stations (ProjectId, IsArchived);");
 
-        var projectCount = Convert.ToInt64(db.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM Projects").Single());
+        var projectCount = Convert.ToInt64(db.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM Projects").AsEnumerable().Single());
         if (projectCount == 0)
         {
             db.Database.ExecuteSqlRaw("INSERT INTO Projects (ProjectCode, Name, Description, CreatedAt, UpdatedAt) VALUES ('default', '默认项目', '由旧版单工位数据自动创建', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);");
@@ -156,7 +196,7 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_Tasks_StationCode ON Tasks (StationCode);");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InspectionRecords_StationCode ON InspectionRecords (StationCode);");
 
-        var defaultProjectId = Convert.ToInt64(db.Database.SqlQueryRaw<long>("SELECT Id AS Value FROM Projects WHERE ProjectCode = 'default' LIMIT 1").Single());
+        var defaultProjectId = Convert.ToInt64(db.Database.SqlQueryRaw<long>("SELECT Id AS Value FROM Projects WHERE ProjectCode = 'default' LIMIT 1").AsEnumerable().Single());
         db.Database.ExecuteSqlRaw("INSERT INTO Stations (ProjectId, StationCode, Name, Enabled, IsArchived, TaskId, CameraProviderId, CameraDeviceId, CreatedAt, UpdatedAt) SELECT @p0, t.StationCode, t.Name, 1, 0, t.Id, t.CameraProviderId, t.CameraDeviceId, t.CreatedAt, t.UpdatedAt FROM Tasks t WHERE NOT EXISTS (SELECT 1 FROM Stations s WHERE s.TaskId = t.Id) AND NOT EXISTS (SELECT 1 FROM Stations s WHERE s.ProjectId = @p0 AND lower(s.StationCode) = lower(t.StationCode));", defaultProjectId);
 
         var batchColumns = ReadColumns(db, "Batches");
@@ -184,6 +224,138 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecords ADD COLUMN RunType TEXT NOT NULL DEFAULT 'production';");
         }
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InspectionRecords_SourceRecordId ON InspectionRecords (SourceRecordId);");
+
+        // 商用化基线：旧版本数据库通过 IF NOT EXISTS 原子补齐新表；后续迁移只增加版本，不覆盖业务数据。
+        db.Database.ExecuteSqlRaw("""
+            CREATE TABLE IF NOT EXISTS SchemaMigrations (
+                Version TEXT NOT NULL CONSTRAINT PK_SchemaMigrations PRIMARY KEY,
+                AppliedAtUtc TEXT NOT NULL,
+                Description TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS Users (
+                Id INTEGER NOT NULL CONSTRAINT PK_Users PRIMARY KEY AUTOINCREMENT,
+                UserName TEXT NOT NULL, PasswordHash TEXT NOT NULL, IsEnabled INTEGER NOT NULL DEFAULT 1,
+                FailedLoginCount INTEGER NOT NULL DEFAULT 0, LockoutUntilUtc TEXT NULL,
+                MustChangePassword INTEGER NOT NULL DEFAULT 0, CreatedAtUtc TEXT NOT NULL,
+                UpdatedAtUtc TEXT NOT NULL, LastLoginAtUtc TEXT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Users_UserName ON Users(UserName COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS Roles (
+                Id INTEGER NOT NULL CONSTRAINT PK_Roles PRIMARY KEY AUTOINCREMENT,
+                Code TEXT NOT NULL, Name TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Roles_Code ON Roles(Code COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS Permissions (
+                Id INTEGER NOT NULL CONSTRAINT PK_Permissions PRIMARY KEY AUTOINCREMENT,
+                Code TEXT NOT NULL, Name TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Permissions_Code ON Permissions(Code COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS UserRoles (
+                UserId INTEGER NOT NULL, RoleId INTEGER NOT NULL,
+                CONSTRAINT PK_UserRoles PRIMARY KEY(UserId, RoleId),
+                FOREIGN KEY(UserId) REFERENCES Users(Id), FOREIGN KEY(RoleId) REFERENCES Roles(Id)
+            );
+            CREATE TABLE IF NOT EXISTS RolePermissions (
+                RoleId INTEGER NOT NULL, PermissionId INTEGER NOT NULL,
+                CONSTRAINT PK_RolePermissions PRIMARY KEY(RoleId, PermissionId),
+                FOREIGN KEY(RoleId) REFERENCES Roles(Id), FOREIGN KEY(PermissionId) REFERENCES Permissions(Id)
+            );
+            CREATE TABLE IF NOT EXISTS LoginEvents (
+                Id INTEGER NOT NULL CONSTRAINT PK_LoginEvents PRIMARY KEY AUTOINCREMENT,
+                UserId INTEGER NULL, UserName TEXT NOT NULL, Succeeded INTEGER NOT NULL,
+                Reason TEXT NOT NULL, ClientAddress TEXT NULL, OccurredAtUtc TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IX_LoginEvents_OccurredAtUtc ON LoginEvents(OccurredAtUtc);
+            CREATE INDEX IF NOT EXISTS IX_LoginEvents_UserName ON LoginEvents(UserName);
+            CREATE TABLE IF NOT EXISTS AuditEvents (
+                Id INTEGER NOT NULL CONSTRAINT PK_AuditEvents PRIMARY KEY AUTOINCREMENT,
+                EventId TEXT NOT NULL, ActorUserId INTEGER NULL, ActorName TEXT NOT NULL,
+                Action TEXT NOT NULL, ObjectType TEXT NOT NULL, ObjectId TEXT NULL,
+                Result TEXT NOT NULL, DetailsJson TEXT NOT NULL, OccurredAtUtc TEXT NOT NULL,
+                PreviousHash TEXT NULL, Hash TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_AuditEvents_EventId ON AuditEvents(EventId);
+            CREATE INDEX IF NOT EXISTS IX_AuditEvents_OccurredAtUtc ON AuditEvents(OccurredAtUtc);
+            CREATE INDEX IF NOT EXISTS IX_AuditEvents_Object ON AuditEvents(ObjectType, ObjectId);
+            CREATE TABLE IF NOT EXISTS BackupRecords (
+                Id INTEGER NOT NULL CONSTRAINT PK_BackupRecords PRIMARY KEY AUTOINCREMENT,
+                Path TEXT NOT NULL, Kind TEXT NOT NULL, Status TEXT NOT NULL,
+                Sha256 TEXT NULL, SizeBytes INTEGER NOT NULL DEFAULT 0,
+                CreatedAtUtc TEXT NOT NULL, Error TEXT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IX_BackupRecords_CreatedAtUtc ON BackupRecords(CreatedAtUtc);
+            CREATE TABLE IF NOT EXISTS HealthSnapshots (
+                Id INTEGER NOT NULL CONSTRAINT PK_HealthSnapshots PRIMARY KEY AUTOINCREMENT,
+                State TEXT NOT NULL, CpuUsage REAL NOT NULL, MemoryUsedBytes INTEGER NOT NULL,
+                MemoryTotalBytes INTEGER NOT NULL, GpuUsedBytes INTEGER NOT NULL,
+                GpuTotalBytes INTEGER NOT NULL, FreeDiskBytes INTEGER NOT NULL,
+                CapturedAtUtc TEXT NOT NULL, DetailsJson TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IX_HealthSnapshots_CapturedAtUtc ON HealthSnapshots(CapturedAtUtc);
+            CREATE TABLE IF NOT EXISTS Alerts (
+                Id INTEGER NOT NULL CONSTRAINT PK_Alerts PRIMARY KEY AUTOINCREMENT,
+                Code TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
+                DetailsJson TEXT NOT NULL, Status TEXT NOT NULL, FirstSeenAtUtc TEXT NOT NULL,
+                LastSeenAtUtc TEXT NOT NULL, AcknowledgedAtUtc TEXT NULL,
+                RecoveredAtUtc TEXT NULL, AcknowledgedBy TEXT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Alerts_Code_Status ON Alerts(Code, Status);
+            CREATE INDEX IF NOT EXISTS IX_Alerts_LastSeenAtUtc ON Alerts(LastSeenAtUtc);
+            INSERT OR IGNORE INTO SchemaMigrations(Version, AppliedAtUtc, Description)
+                VALUES ('20260906-commercial-foundation', CURRENT_TIMESTAMP, '商用化数据安全底座');
+            CREATE TABLE IF NOT EXISTS CommunicationRequests (
+                Id INTEGER NOT NULL CONSTRAINT PK_CommunicationRequests PRIMARY KEY AUTOINCREMENT,
+                ProjectCode TEXT NOT NULL, ClientId TEXT NOT NULL, RequestId TEXT NOT NULL,
+                Command TEXT NOT NULL, RequestHash TEXT NOT NULL, Status TEXT NOT NULL,
+                ResponseJson TEXT NULL, ReceivedAtUtc TEXT NOT NULL, CompletedAtUtc TEXT NULL,
+                ExpiresAtUtc TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_CommunicationRequests_Key
+                ON CommunicationRequests(ProjectCode, ClientId, RequestId);
+            CREATE INDEX IF NOT EXISTS IX_CommunicationRequests_ExpiresAtUtc
+                ON CommunicationRequests(ExpiresAtUtc);
+            CREATE TABLE IF NOT EXISTS RecipeVersions (
+                Id INTEGER NOT NULL CONSTRAINT PK_RecipeVersions PRIMARY KEY AUTOINCREMENT,
+                RecipeCode TEXT NOT NULL, Version INTEGER NOT NULL, State TEXT NOT NULL,
+                DefinitionJson TEXT NOT NULL, ContentSha256 TEXT NOT NULL, PublishedBy TEXT NULL,
+                CreatedAtUtc TEXT NOT NULL, PublishedAtUtc TEXT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_RecipeVersions_Key ON RecipeVersions(RecipeCode, Version);
+            CREATE INDEX IF NOT EXISTS IX_RecipeVersions_State ON RecipeVersions(RecipeCode, State);
+            CREATE TABLE IF NOT EXISTS ModelArtifacts (
+                Id INTEGER NOT NULL CONSTRAINT PK_ModelArtifacts PRIMARY KEY AUTOINCREMENT,
+                ModelCode TEXT NOT NULL, Version INTEGER NOT NULL, FilePath TEXT NOT NULL,
+                Sha256 TEXT NOT NULL, Algorithm TEXT NULL, State TEXT NOT NULL,
+                PublishedBy TEXT NULL, CreatedAtUtc TEXT NOT NULL, PublishedAtUtc TEXT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_ModelArtifacts_Key ON ModelArtifacts(ModelCode, Version);
+            CREATE INDEX IF NOT EXISTS IX_ModelArtifacts_Sha256 ON ModelArtifacts(Sha256);
+            CREATE TABLE IF NOT EXISTS DeploymentBindings (
+                Id INTEGER NOT NULL CONSTRAINT PK_DeploymentBindings PRIMARY KEY AUTOINCREMENT,
+                TargetCode TEXT NOT NULL, RecipeCode TEXT NOT NULL, RecipeVersion INTEGER NOT NULL,
+                ModelCode TEXT NOT NULL, ModelVersion INTEGER NOT NULL, State TEXT NOT NULL,
+                UpdatedBy TEXT NULL, UpdatedAtUtc TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_DeploymentBindings_TargetCode ON DeploymentBindings(TargetCode);
+            CREATE TABLE IF NOT EXISTS LicenseEvents (
+                Id INTEGER NOT NULL CONSTRAINT PK_LicenseEvents PRIMARY KEY AUTOINCREMENT,
+                LicenseId TEXT NOT NULL, EventType TEXT NOT NULL, DetailsJson TEXT NOT NULL, OccurredAtUtc TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IX_LicenseEvents_OccurredAtUtc ON LicenseEvents(OccurredAtUtc);
+            CREATE TABLE IF NOT EXISTS DatasetVersions (
+                Id INTEGER NOT NULL CONSTRAINT PK_DatasetVersions PRIMARY KEY AUTOINCREMENT,
+                DatasetCode TEXT NOT NULL, Version INTEGER NOT NULL, Sha256 TEXT NOT NULL,
+                TrainingCount INTEGER NOT NULL, ValidationCount INTEGER NOT NULL, CreatedBy TEXT NULL, CreatedAtUtc TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_DatasetVersions_Key ON DatasetVersions(DatasetCode, Version);
+            CREATE INDEX IF NOT EXISTS IX_DatasetVersions_Sha256 ON DatasetVersions(Sha256);
+            CREATE TABLE IF NOT EXISTS ReportJobs (
+                Id INTEGER NOT NULL CONSTRAINT PK_ReportJobs PRIMARY KEY AUTOINCREMENT,
+                Status TEXT NOT NULL, Format TEXT NOT NULL, FromUtc TEXT NOT NULL, ToUtc TEXT NOT NULL,
+                OutputPath TEXT NULL, CreatedAtUtc TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IX_ReportJobs_CreatedAtUtc ON ReportJobs(CreatedAtUtc);
+            """);
     }
 
     private static HashSet<string> ReadColumns(VisionDbContext db, string table)

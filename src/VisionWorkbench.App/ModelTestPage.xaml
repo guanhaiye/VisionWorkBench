@@ -2,6 +2,9 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:VisionWorkbench.App">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -12,7 +15,11 @@
         <TextBlock Text="测试平台" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
         <WrapPanel Grid.Row="1" Margin="0,0,0,10">
             <TextBlock Text="模型：" VerticalAlignment="Center"/>
-            <TextBox x:Name="ModelPathText" Width="360" IsReadOnly="True"/>
+            <ComboBox x:Name="ModelCombo" Width="360" DisplayMemberPath="DisplayName"
+                      SelectionChanged="ModelCombo_SelectionChanged"
+                      ToolTip="选择训练平台中已完成的模型节点"/>
+            <!-- 保留为测试服务的内部路径，不再让用户直接编辑。 -->
+            <TextBox x:Name="ModelPathText" Visibility="Collapsed" IsReadOnly="True"/>
             <Button Content="选择模型" Click="BrowseModel_Click"/>
             <Button Content="选择图片" Click="BrowseImage_Click"/>
             <Button Content="选择图片目录" Click="BrowseFolder_Click"/>

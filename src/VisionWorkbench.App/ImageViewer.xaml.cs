@@ -17,6 +17,10 @@ public class ImageViewer : ContentControl
     private ScaleTransform? _contentScale;
     private double _baseWidth;
     private double _baseHeight;
+    private bool _middleDragging;
+    private Point _middleDragStart;
+    private double _middleDragHorizontalOffset;
+    private double _middleDragVerticalOffset;
 
     public ImageViewer()
     {
@@ -52,6 +56,9 @@ public class ImageViewer : ContentControl
         }
 
         _viewer.PreviewMouseWheel += Viewer_PreviewMouseWheel;
+        _viewer.PreviewMouseDown += Viewer_PreviewMouseDown;
+        _viewer.PreviewMouseMove += Viewer_PreviewMouseMove;
+        _viewer.PreviewMouseUp += Viewer_PreviewMouseUp;
         _viewer.Loaded += Viewer_Loaded;
         _viewer.SizeChanged += Viewer_SizeChanged;
 
@@ -155,6 +162,47 @@ public class ImageViewer : ContentControl
         var anchor = e.GetPosition(_viewer);
         var next = e.Delta > 0 ? Zoom * 1.15 : Zoom / 1.15;
         ZoomAt(next, anchor);
+        e.Handled = true;
+    }
+
+    private void Viewer_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle || _viewer is null)
+        {
+            return;
+        }
+
+        _middleDragging = true;
+        _middleDragStart = e.GetPosition(_viewer);
+        _middleDragHorizontalOffset = _viewer.HorizontalOffset;
+        _middleDragVerticalOffset = _viewer.VerticalOffset;
+        _viewer.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void Viewer_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_middleDragging || _viewer is null || e.LeftButton is not MouseButtonState.Released)
+        {
+            return;
+        }
+
+        var current = e.GetPosition(_viewer);
+        var delta = current - _middleDragStart;
+        _viewer.ScrollToHorizontalOffset(_middleDragHorizontalOffset - delta.X);
+        _viewer.ScrollToVerticalOffset(_middleDragVerticalOffset - delta.Y);
+        e.Handled = true;
+    }
+
+    private void Viewer_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle || !_middleDragging || _viewer is null)
+        {
+            return;
+        }
+
+        _middleDragging = false;
+        _viewer.ReleaseMouseCapture();
         e.Handled = true;
     }
 

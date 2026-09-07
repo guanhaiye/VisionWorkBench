@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Threading;
 using System.Text.Json;
 using VisionWorkbench.Application.Communication;
+using System.Windows.Interop;
 
 namespace VisionWorkbench.App;
 
@@ -22,16 +23,34 @@ public partial class App : System.Windows.Application
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
     }
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName,
             out _ownsSingleInstanceMutex);
         if (!_ownsSingleInstanceMutex)
         {
-            ActivateExistingInstance();
-            Shutdown();
-            return;
+            if (ActivateExistingInstance())
+            {
+                Shutdown();
+                return;
+            }
+
+            // 旧实例可能只剩后台进程而没有任何窗口。清理后重新取得互斥体，
+            // 避免“软件已启动但用户看不到窗口”阻止后续启动。
+            try
+            {
+                _ownsSingleInstanceMutex = _singleInstanceMutex.WaitOne(TimeSpan.FromSeconds(3));
+            }
+            catch (AbandonedMutexException)
+            {
+                _ownsSingleInstanceMutex = true;
+            }
+            if (!_ownsSingleInstanceMutex)
+            {
+                Shutdown();
+                return;
+            }
         }
         // 启动页先于主窗口显示时，WPF 可能自动把启动页认作 MainWindow；
         // 若此时使用 OnMainWindowClose，关闭启动页会连带退出整个应用。
@@ -41,7 +60,8 @@ public partial class App : System.Windows.Application
         Dispatcher.Invoke(DispatcherPriority.Render, new Action(() => { }));
         try
         {
-            AppServices.Instance.Initialize();
+            // 初始化包含数据库建表、完整性检查和权限种子写入，不能阻塞 WPF UI 线程。
+            await Task.Run(AppServices.Instance.Initialize);
             ThemeManager.Apply(AppServices.Instance.Settings.ThemeMode);
             ThemeManager.ApplyUiScale(AppServices.Instance.Settings.UiScale);
         }
@@ -71,7 +91,16 @@ public partial class App : System.Windows.Application
                 }
             };
             _shell.Show();
+            _shell.Visibility = Visibility.Visible;
+            _shell.WindowState = WindowState.Normal;
+            _shell.ShowInTaskbar = true;
             _shell.Activate();
+            var shellHandle = new WindowInteropHelper(_shell).Handle;
+            if (shellHandle != IntPtr.Zero)
+            {
+                ShowWindowAsync(shellHandle, 9); // SW_RESTORE
+                SetForegroundWindow(shellHandle);
+            }
             splash.Close();
         }
         catch (Exception ex)
@@ -114,7 +143,7 @@ public partial class App : System.Windows.Application
     {
         try
         {
-            var path = Path.Combine(AppServices.Instance.Settings.DataDirectory, "tcp-communication.json");
+            var path = Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "tcp-communication.json");
             if (!File.Exists(path)) return;
             var configs = JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(path));
             var config = configs?.Values.FirstOrDefault(x => x.Enabled && x.AutoStart);
@@ -136,6 +165,8 @@ public partial class App : System.Windows.Application
         catch (Exception)
         {
         }
+        try { AppServices.Instance.AutomaticBackups.Dispose(); } catch (Exception) { }
+        try { AppServices.Instance.HealthMonitor.Dispose(); } catch (Exception) { }
         try
         {
             AppServices.Instance.StationRuns.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -184,14 +215,48 @@ public partial class App : System.Windows.Application
         base.OnExit(e);
     }
 
-    private static void ActivateExistingInstance()
+    private static bool ActivateExistingInstance()
     {
         var existing = Process.GetProcessesByName("VisionWorkbench")
             .FirstOrDefault(process => process.Id != Environment.ProcessId
-                && process.MainWindowHandle != IntPtr.Zero);
-        if (existing is null) return;
-        ShowWindowAsync(existing.MainWindowHandle, 9); // SW_RESTORE
-        SetForegroundWindow(existing.MainWindowHandle);
+                && !process.HasExited);
+        if (existing is null) return false;
+
+        // 正常启动中的实例可能需要几秒才创建主窗口。
+        for (var attempt = 0; attempt < 32; attempt++)
+        {
+            try
+            {
+                existing.Refresh();
+                if (existing.HasExited) return false;
+                if (existing.MainWindowHandle != IntPtr.Zero)
+                {
+                    ShowWindowAsync(existing.MainWindowHandle, 9); // SW_RESTORE
+                    SetForegroundWindow(existing.MainWindowHandle);
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+            Thread.Sleep(250);
+        }
+
+        // 等待后仍没有窗口，说明是启动异常留下的后台残留进程。
+        try
+        {
+            if (!existing.HasExited)
+            {
+                existing.Kill(entireProcessTree: true);
+                existing.WaitForExit(3000);
+            }
+        }
+        catch
+        {
+            // 由后续互斥体获取结果决定是否继续启动。
+        }
+        return false;
     }
 
     [DllImport("user32.dll")]

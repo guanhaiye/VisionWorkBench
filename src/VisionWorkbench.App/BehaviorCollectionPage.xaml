@@ -11,11 +11,17 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <WrapPanel Grid.Row="0" Margin="0,0,0,8">
-            <Button Content="&#x65B0;&#x5EFA;&#x884C;&#x4E3A;&#x6570;&#x636E;&#x96C6;" Click="NewDataset_Click" Padding="12,5" />
-            <Button Content="&#x52A0;&#x8F7D;&#x6570;&#x636E;&#x96C6;" Click="LoadDataset_Click" Margin="6,0,0,0" Padding="12,5" />
-            <Button Content="&#x5BFC;&#x5165;&#x89C6;&#x9891;" Click="ImportVideo_Click" Margin="6,0,0,0" Padding="12,5" />
-            <Button Content="&#x5BFC;&#x5165;&#x56FE;&#x7247;&#x5E8F;&#x5217;" Click="ImportFrames_Click" Margin="6,0,0,0" Padding="12,5" />
-            <Button Content="&#x6253;&#x5F00;&#x6570;&#x636E;&#x96C6;&#x76EE;&#x5F55;" Click="OpenDirectory_Click" Margin="6,0,0,0" Padding="12,5" />
+            <WrapPanel.Resources>
+                <Style TargetType="Button" BasedOn="{StaticResource AnnotationToolbarButton}" />
+            </WrapPanel.Resources>
+            <Button Content="&#x65B0;&#x5EFA;&#x6570;&#x636E;&#x96C6;" Click="NewDataset_Click" />
+            <Button Content="&#x52A0;&#x8F7D;&#x6570;&#x636E;&#x96C6;" Click="LoadDataset_Click" Margin="6,0,0,0" />
+            <Button Content="&#x5BFC;&#x5165;&#x89C6;&#x9891;" Click="ImportVideo_Click" Margin="6,0,0,0" />
+            <Button Content="&#x5BFC;&#x5165;&#x56FE;&#x7247;&#x5E8F;&#x5217;" Click="ImportFrames_Click" Margin="6,0,0,0" />
+            <Button Content="&#x4FDD;&#x5B58;&#x6570;&#x636E;&#x96C6;" Click="SaveDataset_Click" Margin="6,0,0,0" />
+            <Button Content="&#x81EA;&#x52A8;&#x5212;&#x5206;&#x6570;&#x636E;&#x96C6;" Click="AutoSplitDataset_Click" Margin="6,0,0,0" />
+            <Button Content="&#x5BFC;&#x51FA;&#x6570;&#x636E;&#x96C6;" Click="ExportDataset_Click" Margin="6,0,0,0" />
+            <Button Content="&#x6253;&#x5F00;&#x6570;&#x636E;&#x96C6;&#x76EE;&#x5F55;" Click="OpenDirectory_Click" Margin="6,0,0,0" />
         </WrapPanel>
         <Grid Grid.Row="1" Margin="0,0,0,8">
             <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" /><ColumnDefinition Width="2*" /></Grid.ColumnDefinitions>

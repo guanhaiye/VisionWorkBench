@@ -18,16 +18,32 @@ public partial class CommunicationPage : UserControl
     public CommunicationPage()
     {
         InitializeComponent();
+        MoveStateToBottomRight();
         ManualText.Text = "{\"command\":\"ping\",\"requestId\":\"PING-001\"}";
-        _configFile = Path.Combine(AppServices.Instance.Settings.DataDirectory, "tcp-communication.json");
+        _configFile = Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "tcp-communication.json");
         AppServices.Instance.TcpCommunication.LogReceived += Tcp_LogReceived;
         AppServices.Instance.TcpCommunication.StateChanged += Tcp_StateChanged;
         Loaded += async (_, _) => await LoadProjectsAsync();
         Unloaded += (_, _) => { AppServices.Instance.TcpCommunication.LogReceived -= Tcp_LogReceived; AppServices.Instance.TcpCommunication.StateChanged -= Tcp_StateChanged; };
     }
+
+    private void MoveStateToBottomRight()
+    {
+        if (StateText.Parent is Panel parent) parent.Children.Remove(StateText);
+        Grid.SetRow(StateText, 4);
+        Grid.SetColumn(StateText, 0);
+        Grid.SetColumnSpan(StateText, 3);
+        StateText.HorizontalAlignment = HorizontalAlignment.Right;
+        StateText.TextAlignment = TextAlignment.Right;
+        StateText.TextWrapping = TextWrapping.Wrap;
+        StateText.MaxWidth = 620;
+        StateText.Margin = new Thickness(0, 0, 0, 2);
+        RightContentGrid.Children.Add(StateText);
+    }
     private async Task LoadProjectsAsync()
     {
-        _projects = await AppServices.Instance.Projects.ListProjectsAsync(); ProjectCombo.ItemsSource = _projects; ProjectCombo.DisplayMemberPath = "Name";
+        _projects = await AppServices.Instance.Projects.ListProjectsAsync();
+        ProjectCombo.ItemsSource = _projects;
         if (_projects.Count > 0) ProjectCombo.SelectedIndex = 0;
         _triggerTasks = await AppServices.Instance.Tasks.ListAsync();
         TriggerTaskCombo.ItemsSource = _triggerTasks;
@@ -59,7 +75,7 @@ public partial class CommunicationPage : UserControl
     {
         try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); StateText.Text = "配置已保存"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
-    private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
+    private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式" : "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
     private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
     private async void Send_Click(object sender, RoutedEventArgs e)
     { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -20,7 +21,10 @@ namespace VisionWorkbench.App;
 public sealed class AppSettings
 {
     public string DataDirectory { get; set; } =
-        Path.Combine(FindProjectRoot(), "data");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VisionWorkbench");
+    /// <summary>软件可持久化参数的统一目录。</summary>
+    [JsonIgnore]
+    public string ConfigDirectory => Path.Combine(DataDirectory, "Config");
     /// <summary>标注平台新建数据集的独立存储根目录，默认使用 E 盘。</summary>
     public string DatasetDirectory { get; set; } = @"E:\";
     public string? PluginsRoot { get; set; }
@@ -29,16 +33,31 @@ public sealed class AppSettings
     public string? Sam1ModelPath { get; set; }
     // 兼容早期预览版设置文件；新配置统一使用 Sam1ModelPath。
     public string? Sam3ModelPath { get; set; }
+    /// <summary>许可证验证公钥，仅允许放置公钥，不允许放置签发私钥。</summary>
+    public string? LicensePublicKey { get; set; }
     public string ExecutionProvider { get; set; } = "cpu";
     public string CurrentRole { get; set; } = "engineer";
     public string OperatorName { get; set; } = "";
     public string? AvatarPath { get; set; }
     public string? PasswordHash { get; set; }
+    public bool RememberLoginPassword { get; set; }
+    public bool AutoLogin { get; set; }
+    public string? RememberedLoginUserName { get; set; }
+    /// <summary>使用当前 Windows 用户保护的登录密码，不保存明文密码。</summary>
+    public string? RememberedLoginPassword { get; set; }
     public List<UserAccount> Accounts { get; set; } = [];
     public string ThemeMode { get; set; } = "light";
     public double UiScale { get; set; } = 1.0;
     public string? ResultWebhookUrl { get; set; }
     public bool EnableHistory { get; set; } = true;
+    /// <summary>是否启用参数自动备份。</summary>
+    public bool AutomaticBackupEnabled { get; set; } = true;
+    /// <summary>参数自动备份间隔，单位为分钟。</summary>
+    public int AutomaticBackupIntervalMinutes { get; set; } = 1440;
+    /// <summary>自动备份最多保留的版本数量。</summary>
+    public int AutomaticBackupRetentionCount { get; set; } = 30;
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public LogPersistenceLevel LogPersistenceLevel { get; set; } = VisionWorkbench.Infrastructure.Logging.LogPersistenceLevel.All;
     /// <summary>实时检测页面的窗口布局。</summary>
     public string LiveLayout { get; set; } = "grid";
     /// <summary>实时检测页面上次添加的任务面板。</summary>
@@ -77,6 +96,27 @@ public sealed class AppServices
     public TempImageStore TempImages { get; private set; } = null!;
     public VisionDbContextFactory Database { get; private set; } = null!;
     public DatabaseBackupService DatabaseBackup { get; private set; } = null!;
+    public DatabaseMigrationService DatabaseMigrations { get; private set; } = null!;
+    public BackupPackageService BackupPackages { get; private set; } = null!;
+    public AutomaticBackupService AutomaticBackups { get; private set; } = null!;
+    public AssetGovernanceService AssetGovernance { get; private set; } = null!;
+    public DataRetentionService DataRetention { get; private set; } = null!;
+    public ReleaseManifestService Releases { get; private set; } = null!;
+    public OfflineUpdateService OfflineUpdates { get; private set; } = null!;
+    public DeviceAdapterRegistry DeviceAdapters { get; private set; } = null!;
+    public AuditService Audit { get; private set; } = null!;
+    public AccessControlService AccessControl { get; private set; } = null!;
+    public IdentityService Identity { get; private set; } = null!;
+    public SessionService Session { get; private set; } = null!;
+    public DatabaseIntegrityService DatabaseIntegrity { get; private set; } = null!;
+    public HealthService Health { get; private set; } = null!;
+    public HealthMetricsCollector HealthMetrics { get; private set; } = null!;
+    public HealthMonitorService HealthMonitor { get; private set; } = null!;
+    public HealthRecoveryService Recovery { get; private set; } = null!;
+    public ReportingService Reporting { get; private set; } = null!;
+    public FeedbackService Feedback { get; private set; } = null!;
+    public DatasetVersionService DatasetVersions { get; private set; } = null!;
+    public LicenseService License { get; private set; } = null!;
     public ResultPublisher ResultPublisher { get; private set; } = null!;
     public TaskRepository Tasks { get; private set; } = null!;
     public ProjectStationRepository Projects { get; private set; } = null!;
@@ -101,7 +141,7 @@ public sealed class AppServices
     /// <summary>初始化：配置 → 日志 → 数据库 → 相机/算法/应用服务。</summary>
     public void Initialize()
     {
-        // 1. 配置：exe 目录 appsettings.json + 数据目录 settings.json（用户可改项）
+        // 1. 配置：exe 目录 appsettings.json（只读默认值）+ Config/settings.json（用户可改项）
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
@@ -122,9 +162,12 @@ public sealed class AppServices
         Settings.OperatorName = string.IsNullOrWhiteSpace(Settings.OperatorName)
             ? Environment.UserName
             : Settings.OperatorName;
+        var configuredLicensePublicKey = Settings.LicensePublicKey;
 
         Directory.CreateDirectory(Settings.DataDirectory);
-        SettingsFile = Path.Combine(Settings.DataDirectory, "settings.json");
+        Directory.CreateDirectory(Settings.ConfigDirectory);
+        MigrateLegacyConfigFile("settings.json");
+        SettingsFile = Path.Combine(Settings.ConfigDirectory, "settings.json");
         if (File.Exists(SettingsFile))
         {
             try
@@ -133,6 +176,11 @@ public sealed class AppServices
                 if (user is not null)
                 {
                     user.DataDirectory = Settings.DataDirectory; // 数据目录自身不可自指覆盖
+                    // 用户配置中的空公钥不能覆盖程序目录中配置的许可证公钥。
+                    if (string.IsNullOrWhiteSpace(user.LicensePublicKey))
+                    {
+                        user.LicensePublicKey = configuredLicensePublicKey;
+                    }
                     Settings = user;
                 }
             }
@@ -145,17 +193,55 @@ public sealed class AppServices
         EnsureAccounts();
 
         // 2. 日志（DIA-003：application / algorithm-manager / database / camera 分文件）
+        foreach (var fileName in new[] { "visionworkbench.db", "visionworkbench.db-wal", "visionworkbench.db-shm", "datasets.json", "tcp-communication.json", "license.json", "license-clock.dat", "license-clock.v2", "license-clock.json" })
+        {
+            MigrateLegacyConfigFile(fileName);
+        }
+
         var logsDir = Path.Combine(Settings.DataDirectory, "logs");
+        LogSetup.SetPersistenceLevel(Settings.LogPersistenceLevel);
         LoggerFactory = LogSetup.CreateFactory(logsDir);
 
         // 3. 数据库（APP-003：数据目录支持中文/空格；工厂模式保证多线程安全）
-        var dbPath = Path.Combine(Settings.DataDirectory, "visionworkbench.db");
+        var dbPath = Path.Combine(Settings.ConfigDirectory, "visionworkbench.db");
         Database = VisionDbContextFactory.Create(dbPath);
         DatabaseBackup = new DatabaseBackupService(Database);
+        DatabaseMigrations = new DatabaseMigrationService(Database);
+        BackupPackages = new BackupPackageService(Database, SettingsFile, Settings.DataDirectory);
+        AutomaticBackups = new AutomaticBackupService(
+            BackupPackages,
+            SettingsFile,
+            Settings.DataDirectory,
+            Settings.AutomaticBackupEnabled,
+            Settings.AutomaticBackupIntervalMinutes,
+            Settings.AutomaticBackupRetentionCount);
+        Audit = new AuditService(Database);
+        BackupPackages.AuditSink = Audit;
+        DataRetention = new DataRetentionService(Database);
+        Releases = new ReleaseManifestService();
+        OfflineUpdates = new OfflineUpdateService(Releases);
+        DeviceAdapters = new DeviceAdapterRegistry();
+        AccessControl = new AccessControlService(Database);
+        AssetGovernance = new AssetGovernanceService(Database, Audit, AccessControl);
+        Identity = new IdentityService(Database, Audit);
+        Session = new SessionService();
+        DatabaseIntegrity = new DatabaseIntegrityService(Database);
+        Health = new HealthService(Database);
+        HealthMetrics = new HealthMetricsCollector(Health, Settings.DataDirectory);
+        HealthMonitor = new HealthMonitorService(HealthMetrics);
+        Recovery = new HealthRecoveryService(Health);
+        Reporting = new ReportingService(Database);
+        Feedback = new FeedbackService(Database);
+        DatasetVersions = new DatasetVersionService(Database);
+        License = new LicenseService(Settings.ConfigDirectory, Settings.LicensePublicKey, Database);
+        var schemaStatus = DatabaseMigrations.CheckAsync().GetAwaiter().GetResult();
+        if (!schemaStatus.IntegrityOk) throw new InvalidOperationException("DB-001 数据库完整性检查失败");
+        AccessControl.EnsureSeededAsync().GetAwaiter().GetResult();
+        MigrateAccountsToDatabase();
         ResultPublisher = new ResultPublisher(
             Path.Combine(Settings.DataDirectory, "results", "results.jsonl"),
             Settings.ResultWebhookUrl);
-        Datasets = new DatasetCatalogService(Settings.DataDirectory);
+        Datasets = new DatasetCatalogService(Settings.ConfigDirectory);
         Tasks = new TaskRepository(Database);
         Projects = new ProjectStationRepository(Database);
         Records = new RecordRepository(Database);
@@ -164,7 +250,7 @@ public sealed class AppServices
         BatchService = new BatchService(Batches);
         TcpCommunication = new ProjectCommunicationManager(
             Projects, Tasks, LoggerFactory.CreateLogger<ProjectCommunicationManager>(),
-            Path.Combine(logsDir, "tcp"));
+            Path.Combine(logsDir, "tcp"), new CommunicationRequestStore(Database));
 
         // 4. 临时图片 + 清理（FRM-005）
         TempImages = new TempImageStore(Path.Combine(Settings.DataDirectory, "temp-images")).Initialize();
@@ -211,6 +297,13 @@ public sealed class AppServices
             () => Settings.EnableHistory,
             () => Settings.EnableHistory);
         TcpCommunication.TaskExecutor = new TcpTaskExecutionService(this).ExecuteAsync;
+        BackupPackages.RestoreGuard = () => StationRuns.RunningStationIds.Count == 0
+            && !Yolo11Training.IsRunning
+            && !Atu5Training.IsRunning
+            && !BehaviorTraining.IsRunning;
+        BackupPackages.PreRestoreBackup = ct => BackupPackages.CreateAsync(
+            Path.Combine(Settings.DataDirectory, "backups", $"pre-restore-{DateTime.UtcNow:yyyyMMdd-HHmmss}.vwbackup"),
+            SettingsFile, Settings.DataDirectory, "pre-restore", ct);
 
         // 7. DI 容器（页面按需取服务）
         var services = new ServiceCollection();
@@ -221,8 +314,72 @@ public sealed class AppServices
 
     public void SaveUserSettings()
     {
+        LogSetup.SetPersistenceLevel(Settings.LogPersistenceLevel);
         var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(SettingsFile, json);
+        var temporaryPath = SettingsFile + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            // 先完整写入临时文件，再一次性替换，避免断电或备份并发读取到半截 JSON。
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, SettingsFile, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch { }
+        }
+    }
+
+    private void MigrateLegacyConfigFile(string fileName)
+    {
+        var legacyPath = Path.Combine(Settings.DataDirectory, fileName);
+        var configPath = Path.Combine(Settings.ConfigDirectory, fileName);
+        if (File.Exists(configPath) || !File.Exists(legacyPath)) return;
+        try
+        {
+            File.Copy(legacyPath, configPath, overwrite: false);
+        }
+        catch (IOException)
+        {
+            // 保留旧文件，避免迁移失败时丢失配置。
+        }
+    }
+
+    /// <summary>把旧版 settings.json 账号一次性迁入 RBAC 表；保留 JSON 仅为兼容旧版本回滚。</summary>
+    private void MigrateAccountsToDatabase()
+    {
+        using var db = Database.CreateDbContext();
+        foreach (var account in Settings.Accounts.Where(item => !string.IsNullOrWhiteSpace(item.UserName)))
+        {
+            var user = db.Users.FirstOrDefault(item => item.UserName == account.UserName);
+            if (user is null)
+            {
+                user = new UserEntity
+                {
+                    UserName = account.UserName.Trim(),
+                    PasswordHash = account.PasswordHash,
+                    IsEnabled = account.IsEnabled,
+                    CreatedAtUtc = account.CreatedAt.ToUniversalTime(),
+                    UpdatedAtUtc = DateTime.UtcNow,
+                };
+                db.Users.Add(user);
+                db.SaveChanges();
+            }
+            else
+            {
+                user.PasswordHash = account.PasswordHash;
+                user.IsEnabled = account.IsEnabled;
+                user.UpdatedAtUtc = DateTime.UtcNow;
+                db.SaveChanges();
+            }
+
+            var roleCode = account.IsSuperAdmin ? "admin" : account.Role.Trim().ToLowerInvariant();
+            var role = db.Roles.FirstOrDefault(item => item.Code == roleCode) ?? db.Roles.First(item => item.Code == "operator");
+            if (!db.UserRoles.Any(item => item.UserId == user.Id && item.RoleId == role.Id))
+            {
+                db.UserRoles.Add(new UserRoleEntity { UserId = user.Id, RoleId = role.Id });
+                db.SaveChanges();
+            }
+        }
     }
 
     private void EnsureAccounts()

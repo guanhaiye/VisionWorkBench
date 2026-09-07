@@ -53,6 +53,9 @@ public partial class DatasetAnnotationPage : UserControl
     private SmartAnnotationObjectResult? _sam1HoverPreview;
     private int _sam1HoverVersion;
     private bool _sam1HoverBusy;
+    private bool _showAnnotationInfo = true;
+    private bool _showBoundingBoxes = true;
+    private bool _showContours = true;
     private double _zoom = 1;
     private readonly List<Point> _polygonPoints = [];
     private Polyline? _polygonDraft;
@@ -83,6 +86,16 @@ public partial class DatasetAnnotationPage : UserControl
     {
         _platform = platform;
         InitializeComponent();
+        var showInstanceSegmentationOptions = platform == AnnotationPlatform.InstanceSegmentation;
+        InstanceSegmentationOptionsSeparator.Visibility = showInstanceSegmentationOptions
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BoundingBoxCheckBox.Visibility = showInstanceSegmentationOptions
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ContourCheckBox.Visibility = showInstanceSegmentationOptions
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         AnnotationScrollViewer.ZoomChanged += (_, zoom) =>
         {
             _zoom = zoom;
@@ -105,11 +118,35 @@ public partial class DatasetAnnotationPage : UserControl
         // waiting for the pointer to become stationary.
         _sam1HoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _sam1HoverTimer.Tick += Sam1HoverTimer_Tick;
-        Loaded += (_, _) => RefreshDatasets();
+        Loaded += (_, _) =>
+        {
+            PanelOption_Changed(this, new RoutedEventArgs());
+            RefreshDatasets();
+        };
         IsVisibleChanged += (_, args) =>
         {
             if (args.NewValue is true) RefreshDatasets(_dataset?.Id);
         };
+    }
+
+    private void PanelOption_Changed(object sender, RoutedEventArgs e)
+    {
+        if (DatasetInfoPanel is null || AnnotationToolsPanel is null ||
+            AnnotationInfoHeaderRow is null || AnnotationInfoListRow is null ||
+            AnnotationInfoCheckBox is null || BoundingBoxCheckBox is null || ContourCheckBox is null)
+        {
+            return;
+        }
+
+        DatasetInfoPanel.Visibility = Visibility.Visible;
+        AnnotationToolsPanel.Visibility = Visibility.Visible;
+
+        _showAnnotationInfo = AnnotationInfoCheckBox.IsChecked == true;
+        _showBoundingBoxes = BoundingBoxCheckBox.IsChecked == true;
+        _showContours = ContourCheckBox.IsChecked == true;
+        AnnotationInfoHeaderRow.Height = GridLength.Auto;
+        AnnotationInfoListRow.Height = GridLength.Auto;
+        RenderAnnotations();
     }
 
     private void RefreshDatasets(string? selectId = null)
@@ -162,6 +199,7 @@ public partial class DatasetAnnotationPage : UserControl
         ClassCombo.SelectedIndex = 0;
         UpdateTaskTypeUi();
         ImageList.ItemsSource = null;
+        UpdateImageListEmptyState();
         ClearImageView();
         var datasets = VisibleDatasets();
         datasets.Add(_dataset);
@@ -227,6 +265,7 @@ public partial class DatasetAnnotationPage : UserControl
         var images = AppServices.Instance.Datasets.ListImages(probe);
         var classes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var hasPolygon = false;
+        var hasPose = false;
         foreach (var image in images)
         {
             var annotation = AppServices.Instance.Datasets.LoadAnnotation(probe, image.RelativePath);
@@ -235,12 +274,16 @@ public partial class DatasetAnnotationPage : UserControl
                 if (!string.IsNullOrWhiteSpace(item.ClassName)) classes.Add(item.ClassName.Trim());
                 if (item.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && item.Polygon.Count >= 3)
                     hasPolygon = true;
+                if (item.Shape.Equals("pose", StringComparison.OrdinalIgnoreCase) && item.Keypoints.Count > 0)
+                    hasPose = true;
             }
         }
 
         var semanticMaskDirectory = Directory.Exists(System.IO.Path.Combine(rootDirectory, "masks")) ||
                                     Directory.Exists(System.IO.Path.Combine(rootDirectory, ".visionworkbench", "masks"));
-        var taskType = semanticMaskDirectory
+        var taskType = hasPose
+            ? "pose"
+            : semanticMaskDirectory
             ? "semantic_segmentation"
             : hasPolygon
                 ? "instance_segmentation"
@@ -306,6 +349,7 @@ public partial class DatasetAnnotationPage : UserControl
                 RefreshDatasets(_dataset.Id);
                 var images = AppServices.Instance.Datasets.ListImages(_dataset);
                 ImageList.ItemsSource = images;
+                UpdateImageListEmptyState();
                 ImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
                 StatusText.Text = $"已读取 {sourceDirectory}，图片已复制到独立数据集目录，共 {images.Count} 张。原始目录未修改。";
             }
@@ -518,6 +562,7 @@ public partial class DatasetAnnotationPage : UserControl
         try
         {
             ImageList.ItemsSource = images;
+            UpdateImageListEmptyState();
             if (selectedRelativePath is not null)
             {
                 var selected = images.FirstOrDefault(x => x.RelativePath == selectedRelativePath);
@@ -529,6 +574,13 @@ public partial class DatasetAnnotationPage : UserControl
         {
             if (suppressSelectionChanged) _refreshingImageList = false;
         }
+    }
+
+    private void UpdateImageListEmptyState()
+    {
+        ImageListEmptyText.Visibility = ImageList.Items.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void DatasetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -543,6 +595,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (ClassCombo.Items.Count > 0) ClassCombo.SelectedIndex = 0;
         UpdateTaskTypeUi();
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(dataset);
+        UpdateImageListEmptyState();
         ClearImageView();
         var shapeName = IsPolygonMode() ? "多边形" : "矩形框";
         StatusText.Text = $"{dataset.Name}：{ImageList.Items.Count} 张图片。标注形状为{shapeName}。";
@@ -853,6 +906,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         if (_manualDrawMode && IsPolygonMode())
         {
+            if (!TryGetImageNormalizedPoint(point, GetImageRect(), out _)) return;
             _polygonPoints.Add(point);
             if (e.ClickCount >= 2 && _polygonPoints.Count >= 3)
             {
@@ -884,9 +938,10 @@ public partial class DatasetAnnotationPage : UserControl
             return;
         }
         if (IsPolygonMode()) return;
+        if (!TryGetImageNormalizedPoint(point, GetImageRect(), out _)) return;
         _dragging = true;
-        _dragStart = e.GetPosition(AnnotationCanvas);
-        _draft = new Rectangle { Stroke = Brushes.Yellow, StrokeThickness = 2, StrokeDashArray = [4, 2] };
+        _dragStart = point;
+        _draft = new Rectangle { Stroke = Brushes.Yellow, StrokeThickness = OverlayStrokeThickness(1.1), StrokeDashArray = [4, 2] };
         AnnotationCanvas.Children.Add(_draft);
         AnnotationCanvas.CaptureMouse();
     }
@@ -929,7 +984,8 @@ public partial class DatasetAnnotationPage : UserControl
             return;
         }
         if (!_dragging || _draft is null) return;
-        UpdateRectangle(_draft, _dragStart, e.GetPosition(AnnotationCanvas));
+        var imageRect = GetImageRect();
+        UpdateRectangle(_draft, _dragStart, ClampPointToRect(e.GetPosition(AnnotationCanvas), imageRect));
     }
 
     private void AnnotationCanvas_MouseEnter(object sender, MouseEventArgs e)
@@ -987,7 +1043,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (IsPolygonMode()) return;
         if (!_dragging || _draft is null || _annotation is null || ClassCombo.SelectedItem is not string className)
             return;
-        var end = e.GetPosition(AnnotationCanvas);
+        var end = ClampPointToRect(e.GetPosition(AnnotationCanvas), GetImageRect());
         var left = Math.Min(_dragStart.X, end.X);
         var top = Math.Min(_dragStart.Y, end.Y);
         var width = Math.Abs(end.X - _dragStart.X);
@@ -1000,16 +1056,15 @@ public partial class DatasetAnnotationPage : UserControl
             RenderAnnotations();
             return;
         }
-        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
-        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
+        var imageRect = GetImageRect();
         _annotation.Objects.Add(new DatasetAnnotationObject
         {
             ClassName = className,
             Shape = "bbox",
-            X = Math.Clamp(left / canvasWidth, 0, 1),
-            Y = Math.Clamp(top / canvasHeight, 0, 1),
-            Width = Math.Clamp(width / canvasWidth, 0, 1),
-            Height = Math.Clamp(height / canvasHeight, 0, 1),
+            X = Math.Clamp((left - imageRect.Left) / imageRect.Width, 0, 1),
+            Y = Math.Clamp((top - imageRect.Top) / imageRect.Height, 0, 1),
+            Width = Math.Clamp(width / imageRect.Width, 0, 1),
+            Height = Math.Clamp(height / imageRect.Height, 0, 1),
         });
         AnnotationList.ItemsSource = null;
         AnnotationList.ItemsSource = _annotation.Objects;
@@ -1109,12 +1164,11 @@ public partial class DatasetAnnotationPage : UserControl
         {
             return;
         }
-        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
-        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
+        var imageRect = GetImageRect();
         var points = _polygonPoints.Select(point => new DatasetPoint
         {
-            X = Math.Clamp(point.X / canvasWidth, 0, 1),
-            Y = Math.Clamp(point.Y / canvasHeight, 0, 1),
+            X = Math.Clamp((point.X - imageRect.Left) / imageRect.Width, 0, 1),
+            Y = Math.Clamp((point.Y - imageRect.Top) / imageRect.Height, 0, 1),
         }).ToList();
         var minX = points.Min(point => point.X);
         var minY = points.Min(point => point.Y);
@@ -1146,7 +1200,7 @@ public partial class DatasetAnnotationPage : UserControl
             _polygonDraft = new Polyline
             {
                 Stroke = Brushes.Yellow,
-                StrokeThickness = 2,
+                StrokeThickness = OverlayStrokeThickness(1.1),
                 StrokeDashArray = [4, 2],
                 IsHitTestVisible = false,
             };
@@ -1170,12 +1224,13 @@ public partial class DatasetAnnotationPage : UserControl
     private void EraseStroke(IReadOnlyList<Point> stroke)
     {
         if (_annotation is null || stroke.Count == 0 || AnnotationCanvas.ActualWidth < 1 || AnnotationCanvas.ActualHeight < 1) return;
-        var rasterWidth = Math.Clamp((int)Math.Round(AnnotationCanvas.ActualWidth), 64, 2048);
-        var rasterHeight = Math.Clamp((int)Math.Round(AnnotationCanvas.ActualHeight), 64, 2048);
+        var imageRect = GetImageRect();
+        var rasterWidth = Math.Clamp((int)Math.Round(imageRect.Width), 64, 2048);
+        var rasterHeight = Math.Clamp((int)Math.Round(imageRect.Height), 64, 2048);
         var rasterStroke = stroke.Select(point => new OpenCvSharp.Point(
-            Math.Clamp((int)Math.Round(point.X / AnnotationCanvas.ActualWidth * rasterWidth), 0, rasterWidth - 1),
-            Math.Clamp((int)Math.Round(point.Y / AnnotationCanvas.ActualHeight * rasterHeight), 0, rasterHeight - 1))).ToArray();
-        var thickness = Math.Max(2, (int)Math.Round(_eraserDiameter / AnnotationCanvas.ActualWidth * rasterWidth));
+            Math.Clamp((int)Math.Round((point.X - imageRect.Left) / imageRect.Width * rasterWidth), 0, rasterWidth - 1),
+            Math.Clamp((int)Math.Round((point.Y - imageRect.Top) / imageRect.Height * rasterHeight), 0, rasterHeight - 1))).ToArray();
+        var thickness = Math.Max(2, (int)Math.Round(_eraserDiameter / imageRect.Width * rasterWidth));
 
         var changed = false;
         for (var index = _annotation.Objects.Count - 1; index >= 0; index--)
@@ -1251,6 +1306,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (_dataset is null || _image is null || _annotation is null) return;
         AppServices.Instance.Datasets.SaveAnnotation(_dataset, _annotation);
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset);
+        UpdateImageListEmptyState();
         ImageList.SelectedItem = ((IEnumerable<DatasetImageItem>)ImageList.ItemsSource)
             .FirstOrDefault(x => x.RelativePath == _image.RelativePath);
         StatusText.Text = $"标注已保存：{_image.RelativePath}，共 {_annotation.Objects.Count} 个对象。";
@@ -1307,46 +1363,53 @@ public partial class DatasetAnnotationPage : UserControl
         _eraserStrokeVisual = null;
         _eraserCursorVisual = null;
         if (_annotation is null) return;
+        if (!_showAnnotationInfo) return;
+        var imageRect = GetImageRect();
         var selected = AnnotationList.SelectedIndex;
+        var normalStroke = OverlayStrokeThickness(1.1);
+        var selectedStroke = OverlayStrokeThickness(1.6);
         for (var i = 0; i < _annotation.Objects.Count; i++)
         {
             var obj = _annotation.Objects[i];
             var hasPolygon = obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3;
             var semanticPolygon = _dataset?.TaskType == "semantic_segmentation" && hasPolygon;
-            if (!semanticPolygon)
+            if (!semanticPolygon && _showBoundingBoxes)
             {
                 var rectangle = new Rectangle
                 {
-                    Width = Math.Max(1, obj.Width * AnnotationCanvas.ActualWidth),
-                    Height = Math.Max(1, obj.Height * AnnotationCanvas.ActualHeight),
+                    Width = Math.Max(1, obj.Width * imageRect.Width),
+                    Height = Math.Max(1, obj.Height * imageRect.Height),
                     Stroke = i == selected ? Brushes.Lime : Brushes.Orange,
-                    StrokeThickness = i == selected ? 3 : 2,
+                    StrokeThickness = i == selected ? selectedStroke : normalStroke,
                     IsHitTestVisible = false,
                 };
-                Canvas.SetLeft(rectangle, obj.X * AnnotationCanvas.ActualWidth);
-                Canvas.SetTop(rectangle, obj.Y * AnnotationCanvas.ActualHeight);
+                Canvas.SetLeft(rectangle, imageRect.Left + obj.X * imageRect.Width);
+                Canvas.SetTop(rectangle, imageRect.Top + obj.Y * imageRect.Height);
                 AnnotationCanvas.Children.Add(rectangle);
             }
             var label = new TextBlock
             {
                 Text = obj.ClassName,
                 Foreground = Brushes.White,
-                Background = i == selected ? Brushes.DarkGreen : Brushes.DarkOrange,
-                Padding = new Thickness(2, 0, 2, 0),
+                Background = i == selected
+                    ? new SolidColorBrush(Color.FromArgb(190, 0, 105, 70))
+                    : new SolidColorBrush(Color.FromArgb(180, 190, 100, 0)),
+                FontSize = 11,
+                Padding = new Thickness(1, 0, 1, 0),
                 IsHitTestVisible = false,
             };
-            Canvas.SetLeft(label, obj.X * AnnotationCanvas.ActualWidth);
-            Canvas.SetTop(label, Math.Max(0, obj.Y * AnnotationCanvas.ActualHeight - 18));
+            Canvas.SetLeft(label, imageRect.Left + obj.X * imageRect.Width);
+            Canvas.SetTop(label, Math.Max(imageRect.Top, imageRect.Top + obj.Y * imageRect.Height - 18));
             AnnotationCanvas.Children.Add(label);
-            if (hasPolygon)
+            if (hasPolygon && _showContours)
             {
                 var polygon = new Polygon
                 {
                     Points = new PointCollection(obj.Polygon.Select(point =>
-                        new Point(point.X * AnnotationCanvas.ActualWidth, point.Y * AnnotationCanvas.ActualHeight))),
+                        new Point(imageRect.Left + point.X * imageRect.Width, imageRect.Top + point.Y * imageRect.Height))),
                     Stroke = i == selected ? Brushes.Lime : Brushes.Orange,
-                    StrokeThickness = i == selected ? 3 : 2,
-                    Fill = new SolidColorBrush(Color.FromArgb(40, 255, 165, 0)),
+                    StrokeThickness = i == selected ? selectedStroke : normalStroke,
+                    Fill = new SolidColorBrush(Color.FromArgb(18, 255, 165, 0)),
                     IsHitTestVisible = false,
                 };
                 AnnotationCanvas.Children.Add(polygon);
@@ -1357,11 +1420,11 @@ public partial class DatasetAnnotationPage : UserControl
             AnnotationCanvas.Children.Add(new Polygon
             {
                 Points = new PointCollection(preview.Polygon.Select(point =>
-                    new Point(point.X * AnnotationCanvas.ActualWidth, point.Y * AnnotationCanvas.ActualHeight))),
+                    new Point(imageRect.Left + point.X * imageRect.Width, imageRect.Top + point.Y * imageRect.Height))),
                 Stroke = Brushes.Cyan,
-                StrokeThickness = 2,
+                StrokeThickness = OverlayStrokeThickness(1.2),
                 StrokeDashArray = [5, 3],
-                Fill = new SolidColorBrush(Color.FromArgb(65, 0, 220, 255)),
+                Fill = new SolidColorBrush(Color.FromArgb(28, 0, 220, 255)),
                 IsHitTestVisible = false,
             });
         }
@@ -1391,8 +1454,8 @@ public partial class DatasetAnnotationPage : UserControl
                 StrokeThickness = 2,
                 IsHitTestVisible = false,
             };
-            Canvas.SetLeft(marker, prompt.X * AnnotationCanvas.ActualWidth - marker.Width / 2);
-            Canvas.SetTop(marker, prompt.Y * AnnotationCanvas.ActualHeight - marker.Height / 2);
+            Canvas.SetLeft(marker, imageRect.Left + prompt.X * imageRect.Width - marker.Width / 2);
+            Canvas.SetTop(marker, imageRect.Top + prompt.Y * imageRect.Height - marker.Height / 2);
             AnnotationCanvas.Children.Add(marker);
         }
         if (_eraserMode && _eraserCursorPoint is { } eraserPoint)
@@ -1422,6 +1485,14 @@ public partial class DatasetAnnotationPage : UserControl
             Canvas.SetTop(_eraserCursorVisual, eraserPoint.Y - _eraserCursorVisual.Height / 2);
             AnnotationCanvas.Children.Add(_eraserCursorVisual);
         }
+    }
+
+    private double OverlayStrokeThickness(double baseThickness)
+    {
+        // The annotation canvas is zoomed together with the image. Keep overlay
+        // lines visually thin at high zoom instead of scaling them into a blur.
+        var zoom = Math.Max(1, AnnotationScrollViewer?.Zoom ?? 1);
+        return Math.Max(0.75, baseThickness / zoom);
     }
 
     private void UpdateEraserVisuals()
@@ -1466,15 +1537,50 @@ public partial class DatasetAnnotationPage : UserControl
         StatusText.Text = $"{reason}已自动保存。";
     }
 
+    private Rect GetImageRect()
+    {
+        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
+        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
+        if (AnnotationImage.Source is not BitmapSource source || source.Width <= 0 || source.Height <= 0)
+            return new Rect(0, 0, canvasWidth, canvasHeight);
+
+        var scale = Math.Min(canvasWidth / source.Width, canvasHeight / source.Height);
+        var imageWidth = Math.Max(1, source.Width * scale);
+        var imageHeight = Math.Max(1, source.Height * scale);
+        return new Rect(
+            (canvasWidth - imageWidth) / 2,
+            (canvasHeight - imageHeight) / 2,
+            imageWidth,
+            imageHeight);
+    }
+
+    private static bool TryGetImageNormalizedPoint(Point point, Rect imageRect, out Point normalized)
+    {
+        if (!imageRect.Contains(point))
+        {
+            normalized = new Point();
+            return false;
+        }
+
+        normalized = new Point(
+            Math.Clamp((point.X - imageRect.Left) / imageRect.Width, 0, 1),
+            Math.Clamp((point.Y - imageRect.Top) / imageRect.Height, 0, 1));
+        return true;
+    }
+
+    private static Point ClampPointToRect(Point point, Rect rect) => new(
+        Math.Clamp(point.X, rect.Left, rect.Right),
+        Math.Clamp(point.Y, rect.Top, rect.Bottom));
+
     private int HitTestAnnotation(Point point)
     {
         if (_annotation is null) return -1;
-        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
-        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
-        var x = point.X / canvasWidth;
-        var y = point.Y / canvasHeight;
-        var toleranceX = 8 / canvasWidth;
-        var toleranceY = 8 / canvasHeight;
+        var imageRect = GetImageRect();
+        if (!TryGetImageNormalizedPoint(point, imageRect, out var normalized)) return -1;
+        var x = normalized.X;
+        var y = normalized.Y;
+        var toleranceX = 8 / imageRect.Width;
+        var toleranceY = 8 / imageRect.Height;
         for (var index = _annotation.Objects.Count - 1; index >= 0; index--)
         {
             var obj = _annotation.Objects[index];
@@ -1510,12 +1616,12 @@ public partial class DatasetAnnotationPage : UserControl
 
     private EditMode GetEditMode(Point point, DatasetAnnotationObject obj)
     {
-        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
-        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
-        var x = point.X / canvasWidth;
-        var y = point.Y / canvasHeight;
-        var toleranceX = 10 / canvasWidth;
-        var toleranceY = 10 / canvasHeight;
+        var imageRect = GetImageRect();
+        if (!TryGetImageNormalizedPoint(point, imageRect, out var normalized)) return EditMode.None;
+        var x = normalized.X;
+        var y = normalized.Y;
+        var toleranceX = 10 / imageRect.Width;
+        var toleranceY = 10 / imageRect.Height;
         var left = Math.Abs(x - obj.X) <= toleranceX;
         var right = Math.Abs(x - (obj.X + obj.Width)) <= toleranceX;
         var top = Math.Abs(y - obj.Y) <= toleranceY;
@@ -1534,10 +1640,9 @@ public partial class DatasetAnnotationPage : UserControl
     private void UpdateEditedAnnotation(Point current)
     {
         if (_annotation is null || _editOriginal is null || _editingIndex < 0 || _editingIndex >= _annotation.Objects.Count) return;
-        var canvasWidth = Math.Max(1, AnnotationCanvas.ActualWidth);
-        var canvasHeight = Math.Max(1, AnnotationCanvas.ActualHeight);
-        var dx = (current.X - _editStart.X) / canvasWidth;
-        var dy = (current.Y - _editStart.Y) / canvasHeight;
+        var imageRect = GetImageRect();
+        var dx = (current.X - _editStart.X) / imageRect.Width;
+        var dy = (current.Y - _editStart.Y) / imageRect.Height;
         var original = _editOriginal;
         var obj = _annotation.Objects[_editingIndex];
         var originalRight = original.X + original.Width;
@@ -1769,6 +1874,7 @@ public partial class DatasetAnnotationPage : UserControl
     private async Task AddSam1PromptAsync(Point canvasPoint, int label)
     {
         if (_image is null || _annotation is null || ClassCombo.SelectedItem is not string className) return;
+        if (!TryGetImageNormalizedPoint(canvasPoint, GetImageRect(), out var normalizedPoint)) return;
         if (label == 0 && _sam1Prompts.All(point => point.Label == 0))
         {
             StatusText.Text = "请先用左键点击需要保留的目标，再用右键排除多余区域。";
@@ -1776,8 +1882,8 @@ public partial class DatasetAnnotationPage : UserControl
         }
         ClearSam1HoverPreview();
         _sam1Prompts.Add(new Sam1Prompt(
-            Math.Clamp(canvasPoint.X / Math.Max(1, AnnotationCanvas.ActualWidth), 0, 1),
-            Math.Clamp(canvasPoint.Y / Math.Max(1, AnnotationCanvas.ActualHeight), 0, 1),
+            normalizedPoint.X,
+            normalizedPoint.Y,
             label));
         var promptVersion = ++_sam1PromptVersion;
         var image = _image;
@@ -1985,9 +2091,10 @@ public partial class DatasetAnnotationPage : UserControl
 
         var version = _sam1HoverVersion;
         var image = _image;
+        if (!TryGetImageNormalizedPoint(canvasPoint, GetImageRect(), out var normalizedPoint)) return;
         var prompt = new Sam1Prompt(
-            Math.Clamp(canvasPoint.X / Math.Max(1, AnnotationCanvas.ActualWidth), 0, 1),
-            Math.Clamp(canvasPoint.Y / Math.Max(1, AnnotationCanvas.ActualHeight), 0, 1),
+            normalizedPoint.X,
+            normalizedPoint.Y,
             1);
         _sam1HoverBusy = true;
         try
@@ -2159,6 +2266,7 @@ public partial class DatasetAnnotationPage : UserControl
             }
         }
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset);
+        UpdateImageListEmptyState();
         StatusText.Text = $"YOLOE 已完成 {scope}：写入 {written} 张图片的自动标注；后续修改也会自动保存。";
     }
 

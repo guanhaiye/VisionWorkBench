@@ -26,6 +26,8 @@ public static class DiagnosticPackageService
         AddText(archive, "environment.json", JsonSerializer.Serialize(new
         {
             generatedAt = DateTimeOffset.UtcNow,
+            product = "VisionWorkbench",
+            productVersion = typeof(DiagnosticPackageService).Assembly.GetName().Version?.ToString(),
             os = Environment.OSVersion.VersionString,
             framework = Environment.Version.ToString(),
             processArchitecture = Environment.Is64BitProcess ? "x64" : "x86",
@@ -52,6 +54,15 @@ public static class DiagnosticPackageService
         });
         AddText(archive, "plugins.json", JsonSerializer.Serialize(plugins,
             new JsonSerializerOptions { WriteIndented = true }));
+
+        var integrity = services.DatabaseIntegrity.CheckAsync().GetAwaiter().GetResult();
+        var auditHealthy = services.Audit.VerifyChainAsync().GetAwaiter().GetResult();
+        AddText(archive, "self-check.json", JsonSerializer.Serialize(new
+        {
+            database = new { integrity.IsHealthy, integrity.Message },
+            auditChain = new { IsHealthy = auditHealthy },
+            license = new { services.License.Current.State, services.License.Current.IsValid, services.License.Current.IsDevelopment },
+        }, new JsonSerializerOptions { WriteIndented = true }));
 
         var logsDirectory = Path.Combine(services.Settings.DataDirectory, "logs");
         if (Directory.Exists(logsDirectory))

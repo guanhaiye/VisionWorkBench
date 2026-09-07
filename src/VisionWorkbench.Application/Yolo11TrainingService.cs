@@ -15,7 +15,8 @@ public sealed record Yolo11TrainingRequest(
     string OutputDirectory,
     string RunName,
     bool Resume,
-    bool ExportTensorRt);
+    bool ExportTensorRt,
+    string? PauseFilePath = null);
 
 public sealed record Yolo11TrainingProgress(
     string Event,
@@ -36,6 +37,7 @@ public sealed class Yolo11TrainingService : IDisposable
     private readonly string _workingDirectory;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Process? _process;
+    private string? _pauseFilePath;
     private volatile bool _paused;
 
     public Yolo11TrainingService(string workersRoot, string? configuredPython)
@@ -80,11 +82,17 @@ public sealed class Yolo11TrainingService : IDisposable
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             _process = process;
             _paused = false;
+            var pauseFilePath = string.IsNullOrWhiteSpace(request.PauseFilePath)
+                ? Path.Combine(Path.GetTempPath(), $"visionworkbench-yolo11-{Guid.NewGuid():N}.pause")
+                : request.PauseFilePath;
+            _pauseFilePath = pauseFilePath;
+            TryDeletePauseFile();
             if (!process.Start()) throw new InvalidOperationException("无法启动 YOLO11 训练 worker。");
 
             using var cancellationRegistration = cancellationToken.Register(() => PythonProcessSupport.TryKill(process));
+            var workerRequest = request with { PauseFilePath = pauseFilePath };
             await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(
-                request,
+                workerRequest,
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             await process.StandardInput.FlushAsync(cancellationToken);
             process.StandardInput.Close();
@@ -135,6 +143,8 @@ public sealed class Yolo11TrainingService : IDisposable
             if (_process is { HasExited: false } running) PythonProcessSupport.TryKill(running);
             _process?.Dispose();
             _process = null;
+            TryDeletePauseFile();
+            _pauseFilePath = null;
             _paused = false;
             _gate.Release();
         }
@@ -142,6 +152,7 @@ public sealed class Yolo11TrainingService : IDisposable
 
     public Task CancelAsync()
     {
+        TryDeletePauseFile();
         if (_process is { HasExited: false } process)
         {
             ProcessPauseController.TryResume(process);
@@ -155,7 +166,22 @@ public sealed class Yolo11TrainingService : IDisposable
     {
         if (_process is not { HasExited: false } process || _paused)
             return Task.FromResult(false);
-        _paused = ProcessPauseController.TrySuspend(process);
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_pauseFilePath))
+            {
+                File.WriteAllText(_pauseFilePath, "pause");
+                _paused = true;
+            }
+            else
+            {
+                _paused = ProcessPauseController.TrySuspend(process);
+            }
+        }
+        catch
+        {
+            _paused = false;
+        }
         return Task.FromResult(_paused);
     }
 
@@ -163,7 +189,20 @@ public sealed class Yolo11TrainingService : IDisposable
     {
         if (_process is not { HasExited: false } process || !_paused)
             return Task.FromResult(false);
-        var resumed = ProcessPauseController.TryResume(process);
+        var resumed = false;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_pauseFilePath))
+            {
+                TryDeletePauseFile();
+                resumed = true;
+            }
+            else
+            {
+                resumed = ProcessPauseController.TryResume(process);
+            }
+        }
+        catch { }
         if (resumed) _paused = false;
         return Task.FromResult(resumed);
     }
@@ -209,6 +248,7 @@ public sealed class Yolo11TrainingService : IDisposable
 
     public void Dispose()
     {
+        TryDeletePauseFile();
         if (_process is { HasExited: false } process)
         {
             ProcessPauseController.TryResume(process);
@@ -216,6 +256,16 @@ public sealed class Yolo11TrainingService : IDisposable
         }
         _paused = false;
         _gate.Dispose();
+    }
+
+    private void TryDeletePauseFile()
+    {
+        if (string.IsNullOrWhiteSpace(_pauseFilePath)) return;
+        try
+        {
+            if (File.Exists(_pauseFilePath)) File.Delete(_pauseFilePath);
+        }
+        catch { }
     }
 
     private static int ReadInt(JsonDocument json, string name) =>

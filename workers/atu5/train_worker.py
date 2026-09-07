@@ -118,9 +118,16 @@ def main() -> int:
         output_dir = Path(str(request["outputDirectory"])).resolve()
         run_dir = output_dir / str(request.get("runName", f"atu5-{int(time.time())}"))
         run_dir.mkdir(parents=True, exist_ok=True)
+        pause_file = str(request.get("pauseFilePath") or "").strip()
+
+        def wait_if_paused() -> None:
+            while pause_file and Path(pause_file).is_file():
+                time.sleep(0.2)
+
         best_iou = -1.0
         emit("starting", f"ATU5 语义分割训练已启动，设备：{device}", totalEpochs=epochs)
         for epoch in range(1, epochs + 1):
+            wait_if_paused()
             model.train()
             losses = []
             for images, masks in train_loader:

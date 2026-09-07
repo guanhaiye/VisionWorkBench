@@ -18,6 +18,7 @@ workers/.venv/
 /.app-*/
 /.dataset-*/
 /.build-progress/
+*-build/
 /.pytest-yolo/
 /.pytest_cache/
 /workers/.pytest_cache/

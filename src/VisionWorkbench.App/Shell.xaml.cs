@@ -1,7 +1,9 @@
 using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
@@ -22,10 +24,29 @@ public partial class Shell : Window
     private bool _registrationMode;
     private string? _currentAccountName;
     private bool _isSuperAdmin;
+    private bool _updatingLoginOptions;
+
+    private void BrandLogoImage_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Image image) return;
+        var rotation = new RotateTransform();
+        image.RenderTransform = rotation;
+        rotation.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation
+        {
+            From = 0,
+            To = 360,
+            Duration = TimeSpan.FromSeconds(5),
+            RepeatBehavior = RepeatBehavior.Forever,
+        });
+    }
 
     public Shell()
     {
         InitializeComponent();
+        PreferApplicationThemeResources();
+        ThemeManager.SyncWindowResources(this);
+        AddHandler(System.Windows.Input.Mouse.PreviewMouseWheelEvent,
+            new System.Windows.Input.MouseWheelEventHandler(Shell_PreviewMouseWheel), handledEventsToo: true);
         Topmost = false;
         UpdateTopmostButton();
         if (SidebarStatusStackPanel.Children.Count > 2)
@@ -48,8 +69,9 @@ public partial class Shell : Window
         _pages["segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.Segmentation);
         _pages["semantic-segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.SemanticSegmentation);
         _pages["instance-segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.InstanceSegmentation);
+        _pages["pose-annotation"] = () => new PoseAnnotationPage();
         _pages["training"] = () => new TrainingPage();
-        _pages["model-test"] = () => new ModelTestPage();
+        _pages["model-test"] = () => new ModelTestPage(false, "YOLO11 目标检测", "detection");
         _pages["data-model"] = () => new DataModelPage();
         _pages["behavior-annotation"] = () => new BehaviorAnnotationPage();
         _pages["behavior-collection"] = () => new BehaviorCollectionPage();
@@ -60,14 +82,40 @@ public partial class Shell : Window
         _pages["plugins"] = () => new PluginsPage();
         _pages["devices"] = () => new DevicesPage();
         _pages["monitor"] = () => new SystemMonitorPage();
+        _pages["license"] = () => new LicensePage();
         _pages["settings"] = () => new SettingsPage();
         // 实时检测工作区在主窗口启动时预先创建并加载已保存任务的模型，
         // 用户进入实时检测后可直接开始，不再等待模型初始化。
         var livePage = new LivePage();
         _cache["live"] = livePage;
         livePage.OnShown();
+        TryAutoLogin();
         RefreshUserHeader();
-        ShowPage("welcome");
+        var license = AppServices.Instance.License.Validate();
+        ShowPage(license.IsValid ? "welcome" : "license");
+        ApplyLicenseAvailability(license.IsValid);
+        if (!license.IsValid)
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+                ThemedMessageBox.Show(this,
+                    "当前电脑缺少有效许可证。请在许可证管理界面复制申请码，发送给授权方获取许可证。",
+                    "缺少许可证", MessageBoxButton.OK, MessageBoxImage.Warning)));
+        }
+    }
+
+    private void PreferApplicationThemeResources()
+    {
+        // 正常应用启动时，Application.Resources 已加载并由 ThemeManager 管理。
+        // Shell.xaml 中的 Theme.xaml 仅作为独立设计器/UI 测试的兜底；保留两份会
+        // 让页面文字读取到未切换的局部主题色，造成日间模式下文字发白。
+        if (System.Windows.Application.Current?.Resources.Contains("TextBrush") != true) return;
+
+        var localTheme = Resources.MergedDictionaries.FirstOrDefault(dictionary =>
+            dictionary.Source?.OriginalString.EndsWith("Theme.xaml", StringComparison.OrdinalIgnoreCase) == true);
+        if (localTheme is not null)
+        {
+            Resources.MergedDictionaries.Remove(localTheme);
+        }
     }
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -106,15 +154,21 @@ public partial class Shell : Window
         }
     }
 
-    private void SidebarScrollViewer_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    private void Shell_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
     {
-        if (SidebarScrollViewer.ScrollableHeight <= 0 || e.Delta == 0)
+        if (!SidebarScrollViewer.IsMouseOver || e.Delta == 0)
         {
             return;
         }
 
-        // 统一由左侧唯一的滚动容器处理滚轮，避免内层 ListBox/页面控件偶尔吞掉滚轮消息。
-        var offset = SidebarScrollViewer.VerticalOffset - e.Delta * 0.45;
+        // 由窗口统一接管侧边栏滚轮，避免 Expander/ListBox 内部控件吞掉事件。
+        SidebarScrollViewer.UpdateLayout();
+        if (SidebarScrollViewer.ScrollableHeight <= 0)
+        {
+            return;
+        }
+
+        var offset = SidebarScrollViewer.VerticalOffset - Math.Sign(e.Delta) * 54;
         SidebarScrollViewer.ScrollToVerticalOffset(Math.Clamp(offset, 0, SidebarScrollViewer.ScrollableHeight));
         e.Handled = true;
     }
@@ -132,6 +186,11 @@ public partial class Shell : Window
 
     private void ShowPage(string key)
     {
+        if (!IsLicenseExemptPage(key) && !AppServices.Instance.License.Validate().IsValid)
+        {
+            ShowPage("license");
+            return;
+        }
         if (key.StartsWith("data-model-", StringComparison.OrdinalIgnoreCase))
         {
             var category = key["data-model-".Length..];
@@ -141,6 +200,10 @@ public partial class Shell : Window
                 _cache["data-model"] = dataModel;
             }
             PageHost.Content = dataModel;
+            if (dataModel is FrameworkElement dataModelElement)
+            {
+                ThemeManager.ApplyPageTextBrush(dataModelElement);
+            }
             if (dataModel is DataModelPage dataModelPage)
             {
                 dataModelPage.SelectCategory(category);
@@ -159,9 +222,30 @@ public partial class Shell : Window
             _cache[key] = page;
         }
         PageHost.Content = page;
+        if (page is FrameworkElement pageElement)
+        {
+            ThemeManager.ApplyPageTextBrush(pageElement);
+        }
         if (page is LivePage live)
         {
             live.OnShown();
+        }
+    }
+
+    private static bool IsLicenseExemptPage(string key) =>
+        key is "welcome" or "license" or "settings" or "logs" or "monitor";
+
+    internal void ApplyLicenseAvailability(bool isLicensed)
+    {
+        UserMenuButton.IsEnabled = isLicensed;
+        SystemManagementExpander.IsExpanded = !isLicensed;
+        var navigationLists = new[]
+        {
+            WorkspaceNavList, DataModelNavList, ResultsNavList, CommunicationNavList, SystemNavList,
+        };
+        foreach (var item in navigationLists.SelectMany(list => list.Items.OfType<ListBoxItem>()))
+        {
+            item.IsEnabled = isLicensed || string.Equals(item.Tag?.ToString(), "license", StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -170,8 +254,7 @@ public partial class Shell : Window
         var settings = AppServices.Instance.Settings;
         UserNameText.Text = settings.OperatorName == "未登录" ? "" : settings.OperatorName;
         _avatarPathDraft = settings.AvatarPath;
-        LoginNameText.Text = settings.OperatorName;
-        LoginPasswordBox.Clear();
+        LoadLoginPreferences();
         _registrationMode = false;
         UserRoleCombo.SelectedItem = UserRoleCombo.Items.OfType<ComboBoxItem>()
             .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), settings.CurrentRole, StringComparison.OrdinalIgnoreCase));
@@ -265,6 +348,133 @@ public partial class Shell : Window
             account.IsEnabled
             && string.Equals(account.UserName, AccountRules.NormalizeUserName(userName), StringComparison.OrdinalIgnoreCase));
 
+    private void LoadLoginPreferences()
+    {
+        var settings = AppServices.Instance.Settings;
+        LoginNameText.Text = string.IsNullOrWhiteSpace(settings.RememberedLoginUserName)
+            ? settings.OperatorName
+            : settings.RememberedLoginUserName;
+        LoginPasswordBox.Password = settings.RememberLoginPassword
+            ? UnprotectLoginPassword(settings.RememberedLoginPassword) ?? ""
+            : "";
+        _updatingLoginOptions = true;
+        RememberPasswordCheckBox.IsChecked = settings.RememberLoginPassword;
+        AutoLoginCheckBox.IsChecked = settings.AutoLogin;
+        _updatingLoginOptions = false;
+    }
+
+    private void RememberPasswordOption_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_updatingLoginOptions || RememberPasswordCheckBox.IsChecked == true) return;
+        _updatingLoginOptions = true;
+        AutoLoginCheckBox.IsChecked = false;
+        _updatingLoginOptions = false;
+    }
+
+    private void AutoLoginOption_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_updatingLoginOptions || AutoLoginCheckBox.IsChecked != true) return;
+        _updatingLoginOptions = true;
+        RememberPasswordCheckBox.IsChecked = true;
+        _updatingLoginOptions = false;
+    }
+
+    private bool TryAutoLogin()
+    {
+        var settings = AppServices.Instance.Settings;
+        if (!settings.AutoLogin || !settings.RememberLoginPassword) return false;
+
+        var password = UnprotectLoginPassword(settings.RememberedLoginPassword);
+        var account = FindAccount(settings, settings.RememberedLoginUserName);
+        if (account is null || password is null) return false;
+        var authentication = AppServices.Instance.Identity.AuthenticateAsync(account.UserName, password).GetAwaiter().GetResult();
+        if (!authentication.Succeeded) return false;
+
+        ApplyLoggedInAccount(settings, account);
+        return true;
+    }
+
+    private void ApplyLoggedInAccount(AppSettings settings, UserAccount account)
+    {
+        var effectiveRole = AppServices.Instance.Identity.GetEffectiveRoleAsync(account.UserName).GetAwaiter().GetResult();
+        settings.OperatorName = account.UserName;
+        settings.CurrentRole = effectiveRole.Role;
+        settings.AvatarPath = account.AvatarPath;
+        settings.PasswordHash = account.PasswordHash;
+        _currentAccountName = account.UserName;
+        _isSuperAdmin = effectiveRole.IsAdministrator;
+        _isUserLoggedIn = true;
+        _registrationMode = false;
+        AppServices.Instance.Session.Begin(account.UserName, effectiveRole.Role, effectiveRole.IsAdministrator);
+    }
+
+    private void SaveLoginPreferences(string userName, string password)
+    {
+        var settings = AppServices.Instance.Settings;
+        var remember = RememberPasswordCheckBox.IsChecked == true || AutoLoginCheckBox.IsChecked == true;
+        var autoLogin = AutoLoginCheckBox.IsChecked == true;
+        settings.RememberLoginPassword = remember;
+        settings.AutoLogin = autoLogin;
+
+        if (remember)
+        {
+            var protectedPassword = ProtectLoginPassword(password);
+            if (protectedPassword is null)
+            {
+                settings.RememberLoginPassword = false;
+                settings.AutoLogin = false;
+                settings.RememberedLoginUserName = null;
+                settings.RememberedLoginPassword = null;
+                ThemedMessageBox.Show("当前系统无法安全保存登录密码，已关闭记住密码和自动登录。", "用户登录", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            else
+            {
+                settings.RememberedLoginUserName = userName;
+                settings.RememberedLoginPassword = protectedPassword;
+            }
+        }
+        else
+        {
+            settings.RememberedLoginUserName = null;
+            settings.RememberedLoginPassword = null;
+        }
+
+        AppServices.Instance.SaveUserSettings();
+    }
+
+    private static string? ProtectLoginPassword(string password)
+    {
+        try
+        {
+            var protectedBytes = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(password),
+                optionalEntropy: null,
+                DataProtectionScope.CurrentUser);
+            return Convert.ToBase64String(protectedBytes);
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    private static string? UnprotectLoginPassword(string? protectedPassword)
+    {
+        if (string.IsNullOrWhiteSpace(protectedPassword)) return null;
+        try
+        {
+            var protectedBytes = Convert.FromBase64String(protectedPassword);
+            return Encoding.UTF8.GetString(ProtectedData.Unprotect(
+                protectedBytes,
+                optionalEntropy: null,
+                DataProtectionScope.CurrentUser));
+        }
+        catch (Exception ex) when (ex is FormatException or CryptographicException)
+        {
+            return null;
+        }
+    }
+
     private void Register_Click(object sender, RoutedEventArgs e)
     {
         var settings = AppServices.Instance.Settings;
@@ -286,28 +496,23 @@ public partial class Shell : Window
         UserNameText.Focus();
     }
 
-    private void Login_Click(object sender, RoutedEventArgs e)
+    private async void Login_Click(object sender, RoutedEventArgs e)
     {
         var settings = AppServices.Instance.Settings;
         var name = AccountRules.NormalizeUserName(LoginNameText.Text);
         var password = LoginPasswordBox.Password;
+        var authentication = await AppServices.Instance.Identity.AuthenticateAsync(name, password);
         var account = FindAccount(settings, name);
-        if (account is not null && AccountRules.VerifyPassword(password, account.PasswordHash))
+        if (authentication.Succeeded && account is not null)
         {
-            settings.OperatorName = account.UserName;
-            settings.CurrentRole = account.Role;
-            settings.AvatarPath = account.AvatarPath;
-            settings.PasswordHash = account.PasswordHash;
-            _currentAccountName = account.UserName;
-            _isSuperAdmin = account.IsSuperAdmin;
-            _isUserLoggedIn = true;
-            _registrationMode = false;
+            ApplyLoggedInAccount(settings, account);
+            SaveLoginPreferences(account.UserName, password);
             RefreshUserHeader();
             UserMenuPopup.IsOpen = false;
             return;
         }
 
-        ThemedMessageBox.Show("用户名或密码错误。", "用户登录", MessageBoxButton.OK, MessageBoxImage.Warning);
+        ThemedMessageBox.Show(authentication.Reason, "用户登录", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void AvatarPreview_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -420,7 +625,7 @@ public partial class Shell : Window
         RefreshUserHeader();
     }
 
-    private void SaveUser_Click(object sender, RoutedEventArgs e)
+    private async void SaveUser_Click(object sender, RoutedEventArgs e)
     {
         if (!_registrationMode || IsUserRegistered(AppServices.Instance.Settings))
         {
@@ -480,6 +685,9 @@ public partial class Shell : Window
         settings.AvatarPath = account.AvatarPath;
         settings.PasswordHash = account.PasswordHash;
         AppServices.Instance.SaveUserSettings();
+        await AppServices.Instance.Identity.UpsertAccountAsync(account);
+        await AppServices.Instance.Audit.RecordAsync("user.create", "user", account.UserName,
+            account.UserName, detailsJson: "{\"source\":\"registration\"}");
         _currentAccountName = account.UserName;
         _isSuperAdmin = account.IsSuperAdmin;
         _isUserLoggedIn = true;
@@ -492,6 +700,7 @@ public partial class Shell : Window
     {
         _isUserLoggedIn = false;
         _registrationMode = false;
+        AppServices.Instance.Session.End();
         RefreshUserHeader();
         UserMenuPopup.IsOpen = false;
     }
@@ -546,6 +755,40 @@ public partial class Shell : Window
 
     private void MinimizeWindow_Click(object sender, RoutedEventArgs e) =>
         WindowState = WindowState.Minimized;
+
+    private void Restart_Click(object sender, RoutedEventArgs e)
+    {
+        var result = ThemedMessageBox.Show(
+            this,
+            "确定要重启 VisionWorkbench 吗？",
+            "重启确认",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Question);
+        if (result != MessageBoxResult.OK) return;
+
+        try
+        {
+            var executable = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executable))
+                throw new InvalidOperationException("无法确定当前软件路径");
+
+            var escapedExecutable = executable.Replace("\"", "\\\"");
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/d /c timeout /t 2 /nobreak >nul & start \"\" \"{escapedExecutable}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            });
+            System.Windows.Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show(this, $"重启失败：{ex.Message}", "重启软件",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
 
     private void MinimizeWindow_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {

@@ -43,6 +43,8 @@ public partial class SystemMonitorPage : UserControl
         catch (Exception ex)
         {
             GpuDetailText.Text = $"读取监控数据失败：{ex.Message}";
+            DiskDetailText.Visibility = Visibility.Visible;
+            DiskDetailText.Text = "无法读取磁盘状态";
         }
         finally
         {
@@ -52,6 +54,7 @@ public partial class SystemMonitorPage : UserControl
 
     private void ApplySnapshot(SystemMonitorSnapshot snapshot)
     {
+        DiskDetailText.Visibility = Visibility.Visible;
         CpuValueText.Text = $"{snapshot.CpuUsage:0.0}%";
         CpuProgress.Value = snapshot.CpuUsage;
         CpuDetailText.Text = $"当前系统 CPU 使用率 · {DateTime.Now:HH:mm:ss} 更新";

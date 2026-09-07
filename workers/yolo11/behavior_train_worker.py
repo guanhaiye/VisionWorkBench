@@ -162,14 +162,29 @@ def main(request: dict[str, Any]) -> None:
     random.seed(42)
     # 按视频/序列来源划分，避免同一视频的相邻片段同时出现在训练和验证集造成泄漏。
     source_ids = sorted({source_id for _, _, source_id in clips})
-    random.shuffle(source_ids)
-    val_source_count = max(1, int(math.ceil(len(source_ids) * 0.2)))
-    if len(source_ids) > 1:
-        val_sources = set(source_ids[:val_source_count])
-        train_sources = set(source_ids[val_source_count:]) or set(source_ids[:1])
-    else:
-        train_sources = set(source_ids)
-        val_sources = set(source_ids)
+    split_policy = "source-level"
+    split_path = root / ".visionworkbench" / "behavior-splits.json"
+    train_sources: set[str] = set()
+    val_sources: set[str] = set()
+    if split_path.is_file():
+        try:
+            split = json.loads(split_path.read_text(encoding="utf-8-sig"))
+            train_sources = {str(value) for value in split.get("trainSourceIds", []) if str(value) in source_ids}
+            val_sources = {str(value) for value in split.get("validationSourceIds", []) if str(value) in source_ids}
+            if train_sources and val_sources:
+                split_policy = "source-level-manual"
+        except Exception:
+            train_sources = set()
+            val_sources = set()
+    if not train_sources or not val_sources:
+        random.shuffle(source_ids)
+        val_source_count = max(1, int(math.ceil(len(source_ids) * 0.2)))
+        if len(source_ids) > 1:
+            val_sources = set(source_ids[:val_source_count])
+            train_sources = set(source_ids[val_source_count:]) or set(source_ids[:1])
+        else:
+            train_sources = set(source_ids)
+            val_sources = set(source_ids)
     train_indexes = [index for index, (_, _, source_id) in enumerate(clips) if source_id in train_sources]
     val_indexes = [index for index, (_, _, source_id) in enumerate(clips) if source_id in val_sources]
     if not train_indexes:
@@ -238,7 +253,7 @@ def main(request: dict[str, Any]) -> None:
     (output_dir / "metadata.json").write_text(json.dumps({
         "classes": classes, "sequenceLength": length, "poseModel": str(request["poseModelPath"]),
         "device": device, "epochs": epochs, "batchSize": batch_size,
-        "splitPolicy": "source-level",
+        "splitPolicy": split_policy,
         "trainSources": sorted(train_sources),
         "valSources": sorted(val_sources),
     }, ensure_ascii=False, indent=2), encoding="utf-8")

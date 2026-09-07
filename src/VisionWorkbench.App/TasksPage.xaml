@@ -2,6 +2,9 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:VisionWorkbench.App">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
     <Grid Margin="8">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="260" />

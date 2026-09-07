@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
         <Style x:Key="WorkflowNodeButton" TargetType="Button">
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
@@ -54,15 +55,6 @@
         </Style>
     </UserControl.Resources>
     <Grid x:Name="PageRoot" Margin="18" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-        <Grid.ContextMenu>
-            <ContextMenu Background="{DynamicResource SurfaceBrush}"
-                         BorderBrush="{DynamicResource BorderBrush}"
-                         BorderThickness="1"
-                         Padding="4">
-                <MenuItem Header="窗口自适应（最大化）" Click="AdaptiveWindow_Click" />
-                <MenuItem Header="恢复窗口" Click="RestoreWindow_Click" />
-            </ContextMenu>
-        </Grid.ContextMenu>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -70,20 +62,20 @@
 
         <Grid Grid.Row="0" Margin="0,0,0,-20">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="280" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0">
+            <StackPanel Grid.Column="0" Margin="0,0,18,0">
                 <TextBlock Text="数据与模型" FontSize="22" FontWeight="Bold" />
                 <TextBlock Text="按任务类型组织数据标注、模型训练和模型测试流程。"
                            Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,0" />
             </StackPanel>
 
 
-                <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                              HorizontalContentAlignment="Center" VerticalAlignment="Center" Margin="0" Height="92" MaxWidth="1000">
-                    <StackPanel HorizontalAlignment="Center">
+                <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Disabled"
+                              HorizontalContentAlignment="Left" HorizontalAlignment="Left"
+                              VerticalAlignment="Center" Margin="0" Height="92">
+                    <StackPanel HorizontalAlignment="Left">
                     <StackPanel x:Name="DetectionWorkflowPanel" Orientation="Horizontal">
                         <Button x:Name="DetectionAnnotationNode" Tag="detection-annotation" Style="{StaticResource WorkflowNodeButton}" Click="WorkflowNode_Click">
                             <StackPanel Orientation="Horizontal">
@@ -104,6 +96,19 @@
                                 <Ellipse Width="12" Height="12" Fill="#2563EB" Margin="0,0,8,0" />
                                 <TextBlock Text="模型测试" VerticalAlignment="Center" />
                             </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <StackPanel x:Name="PoseWorkflowPanel" Orientation="Horizontal" Visibility="Collapsed">
+                        <Button x:Name="PoseAnnotationNode" Tag="pose-annotation" Style="{StaticResource WorkflowNodeButton}" Click="WorkflowNode_Click">
+                            <StackPanel Orientation="Horizontal"><Ellipse Width="12" Height="12" Fill="#0EA5E9" Margin="0,0,8,0" /><TextBlock Text="关键点标注" VerticalAlignment="Center" /></StackPanel>
+                        </Button>
+                        <TextBlock Text="→" FontSize="22" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="10,0" />
+                        <Button x:Name="PoseTrainingNode" Tag="pose-training" Style="{StaticResource WorkflowNodeButton}" Click="WorkflowNode_Click">
+                            <StackPanel Orientation="Horizontal"><Ellipse Width="12" Height="12" Fill="#0EA5E9" Margin="0,0,8,0" /><TextBlock Text="模型训练" VerticalAlignment="Center" /></StackPanel>
+                        </Button>
+                        <TextBlock Text="→" FontSize="22" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="10,0" />
+                        <Button x:Name="PoseTestNode" Tag="pose-test" Style="{StaticResource WorkflowNodeButton}" Click="WorkflowNode_Click">
+                            <StackPanel Orientation="Horizontal"><Ellipse Width="12" Height="12" Fill="#0EA5E9" Margin="0,0,8,0" /><TextBlock Text="模型测试" VerticalAlignment="Center" /></StackPanel>
                         </Button>
                     </StackPanel>
                     <StackPanel x:Name="SemanticSegmentationWorkflowPanel" Orientation="Horizontal" Visibility="Collapsed">

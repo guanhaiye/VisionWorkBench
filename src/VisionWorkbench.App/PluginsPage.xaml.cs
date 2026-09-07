@@ -22,8 +22,17 @@ public partial class PluginsPage : UserControl
     private void Scan()
     {
         var svcs = AppServices.Instance;
-        PluginsRootText.Text = $"插件目录: {svcs.AlgorithmManager.ScanPlugins().FirstOrDefault()?.Directory ?? "—"}";
-        var rows = svcs.AlgorithmManager.ScanPlugins().Select(p => new PluginRow(
+        var discovered = svcs.AlgorithmManager.ScanPlugins();
+        // 算法管理页只展示带有 plugin.json 的正式插件目录。
+        // workers/.venv、.pytest_cache 等运行环境目录由扫描器记录诊断，但不是算法插件。
+        var plugins = discovered
+            .Where(p => File.Exists(Path.Combine(p.Directory, "plugin.json")))
+            .ToArray();
+        var pluginRoot = plugins.FirstOrDefault()?.Directory is { } pluginDirectory
+            ? Directory.GetParent(pluginDirectory)?.FullName
+            : null;
+        PluginsRootText.Text = $"插件目录: {pluginRoot ?? "—"}";
+        var rows = plugins.Select(p => new PluginRow(
             p.Manifest?.Id ?? Path.GetFileName(p.Directory) ?? "?",
             p.Manifest?.Version ?? "—",
             p.Manifest?.ProtocolVersion ?? "—",

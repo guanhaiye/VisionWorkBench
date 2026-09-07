@@ -5,8 +5,9 @@ using System.Text.Json;
 namespace VisionWorkbench.Application;
 
 public sealed record YoloTestPoint(double X, double Y);
+public sealed record YoloTestKeypoint(double X, double Y, double Confidence);
 public sealed record YoloTestDetection(int ClassId, string ClassName, double Confidence,
-    double X, double Y, double Width, double Height);
+    double X, double Y, double Width, double Height, IReadOnlyList<YoloTestKeypoint>? Keypoints = null);
 public sealed record YoloTestMask(int ClassId, string ClassName, double Confidence,
     IReadOnlyList<YoloTestPoint> Polygon);
 public sealed record YoloModelTestResult(string Task, double ElapsedMs,

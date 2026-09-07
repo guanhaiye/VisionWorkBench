@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:VisionWorkbench.App">
     <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
         <Style x:Key="InfoCard" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
@@ -27,7 +28,7 @@
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
         </Style>
     </UserControl.Resources>
-        <Grid Margin="4" MinWidth="0" MinHeight="0"
+        <Grid Margin="4" MinWidth="0" MinHeight="0" TextElement.Foreground="{DynamicResource TextBrush}"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />

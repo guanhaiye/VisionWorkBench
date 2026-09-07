@@ -50,7 +50,9 @@ public partial class AiCharacterRecognitionPage : UserControl
 
     private void SetPlatformUi()
     {
-        AnnotationPanel.Visibility = _platform == AiCharacterPlatform.Annotation ? Visibility.Visible : Visibility.Collapsed;
+        var annotationVisible = _platform == AiCharacterPlatform.Annotation ? Visibility.Visible : Visibility.Collapsed;
+        AnnotationPanel.Visibility = annotationVisible;
+        AnnotationToolbarPanel.Visibility = annotationVisible;
         TrainingPanel.Visibility = _platform == AiCharacterPlatform.Training ? Visibility.Visible : Visibility.Collapsed;
         TestPanel.Visibility = _platform == AiCharacterPlatform.Test ? Visibility.Visible : Visibility.Collapsed;
         var label = KindLabel;
@@ -66,7 +68,7 @@ public partial class AiCharacterRecognitionPage : UserControl
             AiRecognitionKind.QrCode => "PaddleOCR-VL-1.6 + QR解析",
             _ => "SOTA · 复杂文档/字符识别",
         };
-        SaveAnnotationButton.Content = $"保存{label}标注";
+        SaveAnnotationButton.Content = "保存数据集";
         AnnotationDescriptionText.Text = $"为当前图片填写{label}内容，保存后用于训练。";
         TrainingTitleText.Text = $"{label}识别训练";
         TrainingDescriptionText.Text = $"使用{label}标注平台生成的 image/text 数据训练配置；默认基座为 {ModelName}。";
@@ -74,12 +76,38 @@ public partial class AiCharacterRecognitionPage : UserControl
         TestDescriptionText.Text = $"{ModelName} 输出的{label}识别结果将在这里展示。";
     }
 
+    private void NewAnnotationDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RolePolicy.CanEditRecipe) return;
+        var root = AppServices.Instance.Settings.DatasetDirectory;
+        if (string.IsNullOrWhiteSpace(root)) root = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        Directory.CreateDirectory(root);
+        var datasetRoot = Path.Combine(root, $"{StorageFolder}-{DateTime.Now:yyyyMMdd-HHmmss}");
+        Directory.CreateDirectory(datasetRoot);
+        LoadAnnotationFolder(datasetRoot);
+        AnnotationStatusText.Text = $"已新建数据集目录：{datasetRoot}，请使用“选择图片目录”导入图片。";
+    }
+
+    private void LoadAnnotationDataset_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog { Title = "加载字符识别数据集目录", Multiselect = false };
+        if (dialog.ShowDialog() == true) LoadAnnotationFolder(dialog.FolderName);
+    }
+
     private void ChooseAnnotationFolder_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog { Multiselect = false };
         if (dialog.ShowDialog() != true) return;
-        _annotationRoot = dialog.FolderName;
+        LoadAnnotationFolder(dialog.FolderName);
+    }
+
+    private void LoadAnnotationFolder(string folder)
+    {
+        _annotationRoot = Path.GetFullPath(folder);
         AnnotationRootText.Text = _annotationRoot;
+        _selectedAnnotationImage = null;
+        AnnotationPreview.Source = null;
+        AnnotationText.Clear();
         LoadAnnotations();
         var images = EnumerateImages(_annotationRoot)
             .Select(path => new OcrImageItem(path))
@@ -87,6 +115,58 @@ public partial class AiCharacterRecognitionPage : UserControl
         AnnotationImageList.ItemsSource = images;
         AnnotationImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
         AnnotationStatusText.Text = $"已加载 {images.Count} 张图片，已标注 {_annotations.Count} 张。";
+    }
+
+    private void AutoSplitAnnotationDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_annotationRoot) || !Directory.Exists(_annotationRoot))
+        {
+            ThemedMessageBox.Show("请先选择数据集目录。", "自动划分数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var images = EnumerateImages(_annotationRoot)
+            .Select(path => Path.GetRelativePath(_annotationRoot, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (images.Count == 0)
+        {
+            ThemedMessageBox.Show("当前数据集没有图片。", "自动划分数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var trainCount = images.Count == 1 ? 1 : Math.Clamp((int)Math.Round(images.Count * 0.8), 1, images.Count - 1);
+        var splits = images.Select((path, index) => new
+        {
+            image = path,
+            split = index < trainCount ? "train" : "val"
+        }).ToList();
+        var splitPath = Path.Combine(_annotationRoot, ".visionworkbench", StorageFolder, "splits.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(splitPath)!);
+        File.WriteAllText(splitPath, JsonSerializer.Serialize(splits, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+        AnnotationStatusText.Text = $"已自动划分数据集：训练集 {trainCount} 张，验证集 {images.Count - trainCount} 张。";
+    }
+
+    private void ExportAnnotationDataset_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_annotationRoot) || !Directory.Exists(_annotationRoot))
+        {
+            ThemedMessageBox.Show("请先选择数据集目录。", "导出数据集", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        SaveAnnotations();
+        var dialog = new SaveFileDialog
+        {
+            Filter = "字符标注文件|*.jsonl|所有文件|*.*",
+            FileName = $"{StorageFolder}-labels.jsonl",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog() != true) return;
+        var source = Path.Combine(_annotationRoot, ".visionworkbench", StorageFolder, "labels.jsonl");
+        File.Copy(source, dialog.FileName, overwrite: true);
+        AnnotationStatusText.Text = $"数据集已导出：{dialog.FileName}";
     }
 
     private void AnnotationImageList_SelectionChanged(object sender, SelectionChangedEventArgs e)

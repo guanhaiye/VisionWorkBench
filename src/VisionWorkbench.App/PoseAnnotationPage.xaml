@@ -1,0 +1,102 @@
+<UserControl x:Class="VisionWorkbench.App.PoseAnnotationPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:VisionWorkbench.App">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+            <WrapPanel.Resources>
+                <Style TargetType="Button" BasedOn="{StaticResource AnnotationToolbarButton}" />
+            </WrapPanel.Resources>
+            <TextBlock Text="AI关键点检测标注平台" FontSize="18" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,14,0" />
+            <Button Content="新建数据集" Click="NewDataset_Click" />
+            <Button Content="加载数据集目录" Click="LoadDataset_Click" Margin="6,0,0,0" />
+            <Button Content="选择图片目录" Click="BrowseRoot_Click" Margin="6,0,0,0" />
+            <Button Content="保存数据集" Click="SaveDataset_Click" Margin="6,0,0,0" />
+            <Button Content="自动划分数据集" Click="AutoSplit_Click" Margin="6,0,0,0" />
+            <Button Content="导出关键点数据集" Click="ExportDataset_Click" Margin="6,0,0,0" />
+        </WrapPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="250" />
+                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <DockPanel Grid.Column="0" Margin="0,0,8,0">
+                <TextBlock DockPanel.Dock="Top" Text="关键点数据集" FontWeight="Bold" Margin="0,0,0,4" />
+                <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                        Background="{DynamicResource InputBrush}" CornerRadius="6" Padding="2">
+                    <ListBox x:Name="DatasetList" DisplayMemberPath="Name"
+                             SelectionChanged="DatasetList_SelectionChanged"
+                             BorderThickness="0" Background="Transparent" />
+                </Border>
+            </DockPanel>
+            <DockPanel Grid.Column="1" Margin="0,0,8,0">
+                <TextBlock DockPanel.Dock="Top" Text="图片列表" FontWeight="Bold" Margin="0,0,0,4" />
+                <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                        Background="{DynamicResource InputBrush}" CornerRadius="6" Padding="2">
+                    <ListBox x:Name="ImageList" DisplayMemberPath="FileName"
+                             SelectionChanged="ImageList_SelectionChanged"
+                             BorderThickness="0" Background="Transparent" />
+                </Border>
+            </DockPanel>
+            <Grid Grid.Column="2" Margin="0,0,8,0">
+                <GroupBox Header="数据集信息">
+                    <StackPanel Margin="6">
+                        <TextBlock Text="名称" />
+                        <TextBox x:Name="DatasetNameText" Margin="0,2,0,6" />
+                        <TextBlock Text="图片目录" />
+                        <TextBox x:Name="DatasetRootText" IsReadOnly="True" TextWrapping="Wrap" Margin="0,2,0,6" />
+                        <TextBlock Text="目标类别（逗号分隔）" />
+                        <TextBox x:Name="DatasetClassesText" Text="person" Margin="0,2,0,6" />
+                        <TextBlock Text="关键点名称（按点击顺序，逗号分隔）" TextWrapping="Wrap" />
+                        <TextBox x:Name="KeypointNamesText" AcceptsReturn="True" TextWrapping="Wrap" Height="80" Margin="0,2,0,6" />
+                        <TextBlock Text="每个目标必须按上述顺序标注全部关键点。" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </GroupBox>
+            </Grid>
+            <Grid Grid.Column="3">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="150" />
+                </Grid.RowDefinitions>
+                <WrapPanel Grid.Row="0" Margin="0,0,0,6">
+                    <TextBlock Text="当前类别：" VerticalAlignment="Center" />
+                    <ComboBox x:Name="ClassCombo" Width="130" />
+                    <Button Content="取消关键点标注" Click="CancelPose_Click" Margin="8,0,0,0" />
+                    <Button Content="清空当前图片" Click="ClearAnnotations_Click" Margin="6,0,0,0" />
+                    <TextBlock x:Name="PoseHintText" Text="先拖动绘制目标框，再依次点击关键点" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                </WrapPanel>
+                <local:ImageViewer x:Name="AnnotationViewer" Grid.Row="1" Background="#202020">
+                    <Border Background="#202020" BorderBrush="#888" BorderThickness="1">
+                        <Grid>
+                            <Image x:Name="AnnotationImage" Stretch="Uniform" />
+                            <Canvas x:Name="AnnotationCanvas" Background="#01000000"
+                                    MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
+                                    MouseMove="Canvas_MouseMove"
+                                    MouseLeftButtonUp="Canvas_MouseLeftButtonUp"
+                                    MouseRightButtonDown="Canvas_MouseRightButtonDown"
+                                    SizeChanged="Canvas_SizeChanged" />
+                        </Grid>
+                    </Border>
+                </local:ImageViewer>
+                <TextBlock Grid.Row="2" Text="当前图片标注（右键可删除目标）" FontWeight="Bold" Margin="0,6,0,0" />
+                <ListBox Grid.Row="3" x:Name="AnnotationList" DisplayMemberPath="ClassName" Margin="0,4,0,0" />
+            </Grid>
+        </Grid>
+        <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="4" Margin="0,8,0,0">
+            <TextBlock x:Name="StatusText" Foreground="{DynamicResource SuccessBrush}" TextWrapping="Wrap" />
+        </Border>
+    </Grid>
+</UserControl>

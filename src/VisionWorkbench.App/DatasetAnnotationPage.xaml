@@ -3,6 +3,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:VisionWorkbench.App"
              PreviewKeyDown="DatasetAnnotationPage_PreviewKeyDown">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
     <Grid Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -10,6 +13,9 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+            <WrapPanel.Resources>
+                <Style TargetType="Button" BasedOn="{StaticResource AnnotationToolbarButton}" />
+            </WrapPanel.Resources>
             <TextBlock x:Name="PlatformTitleText" Text="目标检测标注平台" FontSize="18" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,14,0" />
             <Button Content="新建数据集" Click="NewDataset_Click" />
             <Button Content="加载数据集" Click="LoadDataset_Click" Margin="6,0,0,0" />
@@ -29,14 +35,22 @@
 
             <DockPanel Grid.Column="0" Margin="0,0,8,0">
                 <TextBlock DockPanel.Dock="Top" Text="数据集" FontWeight="Bold" Margin="0,0,0,4" />
-                <ListBox x:Name="DatasetList"
-                         DisplayMemberPath="Name"
-                         SelectionChanged="DatasetList_SelectionChanged"
-                         PreviewMouseRightButtonDown="DatasetList_PreviewMouseRightButtonDown" />
+                <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                        Background="{DynamicResource InputBrush}" CornerRadius="6" Padding="2">
+                    <ListBox x:Name="DatasetList"
+                             DisplayMemberPath="Name"
+                             SelectionChanged="DatasetList_SelectionChanged"
+                             PreviewMouseRightButtonDown="DatasetList_PreviewMouseRightButtonDown"
+                             BorderThickness="0"
+                             Background="Transparent" />
+                </Border>
             </DockPanel>
 
             <DockPanel Grid.Column="1" Margin="0,0,8,0">
                 <TextBlock DockPanel.Dock="Top" Text="图片列表" FontWeight="Bold" Margin="0,0,0,4" />
+                <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                        Background="{DynamicResource InputBrush}" CornerRadius="6" Padding="2">
+                    <Grid>
                 <ListBox x:Name="ImageList"
                          SelectionChanged="ImageList_SelectionChanged"
                          PreviewMouseRightButtonDown="ImageList_PreviewMouseRightButtonDown"
@@ -52,10 +66,10 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{Binding FileName}" />
-                                <TextBlock Grid.Column="1" Text="未" Foreground="#B45309" FontWeight="Bold" Margin="8,0,2,0"
-                                           ToolTip="未标注">
+                                <TextBlock Grid.Column="1" FontWeight="Bold" Margin="8,0,2,0">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="未" />
                                             <Setter Property="Foreground" Value="#B45309" />
                                             <Setter Property="ToolTip" Value="未标注" />
                                             <Style.Triggers>
@@ -73,9 +87,15 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+                        <TextBlock x:Name="ImageListEmptyText" Text="暂无图片，请先选择图片目录"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   IsHitTestVisible="False" />
+                    </Grid>
+                </Border>
             </DockPanel>
 
-            <Grid Grid.Column="2" Margin="0,0,8,0">
+            <Grid x:Name="DatasetInfoPanel" Grid.Column="2" Margin="0,0,8,0">
                 <GroupBox Header="数据集信息">
                     <StackPanel Margin="6">
                         <TextBlock Text="名称" />
@@ -96,10 +116,10 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="150" />
+                    <RowDefinition x:Name="AnnotationInfoHeaderRow" Height="Auto" />
+                    <RowDefinition x:Name="AnnotationInfoListRow" Height="Auto" />
                 </Grid.RowDefinitions>
-                <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="92" Margin="0,0,0,6">
+                <ScrollViewer x:Name="AnnotationToolsPanel" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="92" Margin="0,0,0,6">
                     <WrapPanel>
                     <TextBlock Text="标注类别：" VerticalAlignment="Center" />
                     <ComboBox x:Name="ClassCombo" Width="150" />
@@ -129,6 +149,73 @@
                     </Grid>
                     </Border>
                 </local:ImageViewer>
+                <Expander x:Name="PanelOptionsExpander" Grid.Row="1"
+                          HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0"
+                          ExpandDirection="Right" IsExpanded="False"
+                          Panel.ZIndex="20">
+                    <Expander.Style>
+                        <Style TargetType="Expander">
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="Expander">
+                                        <Border Background="{DynamicResource SurfaceBrush}"
+                                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                                CornerRadius="0,6,6,0">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ContentPresenter x:Name="ExpandSite" Grid.Column="0"
+                                                                  Content="{TemplateBinding Content}"
+                                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                                  Visibility="Collapsed" />
+                                                <ToggleButton x:Name="HeaderSite" Grid.Column="1"
+                                                              Content="{TemplateBinding Header}"
+                                                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                                              Background="Transparent" BorderThickness="0" Padding="0"
+                                                              Focusable="False">
+                                                    <ToggleButton.Template>
+                                                        <ControlTemplate TargetType="ToggleButton">
+                                                            <ContentPresenter Content="{TemplateBinding Content}"
+                                                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                                              HorizontalAlignment="Stretch"
+                                                                              VerticalAlignment="Stretch" />
+                                                        </ControlTemplate>
+                                                    </ToggleButton.Template>
+                                                </ToggleButton>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsExpanded" Value="True">
+                                                <Setter TargetName="ExpandSite" Property="Visibility" Value="Visible" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </Expander.Style>
+                    <Expander.Header>
+                        <Border Background="Transparent" BorderThickness="0" Padding="5,10">
+                            <TextBlock Text="面板" FontWeight="SemiBold" TextWrapping="Wrap"
+                                       TextAlignment="Center" Width="20" />
+                        </Border>
+                    </Expander.Header>
+                    <Border Background="Transparent" BorderThickness="0" Padding="10">
+                        <StackPanel>
+                            <TextBlock Text="显示面板" FontWeight="SemiBold" Margin="0,0,0,8" />
+                            <CheckBox x:Name="AnnotationInfoCheckBox" Content="标注信息" IsChecked="True"
+                                      Checked="PanelOption_Changed" Unchecked="PanelOption_Changed" />
+                            <Separator x:Name="InstanceSegmentationOptionsSeparator" Margin="0,8,0,6" Visibility="Collapsed" />
+                            <CheckBox x:Name="BoundingBoxCheckBox" Content="目标框" IsChecked="True"
+                                      Visibility="Collapsed" Checked="PanelOption_Changed" Unchecked="PanelOption_Changed"
+                                      Margin="0,0,0,6" />
+                            <CheckBox x:Name="ContourCheckBox" Content="轮廓" IsChecked="True"
+                                      Visibility="Collapsed" Checked="PanelOption_Changed" Unchecked="PanelOption_Changed" />
+                        </StackPanel>
+                    </Border>
+                </Expander>
                 <TextBlock Grid.Row="2" Text="当前图片标注" FontWeight="Bold" Margin="0,6,0,0" />
                 <Grid Grid.Row="3" Margin="0,4,0,0">
                     <Grid.RowDefinitions>
@@ -153,7 +240,9 @@
                              SelectionChanged="AnnotationList_SelectionChanged"
                              PreviewMouseLeftButtonDown="AnnotationList_PreviewMouseLeftButtonDown"
                              PreviewMouseRightButtonDown="AnnotationList_PreviewMouseRightButtonDown"
-                             HorizontalContentAlignment="Stretch">
+                             HorizontalContentAlignment="Stretch"
+                             MaxHeight="150"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid>

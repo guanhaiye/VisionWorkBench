@@ -20,7 +20,7 @@
             </ResourceDictionary.MergedDictionaries>
         <Style TargetType="Expander">
             <EventSetter Event="Expanded" Handler="SidebarExpander_Expanded" />
-            <Setter Property="Foreground" Value="#9FB0CA" />
+            <Setter Property="Foreground" Value="{DynamicResource SidebarTextBrush}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Margin" Value="10,4,10,0" />
@@ -46,8 +46,8 @@
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="UserChrome" Property="Background" Value="#1E3150"/></Trigger>
-                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="UserChrome" Property="Background" Value="#294267"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="UserChrome" Property="Background" Value="{DynamicResource SidebarHoverBrush}"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="UserChrome" Property="Background" Value="{DynamicResource SidebarPressedBrush}"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -64,19 +64,35 @@
         </Style>
         <Style x:Key="SidebarListBoxItem" TargetType="ListBoxItem">
             <EventSetter Event="PreviewMouseLeftButtonDown" Handler="NavItem_PreviewMouseLeftButtonDown" />
-            <Setter Property="Foreground" Value="#DCE6F5" />
+            <Setter Property="Foreground" Value="{DynamicResource SidebarTextBrush}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="Margin" Value="0,2" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#1E3150" />
+                    <Setter Property="Background" Value="{DynamicResource SidebarHoverBrush}" />
                 </Trigger>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#2563EB" />
-                    <Setter Property="Foreground" Value="White" />
+                    <Setter Property="Background" Value="{DynamicResource SidebarSelectedBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource SidebarSelectedTextBrush}" />
+                    <Setter Property="TextElement.Foreground" Value="{DynamicResource SidebarSelectedTextBrush}" />
                 </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.48" />
+                    <Setter Property="Foreground" Value="{DynamicResource SidebarMutedTextBrush}" />
+                    <Setter Property="TextElement.Foreground" Value="{DynamicResource SidebarMutedTextBrush}" />
+                </Trigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsEnabled, RelativeSource={RelativeSource Self}}" Value="False" />
+                        <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="{DynamicResource SidebarSelectedBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource SidebarSelectedTextBrush}" />
+                    <Setter Property="TextElement.Foreground" Value="{DynamicResource SidebarSelectedTextBrush}" />
+                    <Setter Property="Opacity" Value="1" />
+                </MultiDataTrigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="TitleBarButton" TargetType="Button">
@@ -122,23 +138,7 @@
                 <Border Grid.Column="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                         <Image Source="/Assets/Branding/logo.png" Width="25" Height="25" Stretch="Uniform"
-                               RenderTransformOrigin="0.5,0.5">
-                            <Image.RenderTransform>
-                                <media:RotateTransform x:Name="BrandLogoRotation" Angle="0" />
-                            </Image.RenderTransform>
-                            <Image.Triggers>
-                                <EventTrigger RoutedEvent="MouseEnter">
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="BrandLogoRotation"
-                                                             Storyboard.TargetProperty="Angle"
-                                                             From="0" To="360" Duration="0:0:0.7"
-                                                             FillBehavior="Stop" />
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </EventTrigger>
-                            </Image.Triggers>
-                        </Image>
+                               RenderTransformOrigin="0.5,0.5" Loaded="BrandLogoImage_Loaded" />
                         <TextBlock Text="VisionWorkbench" FontWeight="SemiBold" FontSize="13" Margin="10,0,0,0" Foreground="{DynamicResource TextBrush}"/>
                         <TextBlock Text="  ·  AI 视觉工作台" FontSize="12" Foreground="{DynamicResource MutedTextBrush}"/>
                     </StackPanel>
@@ -163,7 +163,7 @@
                         <Grid Width="22" Height="22">
                             <Path x:Name="TopmostInactiveIcon" Width="16" Height="16"
                                   Data="M 5,1 L 9,1 L 9,4 L 11,6 L 9,7 L 9,9 L 7,10 L 5,9 L 5,7 L 3,6 L 5,4 Z M 7,10 L 7,13"
-                                  Fill="Transparent" Stroke="#DCE6F5" StrokeThickness="1.5"
+                                  Fill="Transparent" Stroke="{DynamicResource SidebarIconStrokeBrush}" StrokeThickness="1.5"
                                   StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                   HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <Path.RenderTransform>
@@ -178,8 +178,13 @@
                                       StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
-                        </Grid>
+                            </Grid>
                     </Button>
+                    <Button x:Name="RestartButton" Style="{StaticResource TitleBarButton}"
+                            Width="46" Content="↻" FontSize="20" FontWeight="SemiBold"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            IsHitTestVisible="True" Focusable="True"
+                            ToolTip="重启软件" Click="Restart_Click" />
                     <Button x:Name="MinimizeButton" Style="{StaticResource TitleBarButton}"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"
                             IsHitTestVisible="True" Focusable="True"
@@ -210,14 +215,14 @@
                 </StackPanel>
             </Grid>
         </Border>
-        <Border Grid.Row="1" Grid.Column="0" Background="#0F1B2D">
+        <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource SidebarBrush}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <Border Grid.Row="0" BorderBrush="#243550" BorderThickness="0,0,0,1" Padding="10,11">
+                <Border Grid.Row="0" BorderBrush="{DynamicResource SidebarBorderBrush}" BorderThickness="0,0,0,1" Padding="10,11">
                     <Button x:Name="UserMenuButton" Style="{StaticResource UserHeaderButton}" Click="UserMenu_Click" ToolTip="用户管理">
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="52"/><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/></Grid.ColumnDefinitions>
@@ -225,63 +230,64 @@
                                 <TextBlock x:Name="UserAvatarText" Text="用" Foreground="White" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="11,0,0,0">
-                                <TextBlock x:Name="CurrentUserText" Text="用户管理" Foreground="White" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock x:Name="CurrentRoleText" Text="点击登录或设置个人信息" Foreground="#8FA4C2" FontSize="10" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="CurrentUserText" Text="用户管理" Foreground="{DynamicResource SidebarTextBrush}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="CurrentRoleText" Text="点击登录或设置个人信息" Foreground="{DynamicResource SidebarMutedTextBrush}" FontSize="10" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
-                            <TextBlock Grid.Column="2" Text="⌄" Foreground="#8FA4C2" FontSize="16" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" Text="⌄" Foreground="{DynamicResource SidebarMutedTextBrush}" FontSize="16" HorizontalAlignment="Center"/>
                         </Grid>
                     </Button>
                 </Border>
                 <ScrollViewer x:Name="SidebarScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled" CanContentScroll="False"
-                              VerticalContentAlignment="Top" Focusable="True"
-                              PreviewMouseWheel="SidebarScrollViewer_PreviewMouseWheel">
+                              VerticalContentAlignment="Top" Focusable="True">
                     <StackPanel>
                         <Expander Header="&#x5DE5;&#x4F5C;&#x53F0;" IsExpanded="False">
-                            <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
+                            <ListBox x:Name="WorkspaceNavList" ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x5B9E;&#x65F6;&#x68C0;&#x6D4B;" Tag="live" />
                                 <ListBoxItem Content="&#x4EFB;&#x52A1;&#x914D;&#x7F6E;" Tag="tasks" />
                             </ListBox>
                         </Expander>
                         <Expander Header="&#x6570;&#x636E;&#x4E0E;&#x6A21;&#x578B;" IsExpanded="False">
-                            <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
-                                <ListBoxItem Content="&#x76EE;&#x6807;&#x68C0;&#x6D4B;" Tag="data-model-detection" />
+                            <ListBox x:Name="DataModelNavList" ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
+                                <ListBoxItem Content="AI&#x76EE;&#x6807;&#x68C0;&#x6D4B;" Tag="data-model-detection" />
                                 <!-- 兼容旧导航键；新界面分别展示语义分割和实例分割。 -->
                                 <ListBoxItem Tag="data-model-segmentation" Visibility="Collapsed" />
-                                <ListBoxItem Content="&#x8BED;&#x4E49;&#x5206;&#x5272;" Tag="data-model-semantic-segmentation" />
-                                <ListBoxItem Content="&#x5B9E;&#x4F8B;&#x5206;&#x5272;" Tag="data-model-instance-segmentation" />
-                                <ListBoxItem Content="&#x884C;&#x4E3A;&#x8BC6;&#x522B;" Tag="data-model-behavior" />
+                                <ListBoxItem Content="AI&#x8BED;&#x4E49;&#x5206;&#x5272;" Tag="data-model-semantic-segmentation" />
+                                <ListBoxItem Content="AI&#x5B9E;&#x4F8B;&#x5206;&#x5272;" Tag="data-model-instance-segmentation" />
+                                <ListBoxItem Content="AI&#x884C;&#x4E3A;&#x8BC6;&#x522B;" Tag="data-model-behavior" />
                                 <ListBoxItem Content="AI&#x5B57;&#x7B26;&#x8BC6;&#x522B;" Tag="data-model-ai-text" />
                                 <ListBoxItem Content="AI&#x6761;&#x7801;&#x8BC6;&#x522B;" Tag="data-model-barcode" />
                                 <ListBoxItem Content="AI&#x4E8C;&#x7EF4;&#x7801;&#x8BC6;&#x522B;" Tag="data-model-qrcode" />
+                                <ListBoxItem Content="AI&#x5173;&#x952E;&#x70B9;&#x68C0;&#x6D4B;" Tag="data-model-pose" />
                             </ListBox>
                         </Expander>
                         <Expander Header="&#x7ED3;&#x679C;&#x67E5;&#x770B;" IsExpanded="False">
-                            <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
+                            <ListBox x:Name="ResultsNavList" ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x5386;&#x53F2;&#x8BB0;&#x5F55;" Tag="history" />
                                 <ListBoxItem Content="&#x65E5;&#x5FD7;&#x7BA1;&#x7406;" Tag="logs" />
                             </ListBox>
                         </Expander>
                         <Expander Header="&#x901A;&#x8BAF;&#x7BA1;&#x7406;" IsExpanded="False">
-                            <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
+                            <ListBox x:Name="CommunicationNavList" ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="TCP/IP &#x901A;&#x8BAF;" Tag="communication" />
                             </ListBox>
                         </Expander>
-                        <Expander Header="&#x7CFB;&#x7EDF;&#x7BA1;&#x7406;" IsExpanded="False">
-                            <ListBox ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
+                        <Expander x:Name="SystemManagementExpander" Header="&#x7CFB;&#x7EDF;&#x7BA1;&#x7406;" IsExpanded="False">
+                            <ListBox x:Name="SystemNavList" ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
                                 <ListBoxItem Content="&#x7B97;&#x6CD5;&#x7BA1;&#x7406;" Tag="plugins" />
                                 <ListBoxItem Content="&#x8BBE;&#x5907;&#x7BA1;&#x7406;" Tag="devices" />
                                 <ListBoxItem Content="&#x672C;&#x673A;&#x76D1;&#x63A7;" Tag="monitor" />
+                                <ListBoxItem Content="&#x8BB8;&#x53EF;&#x8BC1;&#x7BA1;&#x7406;" Tag="license" />
                                 <ListBoxItem Content="&#x7CFB;&#x7EDF;&#x8BBE;&#x7F6E;" Tag="settings" />
                             </ListBox>
                         </Expander>
                     </StackPanel>
                 </ScrollViewer>
-                <Border Grid.Row="2" BorderBrush="#243550" BorderThickness="0,1,0,0" Padding="18,11">
+                <Border Grid.Row="2" BorderBrush="{DynamicResource SidebarBorderBrush}" BorderThickness="0,1,0,0" Padding="18,11">
                     <StackPanel x:Name="SidebarStatusStackPanel" Orientation="Horizontal">
                         <Ellipse Width="8" Height="8" Fill="#22C55E" Margin="0,0,8,0"/>
-                        <TextBlock Text="系统就绪" Foreground="#AFC0D8" FontSize="11"/>
-                        <TextBlock Text="  ·  单实例运行" Foreground="#607796" FontSize="11"/>
+                        <TextBlock Text="系统就绪" Foreground="{DynamicResource SidebarStatusTextBrush}" FontSize="11"/>
+                        <TextBlock Text="  ·  单实例运行" Foreground="{DynamicResource SidebarStatusMutedBrush}" FontSize="11"/>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -297,10 +303,10 @@
         </Border>
         <Popup x:Name="UserMenuPopup" PlacementTarget="{Binding ElementName=UserMenuButton}" Placement="Right"
                HorizontalOffset="8" VerticalOffset="0" StaysOpen="False" AllowsTransparency="True">
-            <Border x:Name="UserPopupContentBorder" Width="330" Background="White"
-                    BorderBrush="#D9E1EC" BorderThickness="1" CornerRadius="10" Padding="18">
+            <Border x:Name="UserPopupContentBorder" Width="330" Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="18">
                 <Border.Effect><DropShadowEffect BlurRadius="22" ShadowDepth="4" Opacity="0.22" Color="#334155"/></Border.Effect>
-                <StackPanel TextElement.Foreground="#172033">
+                <StackPanel TextElement.Foreground="{DynamicResource TextBrush}">
                 <Grid Margin="0,0,0,12" MinHeight="62">
                     <StackPanel HorizontalAlignment="Left" Margin="0,0,70,0">
                         <TextBlock Text="&#x7528;&#x6237;&#x4FE1;&#x606F;" FontSize="18" FontWeight="Bold" />
@@ -353,7 +359,15 @@
                     <TextBlock Text="用户名" />
                     <TextBox x:Name="LoginNameText" Margin="0,5,0,10" />
                     <TextBlock Text="密码" />
-                    <PasswordBox x:Name="LoginPasswordBox" Margin="0,5,0,14" MinHeight="32" />
+                    <PasswordBox x:Name="LoginPasswordBox" Margin="0,5,0,8" MinHeight="32" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <CheckBox x:Name="RememberPasswordCheckBox" Content="记住密码" Margin="2,4,18,4"
+                                  Checked="RememberPasswordOption_Changed"
+                                  Unchecked="RememberPasswordOption_Changed" />
+                        <CheckBox x:Name="AutoLoginCheckBox" Content="自动登录" Margin="2,4,2,4"
+                                  Checked="AutoLoginOption_Changed"
+                                  Unchecked="AutoLoginOption_Changed" />
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="注册" Click="Register_Click" Style="{StaticResource SecondaryButton}" />
                         <Button Content="登录" Click="Login_Click" />
@@ -363,7 +377,7 @@
             </Border>
         </Popup>
         <Popup x:Name="HelpMenuPopup" PlacementTarget="{Binding ElementName=HelpButton}" Placement="Bottom"
-               HorizontalOffset="-82" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True">
+               HorizontalOffset="-82" VerticalOffset="4" StaysOpen="True" AllowsTransparency="True">
             <Border Width="250" Background="{DynamicResource SurfaceBrush}"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                     CornerRadius="8" Padding="8">

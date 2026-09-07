@@ -1,6 +1,8 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using Microsoft.Win32;
 using VisionWorkbench.Application;
 using VisionWorkbench.Persistence;
@@ -37,6 +39,43 @@ public partial class HistoryPage : UserControl
             }
             await Query();
         };
+    }
+
+    private void DatePicker_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not DatePicker picker) return;
+        picker.ApplyTemplate();
+        if (picker.Template.FindName("PART_TextBox", picker) is DatePickerTextBox textBox)
+        {
+            // 日期只能通过日历按钮选择，禁用文本输入和键盘改值；日历本身仍可正常操作。
+            textBox.IsReadOnly = true;
+            textBox.Focusable = false;
+            textBox.Cursor = Cursors.Arrow;
+            textBox.PreviewKeyDown -= DatePickerTextBox_PreviewKeyDown;
+            textBox.PreviewKeyDown += DatePickerTextBox_PreviewKeyDown;
+            textBox.ContextMenu = CreateDateContextMenu(picker);
+        }
+        picker.ContextMenu = CreateDateContextMenu(picker);
+    }
+
+    private static void DatePickerTextBox_PreviewKeyDown(object sender, KeyEventArgs e) => e.Handled = true;
+
+    private static ContextMenu CreateDateContextMenu(DatePicker picker)
+    {
+        var menu = new ContextMenu();
+        var clear = new MenuItem { Header = "清空" };
+        clear.Click += (_, _) => picker.SelectedDate = null;
+        menu.Items.Add(clear);
+        return menu;
+    }
+
+    private void DatePicker_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DatePicker picker) return;
+        picker.ContextMenu ??= CreateDateContextMenu(picker);
+        e.Handled = true;
+        picker.ContextMenu.PlacementTarget = picker;
+        picker.ContextMenu.IsOpen = true;
     }
 
     private async void Query_Click(object sender, RoutedEventArgs e)

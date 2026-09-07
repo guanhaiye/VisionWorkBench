@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -19,11 +20,21 @@ public partial class ModelTestPage : UserControl
     private string _loadedModelText = "";
     private readonly bool _semanticMode;
     private readonly string? _taskTypeLabel;
+    private readonly string? _taskTypeFilter;
+    private bool _refreshingModels;
 
-    public ModelTestPage(bool semanticMode = false, string? taskTypeLabel = null)
+    public ModelTestPage(bool semanticMode = false, string? taskTypeLabel = null, string? taskTypeFilter = null)
     {
         _semanticMode = semanticMode;
         _taskTypeLabel = taskTypeLabel;
+        _taskTypeFilter = taskTypeFilter
+            ?? (semanticMode
+                ? "semantic_segmentation"
+                : taskTypeLabel?.Contains("实例", StringComparison.OrdinalIgnoreCase) == true
+                    ? "instance_segmentation"
+                    : taskTypeLabel?.Contains("关键点", StringComparison.OrdinalIgnoreCase) == true
+                        ? "pose"
+                    : null);
         InitializeComponent();
         SemanticOptionsPanel.Visibility = Visibility.Collapsed;
         DetectionOptionsPanel.Visibility = semanticMode ? Visibility.Collapsed : Visibility.Visible;
@@ -35,7 +46,171 @@ public partial class ModelTestPage : UserControl
         {
             TaskTypeText.Text = $"模型类型：{taskTypeLabel}";
         }
+
+        Loaded += (_, _) => RefreshTrainingModels();
+        IsVisibleChanged += (_, args) =>
+        {
+            if (args.NewValue is true) RefreshTrainingModels();
+        };
     }
+
+    private void ModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_refreshingModels || ModelCombo.SelectedItem is not ModelTestOption option) return;
+
+        ModelPathText.Text = option.ModelPath;
+        _results.Clear();
+        _loadedModelText = option.IsExternal
+            ? "模型来源：外部选择"
+            : $"模型节点：{option.NodeName}";
+        if (!_semanticMode)
+            TaskTypeText.Text = option.IsExternal
+                ? "模型类型：将在测试时自动识别"
+                : $"模型类型：{option.TaskTypeLabel}";
+        StatusText.Text = option.IsExternal
+            ? $"已选择外部模型：{IoPath.GetFileName(option.ModelPath)}"
+            : $"已选择训练节点：{option.NodeName}";
+    }
+
+    private void RefreshTrainingModels()
+    {
+        var previousPath = ModelPathText.Text;
+        var options = new List<ModelTestOption>();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dataset in AppServices.Instance.Datasets.List())
+        {
+            if (string.IsNullOrWhiteSpace(dataset.RootDirectory) || !Directory.Exists(dataset.RootDirectory)) continue;
+            if (_taskTypeFilter is not null && !string.Equals(dataset.TaskType, _taskTypeFilter, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var modelDirectory = IoPath.Combine(dataset.RootDirectory, ".visionworkbench", "models");
+            if (!Directory.Exists(modelDirectory)) continue;
+            foreach (var runDirectory in SafeEnumerateDirectories(modelDirectory))
+            {
+                var option = LoadTrainingModelOption(dataset, runDirectory);
+                if (option is null || !File.Exists(option.ModelPath)) continue;
+                if (paths.Add(IoPath.GetFullPath(option.ModelPath))) options.Add(option);
+            }
+        }
+
+        options = options.OrderByDescending(option => option.CompletedAt).ToList();
+        _refreshingModels = true;
+        ModelCombo.ItemsSource = options;
+        var selected = options.FirstOrDefault(option =>
+            !string.IsNullOrWhiteSpace(previousPath) &&
+            string.Equals(option.ModelPath, previousPath, StringComparison.OrdinalIgnoreCase));
+        ModelCombo.SelectedItem = selected ?? options.FirstOrDefault();
+        _refreshingModels = false;
+
+        if (ModelCombo.SelectedItem is ModelTestOption selectedOption)
+            ModelPathText.Text = selectedOption.ModelPath;
+        else
+            ModelPathText.Text = "";
+
+        StatusText.Text = options.Count == 0
+            ? (_taskTypeFilter is null
+                ? "暂无可测试的训练节点，请先在训练平台完成训练。"
+                : "暂无当前任务类型的可测试训练节点，请先在对应训练平台完成训练。")
+            : $"已加载 {options.Count} 个训练节点，请选择模型。";
+    }
+
+    private ModelTestOption? LoadTrainingModelOption(DatasetDefinition dataset, string runDirectory)
+    {
+        try
+        {
+            var metadataPath = IoPath.Combine(runDirectory, "model-node.json");
+            TrainingModelMetadata? metadata = null;
+            if (File.Exists(metadataPath))
+                metadata = JsonSerializer.Deserialize<TrainingModelMetadata>(File.ReadAllText(metadataPath));
+
+            var modelPath = ResolveStoredPath(metadata?.ModelPath, runDirectory) ?? FindTrainingModelFile(runDirectory);
+            if (modelPath is null) return null;
+
+            var taskType = metadata?.TaskType;
+            if (string.IsNullOrWhiteSpace(taskType)) taskType = InferTaskType(runDirectory);
+            if (string.IsNullOrWhiteSpace(taskType)) return null;
+            if (_taskTypeFilter is not null && !string.Equals(taskType, _taskTypeFilter, StringComparison.OrdinalIgnoreCase)) return null;
+
+            var nodeName = string.IsNullOrWhiteSpace(metadata?.Name)
+                ? IoPath.GetFileName(runDirectory)
+                : metadata.Name;
+            var completedAt = metadata?.CompletedAt is { } completed && completed != default
+                ? completed
+                : Directory.GetLastWriteTime(runDirectory);
+            return new ModelTestOption(
+                $"{dataset.Name} / {nodeName}",
+                modelPath,
+                nodeName,
+                taskType,
+                TaskTypeLabel(taskType),
+                completedAt,
+                false);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<string> SafeEnumerateDirectories(string directory)
+    {
+        try { return Directory.EnumerateDirectories(directory); }
+        catch { return []; }
+    }
+
+    private static string? FindTrainingModelFile(string runDirectory)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(runDirectory, "best.pt", SearchOption.AllDirectories).FirstOrDefault()
+                ?? Directory.EnumerateFiles(runDirectory, "last.pt", SearchOption.AllDirectories).FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveStoredPath(string? path, string runDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var resolved = IoPath.IsPathRooted(path) ? path : IoPath.Combine(runDirectory, path);
+        return File.Exists(resolved) ? IoPath.GetFullPath(resolved) : null;
+    }
+
+    private static string? InferTaskType(string runDirectory)
+    {
+        var normalized = runDirectory.Replace('\\', '/');
+        if (normalized.Contains("semantic_segmentation", StringComparison.OrdinalIgnoreCase)) return "semantic_segmentation";
+        if (normalized.Contains("instance_segmentation", StringComparison.OrdinalIgnoreCase)) return "instance_segmentation";
+        if (normalized.Contains("pose", StringComparison.OrdinalIgnoreCase) || normalized.Contains("keypoint", StringComparison.OrdinalIgnoreCase)) return "pose";
+        if (normalized.Contains("/segment", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("-seg-", StringComparison.OrdinalIgnoreCase)) return "instance_segmentation";
+
+        try
+        {
+            var argsPath = IoPath.Combine(runDirectory, "args.yaml");
+            if (File.Exists(argsPath))
+            {
+                var yaml = File.ReadAllText(argsPath);
+                if (yaml.Contains("task: segment", StringComparison.OrdinalIgnoreCase)) return "instance_segmentation";
+                if (yaml.Contains("task: pose", StringComparison.OrdinalIgnoreCase)) return "pose";
+                if (yaml.Contains("task: detect", StringComparison.OrdinalIgnoreCase)) return "detection";
+            }
+        }
+        catch { }
+
+        return "detection";
+    }
+
+    private static string TaskTypeLabel(string taskType) => taskType switch
+    {
+        "semantic_segmentation" => "语义分割",
+        "instance_segmentation" => "实例分割",
+        "pose" => "关键点检测",
+        "detection" => "目标检测",
+        _ => taskType,
+    };
 
     private void BrowseModel_Click(object sender, RoutedEventArgs e)
     {
@@ -48,8 +223,24 @@ public partial class ModelTestPage : UserControl
         if (!string.IsNullOrWhiteSpace(initialDirectory)) dialog.InitialDirectory = initialDirectory;
         if (dialog.ShowDialog() == true)
         {
-            ModelPathText.Text = dialog.FileName;
+            var external = new ModelTestOption(
+                $"外部模型 / {IoPath.GetFileName(dialog.FileName)}",
+                IoPath.GetFullPath(dialog.FileName),
+                IoPath.GetFileNameWithoutExtension(dialog.FileName),
+                "external",
+                "外部模型",
+                DateTime.Now,
+                true);
+            var options = ModelCombo.Items.OfType<ModelTestOption>()
+                .Where(option => !option.IsExternal).ToList();
+            options.Insert(0, external);
+            _refreshingModels = true;
+            ModelCombo.ItemsSource = options;
+            ModelCombo.SelectedItem = external;
+            _refreshingModels = false;
+            ModelPathText.Text = external.ModelPath;
             _results.Clear();
+            _loadedModelText = "模型来源：外部选择";
             TaskTypeText.Text = "模型类型：将在测试时自动识别";
         }
     }
@@ -293,11 +484,14 @@ public partial class ModelTestPage : UserControl
     {
         _result = result;
         var isSemantic = string.Equals(result.Task, "semantic", StringComparison.OrdinalIgnoreCase);
+        var isPose = string.Equals(result.Task, "pose", StringComparison.OrdinalIgnoreCase);
         DetectionOptionsPanel.Visibility = isSemantic ? Visibility.Collapsed : Visibility.Visible;
-        var taskText = result.Task == "segment" ? "模型类型：实例分割（segment）" : "模型类型：目标检测（detect）";
+        var taskText = result.Task == "segment" ? "模型类型：实例分割（segment）" : isPose ? "模型类型：关键点检测（pose）" : "模型类型：目标检测（detect）";
         TaskTypeText.Text = string.IsNullOrWhiteSpace(_loadedModelText) ? taskText : $"{taskText}\n{_loadedModelText}";
         if (result.Task == "semantic") TaskTypeText.Text = $"模型类型：ATU5 / FPN 语义分割\n{_loadedModelText}";
-        SummaryText.Text = $"目标 {result.Detections.Count} 个；掩膜 {result.Masks.Count} 个；推理 {result.ElapsedMs:0.0} ms";
+        SummaryText.Text = isPose
+            ? $"目标 {result.Detections.Count} 个；关键点 {result.Detections.Sum(item => item.Keypoints?.Count ?? 0)} 个；推理 {result.ElapsedMs:0.0} ms"
+            : $"目标 {result.Detections.Count} 个；掩膜 {result.Masks.Count} 个；推理 {result.ElapsedMs:0.0} ms";
         ResultList.ItemsSource = result.Detections.Select(item => $"{item.ClassName}  {item.Confidence:P1}").ToList();
         if (isSemantic)
         {
@@ -341,6 +535,17 @@ public partial class ModelTestPage : UserControl
                 Background = Brushes.DarkGreen, Padding = new Thickness(3, 1, 3, 1), IsHitTestVisible = false };
             Canvas.SetLeft(label, offsetX + item.X * width); Canvas.SetTop(label, Math.Max(0, offsetY + item.Y * height - 22));
             OverlayCanvas.Children.Add(label);
+            if (item.Keypoints is not null)
+            {
+                for (var index = 0; index < item.Keypoints.Count; index++)
+                {
+                    var keypoint = item.Keypoints[index];
+                    var marker = new Ellipse { Width = 10, Height = 10, Fill = Brushes.Cyan, Stroke = Brushes.White, StrokeThickness = 1.5, IsHitTestVisible = false };
+                    Canvas.SetLeft(marker, offsetX + keypoint.X * width - 5);
+                    Canvas.SetTop(marker, offsetY + keypoint.Y * height - 5);
+                    OverlayCanvas.Children.Add(marker);
+                }
+            }
         }
     }
 
@@ -351,4 +556,21 @@ public partial class ModelTestPage : UserControl
     }
 
     private sealed record TestImage(string FullPath) { public string FileName => IoPath.GetFileName(FullPath); }
+
+    private sealed class TrainingModelMetadata
+    {
+        public string Name { get; set; } = "";
+        public string TaskType { get; set; } = "";
+        public string ModelPath { get; set; } = "";
+        public DateTime CompletedAt { get; set; }
+    }
+
+    private sealed record ModelTestOption(
+        string DisplayName,
+        string ModelPath,
+        string NodeName,
+        string TaskType,
+        string TaskTypeLabel,
+        DateTime CompletedAt,
+        bool IsExternal);
 }

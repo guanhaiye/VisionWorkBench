@@ -12,6 +12,7 @@ public sealed class DatasetDefinition
     public string TaskType { get; set; } = "detection";
     public string RootDirectory { get; set; } = "";
     public List<string> Classes { get; set; } = [];
+    public List<string> KeypointNames { get; set; } = [];
     public Dictionary<string, string> ImageSplits { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
@@ -51,6 +52,7 @@ public sealed class DatasetAnnotationObject
     public double Width { get; set; }
     public double Height { get; set; }
     public List<DatasetPoint> Polygon { get; set; } = [];
+    public List<DatasetPoint> Keypoints { get; set; } = [];
 
     public override string ToString() =>
         $"{ClassName}  {Shape}  ({X:0.000}, {Y:0.000}, {Width:0.000}, {Height:0.000})";
@@ -60,6 +62,7 @@ public sealed class DatasetPoint
 {
     public double X { get; set; }
     public double Y { get; set; }
+    public int Visibility { get; set; } = 2;
 }
 
 /// <summary>离线图片数据集目录、标注 sidecar 和 YOLO 导出服务。</summary>
@@ -99,6 +102,8 @@ public sealed class DatasetCatalogService
         dataset.Name = dataset.Name.Trim();
         dataset.RootDirectory = Path.GetFullPath(dataset.RootDirectory.Trim());
         dataset.Classes = dataset.Classes.Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        dataset.KeypointNames = dataset.KeypointNames.Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         dataset.ImageSplits = NormalizeSplits(dataset.ImageSplits);
         dataset.UpdatedAt = DateTime.UtcNow;
@@ -211,11 +216,24 @@ public sealed class DatasetCatalogService
     public string ExportYolo(DatasetDefinition dataset, string outputDirectory)
     {
         if (dataset.Classes.Count == 0) throw new InvalidOperationException("请先配置至少一个类别");
+        if (string.Equals(dataset.TaskType, "pose", StringComparison.OrdinalIgnoreCase) && dataset.KeypointNames.Count == 0)
+            throw new InvalidOperationException("关键点数据集必须配置至少一个关键点");
         var images = ListImages(dataset);
         if (images.Count == 0) throw new InvalidOperationException("数据集目录中没有图片");
         var exportImages = images.Where(x => x.Split is "train" or "val").ToArray();
         if (exportImages.Length == 0)
             throw new InvalidOperationException("请先点击“自动划分数据集”，或通过图片右键菜单设置训练集和验证集");
+        if (string.Equals(dataset.TaskType, "pose", StringComparison.OrdinalIgnoreCase))
+        {
+            var incomplete = exportImages
+                .Select(image => (image, annotation: LoadAnnotation(dataset, image.RelativePath)))
+                .Where(item => item.annotation.Objects.Any(obj => obj.Keypoints.Count != dataset.KeypointNames.Count))
+                .Select(item => item.image.RelativePath)
+                .Take(5)
+                .ToArray();
+            if (incomplete.Length > 0)
+                throw new InvalidOperationException($"以下图片存在未完成的关键点标注：{string.Join("、", incomplete)}");
+        }
         var output = Path.GetFullPath(outputDirectory);
         foreach (var split in new[] { "train", "val" })
         {
@@ -231,14 +249,20 @@ public sealed class DatasetCatalogService
                 Path.ChangeExtension(relativeName, ".txt"));
             File.Copy(image.FullPath, imageDestination, true);
             var annotation = LoadAnnotation(dataset, image.RelativePath);
-            var lines = annotation.Objects.Select(obj => ToYoloLine(obj, dataset.Classes)).OfType<string>();
+            var lines = annotation.Objects.Select(obj => ToYoloLine(obj, dataset.Classes, dataset.TaskType, dataset.KeypointNames)).OfType<string>();
             File.WriteAllLines(labelDestination, lines);
         }
         var yaml = new StringBuilder()
             .AppendLine($"path: {output.Replace('\\', '/')}")
             .AppendLine("train: images/train")
-            .AppendLine("val: images/val")
-            .AppendLine("names:");
+            .AppendLine("val: images/val");
+        if (string.Equals(dataset.TaskType, "pose", StringComparison.OrdinalIgnoreCase))
+        {
+            if (dataset.KeypointNames.Count == 0)
+                throw new InvalidOperationException("关键点数据集必须配置至少一个关键点");
+            yaml.AppendLine($"kpt_shape: [{dataset.KeypointNames.Count}, 3]");
+        }
+        yaml.AppendLine("names:");
         for (var i = 0; i < dataset.Classes.Count; i++)
             yaml.AppendLine($"  {i}: {dataset.Classes[i]}");
         File.WriteAllText(Path.Combine(output, "data.yaml"), yaml.ToString(), Encoding.UTF8);
@@ -269,10 +293,18 @@ public sealed class DatasetCatalogService
         return manifestPath;
     }
 
-    private static string? ToYoloLine(DatasetAnnotationObject obj, IReadOnlyList<string> classes)
+    private static string? ToYoloLine(DatasetAnnotationObject obj, IReadOnlyList<string> classes,
+        string taskType, IReadOnlyList<string> keypointNames)
     {
         var classIndex = classes.ToList().FindIndex(x => string.Equals(x, obj.ClassName, StringComparison.OrdinalIgnoreCase));
         if (classIndex < 0) return null;
+        if (string.Equals(taskType, "pose", StringComparison.OrdinalIgnoreCase))
+        {
+            if (obj.Keypoints.Count != keypointNames.Count || keypointNames.Count == 0) return null;
+            var keypoints = obj.Keypoints.Select(point =>
+                $"{Clamp(point.X):0.######} {Clamp(point.Y):0.######} {Math.Clamp(point.Visibility, 0, 2)}");
+            return $"{classIndex} {Clamp(obj.X + obj.Width / 2):0.######} {Clamp(obj.Y + obj.Height / 2):0.######} {Clamp(obj.Width):0.######} {Clamp(obj.Height):0.######} {string.Join(' ', keypoints)}";
+        }
         if (obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3)
         {
             return $"{classIndex} {string.Join(' ', obj.Polygon.SelectMany(p => new[] { Clamp(p.X), Clamp(p.Y) }).Select(x => x.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)))}";
@@ -350,6 +382,7 @@ public sealed class DatasetCatalogService
         TaskType = source.TaskType,
         RootDirectory = source.RootDirectory,
         Classes = [.. source.Classes],
+        KeypointNames = [.. source.KeypointNames],
         CreatedAt = source.CreatedAt,
         UpdatedAt = source.UpdatedAt,
         ImageSplits = NormalizeSplits(source.ImageSplits),

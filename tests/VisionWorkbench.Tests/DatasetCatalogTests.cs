@@ -125,4 +125,51 @@ public sealed class DatasetCatalogTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void Exports_Pose_Label_With_Keypoint_Schema()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"vw-pose-{Guid.NewGuid():N}");
+        var catalogRoot = Path.Combine(root, "catalog");
+        var exportRoot = Path.Combine(root, "export");
+        Directory.CreateDirectory(root);
+        File.WriteAllBytes(Path.Combine(root, "sample.png"), [1, 2, 3]);
+        try
+        {
+            var service = new DatasetCatalogService(catalogRoot);
+            var dataset = service.Save(new DatasetDefinition
+            {
+                Name = "pose",
+                TaskType = "pose",
+                RootDirectory = root,
+                Classes = ["person"],
+                KeypointNames = ["nose", "shoulder"],
+                ImageSplits = new Dictionary<string, string> { ["sample.png"] = "train" },
+            });
+            service.SaveAnnotation(dataset, new DatasetAnnotation
+            {
+                ImageRelativePath = "sample.png",
+                Objects =
+                [new DatasetAnnotationObject
+                {
+                    ClassName = "person",
+                    Shape = "pose",
+                    X = 0.1,
+                    Y = 0.2,
+                    Width = 0.3,
+                    Height = 0.4,
+                    Keypoints = [new DatasetPoint { X = 0.2, Y = 0.3 }, new DatasetPoint { X = 0.4, Y = 0.5 }],
+                }],
+            });
+
+            service.ExportYolo(dataset, exportRoot);
+            var label = Directory.EnumerateFiles(Path.Combine(exportRoot, "labels"), "*.txt", SearchOption.AllDirectories).Single();
+            Assert.Equal("0 0.25 0.4 0.3 0.4 0.2 0.3 2 0.4 0.5 2", File.ReadAllText(label).Trim());
+            Assert.Contains("kpt_shape: [2, 3]", File.ReadAllText(Path.Combine(exportRoot, "data.yaml")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
 }

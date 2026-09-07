@@ -29,8 +29,8 @@ def run(request: dict) -> dict:
             task_hint = str(getattr(YOLO(str(sibling_pt)), "task", "")).lower()
     model = YOLO(str(model_path), task=task_hint) if task_hint else YOLO(str(model_path))
     task = str(getattr(model, "task", "")).lower()
-    if task not in {"detect", "segment"}:
-        raise ValueError(f"当前测试平台仅支持 detect/segment，模型类型为：{task or 'unknown'}")
+    if task not in {"detect", "segment", "pose"}:
+        raise ValueError(f"当前测试平台仅支持 detect/segment/pose，模型类型为：{task or 'unknown'}")
 
     started = time.perf_counter()
     device = str(request.get("device", "auto"))
@@ -60,6 +60,7 @@ def run(request: dict) -> dict:
                 "classId": class_id, "className": str(name), "confidence": float(scores[index]),
                 "x": float(box[0]), "y": float(box[1]),
                 "width": float(box[2] - box[0]), "height": float(box[3] - box[1]),
+                "keypoints": pose_keypoints(result, index),
             })
 
     masks = []
@@ -80,6 +81,23 @@ def run(request: dict) -> dict:
             })
     return {"success": True, "task": task, "elapsedMs": elapsed_ms,
             "detections": detections, "masks": masks}
+
+
+def pose_keypoints(result: Any, index: int) -> list[dict[str, float]]:
+    keypoints = getattr(result, "keypoints", None)
+    if keypoints is None:
+        return []
+    try:
+        points = keypoints.xyn[index]
+        confidences = getattr(keypoints, "conf", None)
+        confidence_row = confidences[index] if confidences is not None else None
+        output = []
+        for point_index, point in enumerate(points):
+            confidence = float(confidence_row[point_index]) if confidence_row is not None else 1.0
+            output.append({"x": float(point[0]), "y": float(point[1]), "confidence": confidence})
+        return output
+    except (IndexError, TypeError, ValueError):
+        return []
 
 
 def read_model_image_size(model_path: Path, model: Any, default: int = 640) -> int:

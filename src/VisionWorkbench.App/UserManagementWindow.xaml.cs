@@ -61,7 +61,7 @@ public partial class UserManagementWindow : Window
 
     private void NewUser_Click(object sender, RoutedEventArgs e) => PrepareNewUser();
 
-    private void SaveUser_Click(object sender, RoutedEventArgs e)
+    private async void SaveUser_Click(object sender, RoutedEventArgs e)
     {
         var settings = AppServices.Instance.Settings;
         var name = AccountRules.NormalizeUserName(AccountNameText.Text);
@@ -117,13 +117,16 @@ public partial class UserManagementWindow : Window
         }
 
         AppServices.Instance.SaveUserSettings();
+        await AppServices.Instance.Identity.UpsertAccountAsync(account);
+        await AppServices.Instance.Audit.RecordAsync(_isNewUser ? "user.create" : "user.update", "user", account.UserName,
+            _adminName, detailsJson: "{\"source\":\"user_management\"}");
 
         UsersGrid.Items.Refresh();
         if (_isNewUser) UsersGrid.SelectedItem = account;
         ThemedMessageBox.Show("用户信息已保存。", "用户管理", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private void DeleteUser_Click(object sender, RoutedEventArgs e)
+    private async void DeleteUser_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedAccount is null)
         {
@@ -148,8 +151,10 @@ public partial class UserManagementWindow : Window
         };
         if (confirm.ShowDialog() != true) return;
 
+        var deletedName = _selectedAccount.UserName;
         AppServices.Instance.Settings.Accounts.Remove(_selectedAccount);
         AppServices.Instance.SaveUserSettings();
+        await AppServices.Instance.Identity.DeleteAccountAsync(deletedName);
         LoadAccounts();
         PrepareNewUser();
     }

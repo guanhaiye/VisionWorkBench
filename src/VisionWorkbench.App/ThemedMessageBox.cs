@@ -8,21 +8,26 @@ namespace VisionWorkbench.App;
 public static class ThemedMessageBox
 {
     public static MessageBoxResult Show(string message, string caption) =>
-        Show(null, message, caption, MessageBoxButton.OK, MessageBoxImage.None);
+        Show(null, message, caption, MessageBoxButton.OK, MessageBoxImage.None, false);
 
     public static MessageBoxResult Show(
-        string message, string caption, MessageBoxButton buttons, MessageBoxImage image) =>
-        Show(null, message, caption, buttons, image);
+        string message,
+        string caption,
+        MessageBoxButton buttons,
+        MessageBoxImage image,
+        bool dangerConfirmation = false) =>
+        Show(null, message, caption, buttons, image, dangerConfirmation);
 
     public static MessageBoxResult Show(Window? owner, string message, string caption) =>
-        Show(owner, message, caption, MessageBoxButton.OK, MessageBoxImage.None);
+        Show(owner, message, caption, MessageBoxButton.OK, MessageBoxImage.None, false);
 
     public static MessageBoxResult Show(
         Window? owner,
         string message,
         string caption,
         MessageBoxButton buttons,
-        MessageBoxImage image)
+        MessageBoxImage image,
+        bool dangerConfirmation = false)
     {
         var window = new Window
         {
@@ -93,7 +98,11 @@ public static class ThemedMessageBox
                 Margin = new Thickness(8, 2, 0, 2),
                 Padding = new Thickness(12, 5, 12, 5),
             };
-            if (secondary)
+            if (dangerConfirmation && result == MessageBoxResult.Yes)
+            {
+                button.Style = (Style)System.Windows.Application.Current.FindResource("DangerButton");
+            }
+            else if (secondary)
             {
                 button.Style = (Style)System.Windows.Application.Current.FindResource("SecondaryButton");
             }

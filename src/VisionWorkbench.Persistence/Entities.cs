@@ -256,3 +256,201 @@ public sealed class CorrectionEntity
 
     public DateTime CorrectedAt { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>商用化数据库中的用户；账号数据不再依赖可直接编辑的 settings.json。</summary>
+public sealed class UserEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(64)] public string UserName { get; set; } = "";
+    [Required, MaxLength(512)] public string PasswordHash { get; set; } = "";
+    public bool IsEnabled { get; set; } = true;
+    public int FailedLoginCount { get; set; }
+    public DateTime? LockoutUntilUtc { get; set; }
+    public bool MustChangePassword { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? LastLoginAtUtc { get; set; }
+}
+
+public sealed class RoleEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(64)] public string Code { get; set; } = "";
+    [Required, MaxLength(128)] public string Name { get; set; } = "";
+}
+
+public sealed class PermissionEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(128)] public string Code { get; set; } = "";
+    [Required, MaxLength(200)] public string Name { get; set; } = "";
+}
+
+public sealed class UserRoleEntity
+{
+    public long UserId { get; set; }
+    public long RoleId { get; set; }
+}
+
+public sealed class RolePermissionEntity
+{
+    public long RoleId { get; set; }
+    public long PermissionId { get; set; }
+}
+
+public sealed class LoginEventEntity
+{
+    [Key] public long Id { get; set; }
+    public long? UserId { get; set; }
+    [Required, MaxLength(64)] public string UserName { get; set; } = "";
+    public bool Succeeded { get; set; }
+    [Required, MaxLength(256)] public string Reason { get; set; } = "";
+    [MaxLength(128)] public string? ClientAddress { get; set; }
+    public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>追加式审计事件。Hash/PreviousHash 用于发现普通文件或数据库层面的篡改。</summary>
+public sealed class AuditEventEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(40)] public string EventId { get; set; } = Guid.NewGuid().ToString("N");
+    public long? ActorUserId { get; set; }
+    [Required, MaxLength(64)] public string ActorName { get; set; } = "system";
+    [Required, MaxLength(128)] public string Action { get; set; } = "";
+    [Required, MaxLength(64)] public string ObjectType { get; set; } = "";
+    [MaxLength(256)] public string? ObjectId { get; set; }
+    [Required, MaxLength(32)] public string Result { get; set; } = "success";
+    public string DetailsJson { get; set; } = "{}";
+    public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
+    [MaxLength(64)] public string? PreviousHash { get; set; }
+    [Required, MaxLength(64)] public string Hash { get; set; } = "";
+}
+
+public sealed class BackupRecordEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(1024)] public string Path { get; set; } = "";
+    [Required, MaxLength(32)] public string Kind { get; set; } = "manual";
+    [Required, MaxLength(32)] public string Status { get; set; } = "success";
+    [MaxLength(64)] public string? Sha256 { get; set; }
+    public long SizeBytes { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    [MaxLength(1000)] public string? Error { get; set; }
+}
+
+public sealed class HealthSnapshotEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(32)] public string State { get; set; } = "Healthy";
+    public double CpuUsage { get; set; }
+    public ulong MemoryUsedBytes { get; set; }
+    public ulong MemoryTotalBytes { get; set; }
+    public ulong GpuUsedBytes { get; set; }
+    public ulong GpuTotalBytes { get; set; }
+    public ulong FreeDiskBytes { get; set; }
+    public DateTime CapturedAtUtc { get; set; } = DateTime.UtcNow;
+    public string DetailsJson { get; set; } = "{}";
+}
+
+public sealed class AlertEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(64)] public string Code { get; set; } = "";
+    [Required, MaxLength(16)] public string Severity { get; set; } = "warning";
+    [Required, MaxLength(256)] public string Title { get; set; } = "";
+    public string DetailsJson { get; set; } = "{}";
+    [Required, MaxLength(16)] public string Status { get; set; } = "active";
+    public DateTime FirstSeenAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? AcknowledgedAtUtc { get; set; }
+    public DateTime? RecoveredAtUtc { get; set; }
+    [MaxLength(64)] public string? AcknowledgedBy { get; set; }
+}
+
+/// <summary>通信幂等记录，重启后仍能识别已完成 requestId。</summary>
+public sealed class CommunicationRequestEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(64)] public string ProjectCode { get; set; } = "default";
+    [Required, MaxLength(128)] public string ClientId { get; set; } = "";
+    [Required, MaxLength(128)] public string RequestId { get; set; } = "";
+    [Required, MaxLength(64)] public string Command { get; set; } = "";
+    [Required, MaxLength(64)] public string RequestHash { get; set; } = "";
+    [Required, MaxLength(32)] public string Status { get; set; } = "processing";
+    public string? ResponseJson { get; set; }
+    public DateTime ReceivedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? CompletedAtUtc { get; set; }
+    public DateTime ExpiresAtUtc { get; set; } = DateTime.UtcNow.AddDays(7);
+}
+
+public sealed class RecipeVersionEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(128)] public string RecipeCode { get; set; } = "";
+    public int Version { get; set; }
+    [Required, MaxLength(16)] public string State { get; set; } = "draft";
+    [Required] public string DefinitionJson { get; set; } = "{}";
+    [Required, MaxLength(64)] public string ContentSha256 { get; set; } = "";
+    [MaxLength(64)] public string? PublishedBy { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? PublishedAtUtc { get; set; }
+}
+
+public sealed class ModelArtifactEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(128)] public string ModelCode { get; set; } = "";
+    public int Version { get; set; }
+    [Required, MaxLength(260)] public string FilePath { get; set; } = "";
+    [Required, MaxLength(64)] public string Sha256 { get; set; } = "";
+    [MaxLength(64)] public string? Algorithm { get; set; }
+    [Required, MaxLength(16)] public string State { get; set; } = "draft";
+    [MaxLength(64)] public string? PublishedBy { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? PublishedAtUtc { get; set; }
+}
+
+public sealed class DeploymentBindingEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(128)] public string TargetCode { get; set; } = "";
+    [Required, MaxLength(128)] public string RecipeCode { get; set; } = "";
+    public int RecipeVersion { get; set; }
+    [Required, MaxLength(128)] public string ModelCode { get; set; } = "";
+    public int ModelVersion { get; set; }
+    [Required, MaxLength(16)] public string State { get; set; } = "active";
+    [MaxLength(64)] public string? UpdatedBy { get; set; }
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class LicenseEventEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(64)] public string LicenseId { get; set; } = "";
+    [Required, MaxLength(32)] public string EventType { get; set; } = "";
+    public string DetailsJson { get; set; } = "{}";
+    public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class DatasetVersionEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(128)] public string DatasetCode { get; set; } = "";
+    public int Version { get; set; }
+    [Required, MaxLength(64)] public string Sha256 { get; set; } = "";
+    public int TrainingCount { get; set; }
+    public int ValidationCount { get; set; }
+    [MaxLength(64)] public string? CreatedBy { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class ReportJobEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(32)] public string Status { get; set; } = "queued";
+    [Required, MaxLength(64)] public string Format { get; set; } = "csv";
+    public DateTime FromUtc { get; set; }
+    public DateTime ToUtc { get; set; }
+    [MaxLength(260)] public string? OutputPath { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}

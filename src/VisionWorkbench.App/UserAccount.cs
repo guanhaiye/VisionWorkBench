@@ -49,7 +49,7 @@ public static class AccountRules
     public static bool ValidatePassword(string? password, out string message)
     {
         password ??= "";
-        if (password.Length < 8)
+        if (password.Length < 10)
         {
             message = "密码至少需要 8 位。";
             return false;

@@ -1,0 +1,17 @@
+name: commercial-quality-gate
+on: [push, pull_request]
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore VisionWorkbench.slnx
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-quality-gate.ps1 -Configuration Release
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-commercial.ps1 -SkipTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visionworkbench-commercial
+          path: artifacts/commercial/Release

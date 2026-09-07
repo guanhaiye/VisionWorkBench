@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using VbFileSystem = Microsoft.VisualBasic.FileIO.FileSystem;
 using VisionWorkbench.Application;
 using IoPath = System.IO.Path;
@@ -26,17 +27,33 @@ public partial class TrainingPage : UserControl
     private bool _isNewModel = true;
     private bool _trainingPaused;
     private bool _updatingModelNodes;
+    private DateTime _lastNewModelClickUtc;
+    private readonly DispatcherTimer _gpuMemoryTimer;
+    private int _gpuMemoryQueryInFlight;
+    private double _lossChartTop;
+    private double _lossChartHeight;
+    private double _lossChartMin;
+    private double _lossChartMax;
+    private string _lossChartFormat = "0.###";
+    private bool _lossChartHasData;
+    private Line? _lossHoverLine;
+    private TextBlock? _lossHoverLabel;
 
     public TrainingPage(string? taskTypeFilter = null)
     {
         _taskTypeFilter = taskTypeFilter;
         InitializeComponent();
+        _gpuMemoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _gpuMemoryTimer.Tick += async (_, _) => await RefreshGpuMemoryTextAsync();
         SetBatchSizeOptions([1, 2, 4, 8], 2);
         Loaded += async (_, _) =>
         {
+            _gpuMemoryTimer.Start();
             RefreshDatasets();
             await RefreshBatchOptionsAsync();
+            await RefreshGpuMemoryTextAsync();
         };
+        Unloaded += (_, _) => _gpuMemoryTimer.Stop();
         IsVisibleChanged += (_, args) =>
         {
             if (args.NewValue is true && !AppServices.Instance.Yolo11Training.IsRunning && !AppServices.Instance.Atu5Training.IsRunning)
@@ -62,6 +79,7 @@ public partial class TrainingPage : UserControl
     {
         _dataset = DatasetCombo.SelectedItem as DatasetDefinition;
         SetTaskTypeUi(_dataset);
+        RefreshDatasetSplitSummary();
         RefreshModels();
         RefreshModelNodes();
         _ = RefreshBatchOptionsAsync();
@@ -74,13 +92,17 @@ public partial class TrainingPage : UserControl
         {
             "detection" => "目标检测（YOLO11 detect）",
             "instance_segmentation" => "实例分割（YOLO11-seg）",
+            "pose" => "关键点检测（YOLO11 pose）",
             "semantic_segmentation" => "语义分割（YOLO11 不支持原生训练）",
             _ => "未选择数据集",
         };
         TaskTypeText.Text = $"任务：{taskName}";
         TaskTypeText.Foreground = Brushes.DarkGreen;
         if (taskType == "semantic_segmentation") TaskTypeText.Text = "任务：语义分割（ATU5 / FPN）";
-        StartButton.IsEnabled = dataset is not null && taskType is ("detection" or "instance_segmentation" or "semantic_segmentation");
+        StartButton.IsEnabled = CanStartTraining();
+        StartButton.ToolTip = _selectedModelNode is null
+            ? "请先选择或新建模型节点。"
+            : null;
         ModelHintText.Text = taskType == "semantic_segmentation"
             ? "YOLO11 官方支持目标检测和实例分割训练，不支持原生语义分割训练。当前数据集需要使用 YOLO26-sem 或其他语义分割训练方案。"
             : dataset is null
@@ -100,6 +122,16 @@ public partial class TrainingPage : UserControl
                 OfficialModel("YOLO11m", "models/yolo11m.pt"),
                 OfficialModel("YOLO11l", "models/yolo11l.pt"),
                 OfficialModel("YOLO11x", "models/yolo11x.pt"),
+            ]);
+        }
+        else if (taskType == "pose")
+        {
+            options.AddRange([
+                OfficialModel("YOLO11n-pose", "models/yolo11n-pose.pt"),
+                OfficialModel("YOLO11s-pose", "models/yolo11s-pose.pt"),
+                OfficialModel("YOLO11m-pose", "models/yolo11m-pose.pt"),
+                OfficialModel("YOLO11l-pose", "models/yolo11l-pose.pt"),
+                OfficialModel("YOLO11x-pose", "models/yolo11x-pose.pt"),
             ]);
         }
         else if (taskType == "instance_segmentation")
@@ -131,6 +163,31 @@ public partial class TrainingPage : UserControl
             ModelHintText.Text = "ATU5 使用 atu5.pt 作为初始权重，初始化 ResNet50 编码器后训练 FPN 语义分割模型。训练输出保存到数据集目录下的 .visionworkbench/models。";
         if (_dataset?.TaskType == "semantic_segmentation")
             ModelHintText.Text = "ATU5 使用 atu5.pt 作为初始权重，初始化 ResNet50 编码器后训练 FPN 语义分割模型。训练输出保存到数据集目录下的 .visionworkbench/models。";
+    }
+
+    private void RefreshDatasetSplitSummary()
+    {
+        if (DatasetSplitText is null) return;
+        if (_dataset is null)
+        {
+            DatasetSplitText.Text = "训练集：-，验证集：-";
+            return;
+        }
+
+        try
+        {
+            var images = AppServices.Instance.Datasets.ListImages(_dataset);
+            var train = images.Count(image => image.Split == "train");
+            var validation = images.Count(image => image.Split == "val");
+            var unassigned = images.Count - train - validation;
+            DatasetSplitText.Text = unassigned > 0
+                ? $"训练集：{train} 张，验证集：{validation} 张，未划分：{unassigned} 张"
+                : $"训练集：{train} 张，验证集：{validation} 张";
+        }
+        catch
+        {
+            DatasetSplitText.Text = "训练集：读取失败，验证集：读取失败";
+        }
     }
 
     private static ModelOption OfficialModel(string name, string modelPath)
@@ -172,6 +229,7 @@ public partial class TrainingPage : UserControl
         _updatingModelNodes = false;
 
         if (selected is null) BeginNewModel();
+        else if (string.IsNullOrWhiteSpace(selected.ModelPath)) ActivateNewModel(selected);
         else LoadModelNodeIntoEditor(selected);
     }
 
@@ -182,16 +240,28 @@ public partial class TrainingPage : UserControl
         {
             if (File.Exists(metadataPath))
             {
-            var node = JsonSerializer.Deserialize<TrainingModelNode>(File.ReadAllText(metadataPath));
-                if (node is not null && !string.IsNullOrWhiteSpace(node.ModelPath))
+                var node = JsonSerializer.Deserialize<TrainingModelNode>(File.ReadAllText(metadataPath));
+                if (node is not null && !string.IsNullOrWhiteSpace(node.Name)
+                    && string.Equals(node.TaskType, _dataset?.TaskType, StringComparison.OrdinalIgnoreCase))
                 {
+                    node.RunDirectory = runDirectory;
+                    // 训练进程可能已经写出权重，但桌面端在写回节点元数据前被关闭。
+                    // 发现同目录已有权重时，将草稿恢复为已完成节点，避免重启后重复显示。
+                    if (string.IsNullOrWhiteSpace(node.ModelPath)
+                        && FindTrainingModelFile(runDirectory) is { } recoveredModelPath)
+                    {
+                        node.ModelPath = recoveredModelPath;
+                        node.CompletedAt = Directory.GetLastWriteTime(runDirectory);
+                        if (node.LossPoints.Count == 0)
+                            node.LossPoints = ReadLossPoints(IoPath.Combine(runDirectory, "results.csv"));
+                        try { SaveModelNode(node); } catch { }
+                    }
                     NormalizeLossPoints(node);
                     return node;
                 }
             }
 
-            var modelPath = Directory.EnumerateFiles(runDirectory, "best.pt", SearchOption.AllDirectories).FirstOrDefault()
-                ?? Directory.EnumerateFiles(runDirectory, "last.pt", SearchOption.AllDirectories).FirstOrDefault();
+            var modelPath = FindTrainingModelFile(runDirectory);
             if (modelPath is null) return null;
             var nodeFromLegacyRun = new TrainingModelNode
             {
@@ -216,7 +286,44 @@ public partial class TrainingPage : UserControl
         }
     }
 
-    private void NewModel_Click(object sender, RoutedEventArgs e) => BeginNewModel();
+    private static string? FindTrainingModelFile(string runDirectory) =>
+        Directory.EnumerateFiles(runDirectory, "best.pt", SearchOption.AllDirectories).FirstOrDefault()
+        ?? Directory.EnumerateFiles(runDirectory, "last.pt", SearchOption.AllDirectories).FirstOrDefault();
+
+    private string GetTrainingRunName(string fallback)
+    {
+        if (!_isNewModel || _selectedModelNode is null || string.IsNullOrWhiteSpace(_selectedModelNode.RunDirectory)
+            || _dataset is null) return fallback;
+
+        try
+        {
+            var modelRoot = IoPath.GetFullPath(IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models"));
+            var draftDirectory = IoPath.GetFullPath(_selectedModelNode.RunDirectory);
+            var modelRootPrefix = modelRoot.TrimEnd(IoPath.DirectorySeparatorChar, IoPath.AltDirectorySeparatorChar)
+                                  + IoPath.DirectorySeparatorChar;
+            if (draftDirectory.StartsWith(modelRootPrefix, StringComparison.OrdinalIgnoreCase))
+                return IoPath.GetFileName(draftDirectory);
+        }
+        catch
+        {
+            // 目录异常时使用默认训练名称。
+        }
+
+        return fallback;
+    }
+
+    private string GetCurrentNodeName(string fallback) =>
+        _isNewModel && _selectedModelNode is { Name.Length: > 0 } node ? node.Name : fallback;
+
+    private void NewModel_Click(object sender, RoutedEventArgs e)
+    {
+        // 防止鼠标连点或重复路由事件在短时间内创建多个草稿节点。
+        var now = DateTime.UtcNow;
+        if ((now - _lastNewModelClickUtc).TotalMilliseconds < 2000) return;
+        _lastNewModelClickUtc = now;
+        e.Handled = true;
+        BeginNewModel(addToList: true);
+    }
 
     private void ModelNodeList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -279,6 +386,33 @@ public partial class TrainingPage : UserControl
         TrainingStatusText.Text = "模型路径已复制到剪贴板。";
     }
 
+    private void RenameModelNodeMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var node = GetSelectedModelNode();
+        if (node is null) return;
+
+        var dialog = new ModelRenameDialog(node.Name) { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true || string.Equals(dialog.ModelName, node.Name, StringComparison.Ordinal)) return;
+
+        node.Name = dialog.ModelName;
+        if (!string.IsNullOrWhiteSpace(node.RunDirectory))
+        {
+            try
+            {
+                SaveModelNode(node);
+            }
+            catch (Exception ex)
+            {
+                ThemedMessageBox.Show($"保存模型名称失败：{ex.Message}", "重命名模型节点", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+
+        ModelNodeList.Items.Refresh();
+        ModelNodeList.SelectedItem = node;
+        TrainingStatusText.Text = $"模型节点已重命名为：{node.Name}";
+    }
+
     private void DeleteModelNodeMenu_Click(object sender, RoutedEventArgs e)
     {
         var node = GetSelectedModelNode();
@@ -320,6 +454,53 @@ public partial class TrainingPage : UserControl
         catch (Exception ex)
         {
             ThemedMessageBox.Show($"删除模型节点失败：{ex.Message}", "删除模型节点", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ClearModelNodesMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var nodes = _modelNodes.ToList();
+        if (nodes.Count == 0)
+        {
+            TrainingStatusText.Text = "当前没有可清空的模型节点。";
+            return;
+        }
+
+        var savedCount = nodes.Count(node => !string.IsNullOrWhiteSpace(node.RunDirectory));
+        var answer = ThemedMessageBox.Show(
+            $"确定清空当前数据集的全部模型节点吗？\n\n将移除 {nodes.Count} 个节点，其中 {savedCount} 个训练目录会移入回收站。",
+            "清空模型节点",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            dangerConfirmation: true);
+        if (answer != MessageBoxResult.Yes) return;
+
+        var modelRoot = _dataset is null
+            ? ""
+            : IoPath.GetFullPath(IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models"));
+        var modelRootPrefix = modelRoot.TrimEnd(IoPath.DirectorySeparatorChar, IoPath.AltDirectorySeparatorChar)
+                              + IoPath.DirectorySeparatorChar;
+        try
+        {
+            foreach (var node in nodes)
+            {
+                if (string.IsNullOrWhiteSpace(node.RunDirectory) || string.IsNullOrWhiteSpace(modelRoot)) continue;
+                var runDirectory = IoPath.GetFullPath(node.RunDirectory);
+                if (!runDirectory.StartsWith(modelRootPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                if (Directory.Exists(runDirectory))
+                {
+                    VbFileSystem.DeleteDirectory(runDirectory,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+            }
+
+            RefreshModelNodes();
+            TrainingStatusText.Text = "模型节点已清空，训练目录已移入回收站。";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"清空模型节点失败：{ex.Message}", "清空模型节点", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -402,28 +583,129 @@ public partial class TrainingPage : UserControl
 
     private void ModelNodeList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_updatingModelNodes || ModelNodeList.SelectedItem is not TrainingModelNode node) return;
-        LoadModelNodeIntoEditor(node);
+        if (_updatingModelNodes) return;
+        if (ModelNodeList.SelectedItem is not TrainingModelNode node)
+        {
+            _selectedModelNode = null;
+            _isNewModel = false;
+            SetTrainingState(false);
+            return;
+        }
+
+        CaptureCurrentDraftState();
+        if (string.IsNullOrWhiteSpace(node.ModelPath))
+            ActivateNewModel(node);
+        else
+            LoadModelNodeIntoEditor(node);
     }
 
-    private void BeginNewModel()
+    private void BeginNewModel(bool addToList = false)
     {
-        _selectedModelNode = null;
+        CaptureCurrentDraftState();
+        TrainingModelNode? draft = null;
+        if (addToList)
+        {
+            // 新建节点先作为当前列表项显示，训练成功后会由真实的模型节点替换它。
+            var draftName = $"{SanitizeFileName(_dataset?.Name ?? "模型")}-新建-{DateTime.Now:yyyyMMdd-HHmmssfff}";
+            draft = new TrainingModelNode
+            {
+                Name = draftName,
+                DatasetRoot = _dataset?.RootDirectory ?? "",
+                TaskType = _dataset?.TaskType ?? "",
+                BaseModel = (ModelCombo.SelectedItem as ModelOption)?.ModelPath ?? "",
+                Epochs = 100,
+                BatchSize = 2,
+                ImageSize = 640,
+                Device = "auto",
+                ExportTensorRt = true,
+            };
+            if (_dataset is not null)
+            {
+                var modelDirectory = IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models");
+                var draftDirectory = IoPath.Combine(modelDirectory, draftName);
+                var suffix = 2;
+                while (Directory.Exists(draftDirectory))
+                    draftDirectory = IoPath.Combine(modelDirectory, $"{draftName}-{suffix++}");
+                draft.RunDirectory = draftDirectory;
+                SaveModelNode(draft);
+            }
+            // List 不会向 WPF 通知集合变化；替换列表实例后重新绑定，确保新节点立即显示。
+            _modelNodes = _modelNodes.ToList();
+            _modelNodes.Insert(0, draft);
+        }
+
+        ActivateNewModel(draft);
+    }
+
+    private void ActivateNewModel(TrainingModelNode? draft)
+    {
+        _selectedModelNode = draft;
         _isNewModel = true;
         _updatingModelNodes = true;
-        ModelNodeList.SelectedIndex = -1;
+        ModelNodeList.ItemsSource = _modelNodes;
+        ModelNodeList.SelectedItem = draft;
         _updatingModelNodes = false;
-        EpochsText.Text = "100";
-        ImageSizeText.Text = "640";
-        SetBatchSizeOptions([1, 2, 4, 8], 2);
-        DeviceCombo.SelectedIndex = 0;
-        ExportTensorRtCheckBox.IsChecked = true;
-        if (ModelCombo.Items.Count > 0) ModelCombo.SelectedIndex = 0;
-        ResetChart();
+        var epochs = draft?.Epochs > 0 ? draft.Epochs : 100;
+        var imageSize = draft?.ImageSize > 0 ? draft.ImageSize : 640;
+        var batchSize = draft?.BatchSize > 0 ? draft.BatchSize : 2;
+        EpochsText.Text = epochs.ToString();
+        ImageSizeText.Text = imageSize.ToString();
+        SetBatchSizeOptions([1, 2, 4, 8], batchSize);
+        DeviceCombo.SelectedItem = DeviceCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, draft?.Device ?? "auto", StringComparison.OrdinalIgnoreCase))
+            ?? DeviceCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        ExportTensorRtCheckBox.IsChecked = draft?.ExportTensorRt ?? true;
+        if (!string.IsNullOrWhiteSpace(draft?.BaseModel))
+        {
+            ModelCombo.SelectedItem = ModelCombo.Items.OfType<ModelOption>()
+                .FirstOrDefault(option => string.Equals(option.ModelPath, draft.BaseModel, StringComparison.OrdinalIgnoreCase));
+        }
+        else if (ModelCombo.Items.Count > 0)
+        {
+            ModelCombo.SelectedIndex = 0;
+        }
+        _lossPoints.Clear();
+        _lossPoints.AddRange(draft?.LossPoints.Select(point => (point.Epoch, point.Loss)) ?? []);
+        TrainingLogList.Items.Clear();
+        _trainingLogs.Clear();
+        if (draft is not null)
+        {
+            _trainingLogs.AddRange(draft.Logs);
+            foreach (var log in draft.Logs) TrainingLogList.Items.Add(log);
+        }
+        CurrentLossText.Text = _lossPoints.Count > 0
+            ? $"已加载 {_lossPoints.Count} 个训练点"
+            : "暂无训练数据";
+        DrawLossCurve();
         OutputPathText.Text = "";
         TrainingStatusText.Text = "已新建模型，可设置训练超参数。";
         SetModelEditorState(true);
         SetTrainingState(false);
+    }
+
+    private void CaptureCurrentDraftState()
+    {
+        if (!_isNewModel || _selectedModelNode is null) return;
+
+        var node = _selectedModelNode;
+        node.BaseModel = (ModelCombo.SelectedItem as ModelOption)?.ModelPath ?? node.BaseModel;
+        node.Epochs = int.TryParse(EpochsText.Text, out var epochs) && epochs > 0 ? epochs : node.Epochs;
+        node.BatchSize = BatchSizeCombo.SelectedItem is int batchSize ? batchSize : node.BatchSize;
+        node.ImageSize = int.TryParse(ImageSizeText.Text, out var imageSize) && imageSize > 0 ? imageSize : node.ImageSize;
+        node.Device = (DeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? node.Device;
+        node.ExportTensorRt = ExportTensorRtCheckBox.IsChecked == true;
+        node.LossPoints = _lossPoints
+            .Select(point => new LossPoint { Epoch = point.Epoch, Loss = point.Loss })
+            .ToList();
+        node.Logs = _trainingLogs.ToList();
+        try
+        {
+            SaveModelNode(node);
+        }
+        catch
+        {
+            // 草稿仍保留在内存中；磁盘写入失败不应阻断节点切换。
+        }
     }
 
     private void LoadModelNodeIntoEditor(TrainingModelNode node)
@@ -438,6 +720,7 @@ public partial class TrainingPage : UserControl
             DeviceCombo.SelectedItem = DeviceCombo.Items.OfType<ComboBoxItem>()
                 .FirstOrDefault(item => string.Equals(item.Tag as string, node.Device, StringComparison.OrdinalIgnoreCase));
         }
+        ExportTensorRtCheckBox.IsChecked = node.ExportTensorRt;
         if (!string.IsNullOrWhiteSpace(node.BaseModel))
         {
             var options = ModelCombo.Items.OfType<ModelOption>().ToList();
@@ -538,6 +821,26 @@ public partial class TrainingPage : UserControl
             .ToList();
     }
 
+    private void RemoveCurrentDraftStorage(string? replacementRunDirectory = null)
+    {
+        var draftDirectory = _selectedModelNode?.RunDirectory;
+        if (_selectedModelNode is null || !string.IsNullOrWhiteSpace(_selectedModelNode.ModelPath)
+            || string.IsNullOrWhiteSpace(draftDirectory) || _dataset is null) return;
+
+        if (!string.IsNullOrWhiteSpace(replacementRunDirectory)
+            && string.Equals(IoPath.GetFullPath(draftDirectory), IoPath.GetFullPath(replacementRunDirectory),
+                StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var modelRoot = IoPath.GetFullPath(IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models"));
+        var draftPath = IoPath.GetFullPath(draftDirectory);
+        var modelRootPrefix = modelRoot.TrimEnd(IoPath.DirectorySeparatorChar, IoPath.AltDirectorySeparatorChar)
+                              + IoPath.DirectorySeparatorChar;
+        if (!draftPath.StartsWith(modelRootPrefix, StringComparison.OrdinalIgnoreCase)) return;
+        if (Directory.Exists(draftPath)) Directory.Delete(draftPath, recursive: true);
+        _selectedModelNode.RunDirectory = "";
+    }
+
     private static void SaveModelNode(TrainingModelNode node)
     {
         if (string.IsNullOrWhiteSpace(node.RunDirectory)) return;
@@ -589,6 +892,34 @@ public partial class TrainingPage : UserControl
         }
     }
 
+    private async Task RefreshGpuMemoryTextAsync()
+    {
+        if (GpuMemoryText is null || Interlocked.Exchange(ref _gpuMemoryQueryInFlight, 1) != 0) return;
+        try
+        {
+            var gpu = await AppServices.Instance.Yolo11Training.QueryGpuMemoryAsync();
+            if (!gpu.Available || gpu.TotalBytes <= 0)
+            {
+                GpuMemoryText.Text = "GPU 显存：未检测到 CUDA GPU";
+                return;
+            }
+
+            var usedBytes = Math.Max(0, gpu.TotalBytes - gpu.FreeBytes);
+            var usedGiB = usedBytes / 1024d / 1024d / 1024d;
+            var totalGiB = gpu.TotalBytes / 1024d / 1024d / 1024d;
+            var percentage = usedBytes * 100d / gpu.TotalBytes;
+            GpuMemoryText.Text = $"GPU 显存：已用 {usedGiB:0.00} / {totalGiB:0.00} GB（{percentage:0.0}%）";
+        }
+        catch
+        {
+            GpuMemoryText.Text = "GPU 显存：读取失败";
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _gpuMemoryQueryInFlight, 0);
+        }
+    }
+
     private void SetBatchSizeOptions(IReadOnlyList<int> options, int selected)
     {
         BatchSizeCombo.ItemsSource = options.ToList();
@@ -615,9 +946,9 @@ public partial class TrainingPage : UserControl
         return maximum;
     }
 
-    private async void StartTraining_Click(object sender, RoutedEventArgs e)
+    private async Task StartTrainingAsync()
     {
-        if (_dataset is null) return;
+        if (_dataset is null || _selectedModelNode is null) return;
         if (!_isNewModel)
         {
             ThemedMessageBox.Show("已完成训练的模型节点为只读状态，请先点击“新建模型”再开始训练。", "训练", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -650,7 +981,7 @@ public partial class TrainingPage : UserControl
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var trainingDataDirectory = IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "training-data", stamp);
         var outputDirectory = IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models");
-        var runName = $"{SanitizeFileName(_dataset.Name)}-{_dataset.TaskType}-{stamp}";
+        var runName = GetTrainingRunName($"{SanitizeFileName(_dataset.Name)}-{_dataset.TaskType}-{stamp}");
         try
         {
             SetTrainingState(true);
@@ -662,7 +993,10 @@ public partial class TrainingPage : UserControl
             if (model.IsExisting) AddLog("将加载已有模型，并在该模型基础上继续学习。");
 
             _trainingCancellation = new CancellationTokenSource();
-            PauseButton.IsEnabled = true;
+            StartButton.Content = "暂停训练";
+            StartButton.IsEnabled = true;
+            StopButton.Visibility = Visibility.Visible;
+            StopButton.IsEnabled = true;
             var request = new Yolo11TrainingRequest(
                 dataYaml,
                 _dataset.TaskType,
@@ -685,9 +1019,10 @@ public partial class TrainingPage : UserControl
                 AddLog($"TensorRT Engine 已导出：{result.EnginePath}");
                 OutputPathText.Text += $"\nEngine：{result.EnginePath}";
             }
+            RemoveCurrentDraftStorage(result.RunDirectory);
             SaveModelNode(new TrainingModelNode
             {
-                Name = runName,
+                Name = GetCurrentNodeName(runName),
                 DatasetRoot = _dataset.RootDirectory,
                 TaskType = _dataset.TaskType,
                 BaseModel = model.ModelPath,
@@ -699,6 +1034,7 @@ public partial class TrainingPage : UserControl
                 BatchSize = batchSize,
                 ImageSize = imageSize,
                 Device = device,
+                ExportTensorRt = ExportTensorRtCheckBox.IsChecked == true,
                 LossPoints = _lossPoints.Select(point => new LossPoint { Epoch = point.Epoch, Loss = point.Loss }).ToList(),
                 Logs = _trainingLogs.ToList(),
             });
@@ -718,6 +1054,7 @@ public partial class TrainingPage : UserControl
         }
         finally
         {
+            if (_isNewModel) CaptureCurrentDraftState();
             _trainingCancellation?.Dispose();
             _trainingCancellation = null;
             SetTrainingState(false);
@@ -726,7 +1063,7 @@ public partial class TrainingPage : UserControl
 
     private async Task StartAtu5TrainingAsync()
     {
-        if (_dataset is null || ModelCombo.SelectedItem is not ModelOption model) return;
+        if (_dataset is null || _selectedModelNode is null || ModelCombo.SelectedItem is not ModelOption model) return;
         var initialWeight = "models/atu5.pt";
         if (!AppServices.Instance.Atu5Training.IsModelAvailable(initialWeight))
         {
@@ -745,6 +1082,7 @@ public partial class TrainingPage : UserControl
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var trainingDataDirectory = IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "training-data", "atu5-" + stamp);
         var outputDirectory = IoPath.Combine(_dataset.RootDirectory, ".visionworkbench", "models");
+        var runName = GetTrainingRunName($"{SanitizeFileName(_dataset.Name)}-semantic_segmentation-{stamp}");
         try
         {
             SetTrainingState(true);
@@ -754,9 +1092,12 @@ public partial class TrainingPage : UserControl
             var manifestPath = await Task.Run(() => AppServices.Instance.Datasets.ExportSemantic(_dataset, trainingDataDirectory));
             AddLog($"语义分割训练清单已生成：{manifestPath}");
             _trainingCancellation = new CancellationTokenSource();
-            PauseButton.IsEnabled = true;
+            StartButton.Content = "暂停训练";
+            StartButton.IsEnabled = true;
+            StopButton.Visibility = Visibility.Visible;
+            StopButton.IsEnabled = true;
             var request = new Atu5TrainingRequest(manifestPath, initialWeight, epochs, batchSize, imageSize,
-                device, outputDirectory, $"{SanitizeFileName(_dataset.Name)}-semantic_segmentation-{stamp}",
+                device, outputDirectory, runName,
                 ExportTensorRtCheckBox.IsChecked == true);
             var progress = new Progress<Yolo11TrainingProgress>(HandleProgress);
             var result = await AppServices.Instance.Atu5Training.RunAsync(request, progress, _trainingCancellation.Token);
@@ -768,9 +1109,10 @@ public partial class TrainingPage : UserControl
                 AddLog($"TensorRT Engine 已导出：{result.EnginePath}");
                 OutputPathText.Text += $"\nEngine：{result.EnginePath}";
             }
+            RemoveCurrentDraftStorage(result.RunDirectory);
             SaveModelNode(new TrainingModelNode
             {
-                Name = IoPath.GetFileName(result.RunDirectory),
+                Name = GetCurrentNodeName(IoPath.GetFileName(result.RunDirectory)),
                 DatasetRoot = _dataset.RootDirectory,
                 TaskType = _dataset.TaskType,
                 BaseModel = model.ModelPath,
@@ -782,6 +1124,7 @@ public partial class TrainingPage : UserControl
                 BatchSize = batchSize,
                 ImageSize = imageSize,
                 Device = device,
+                ExportTensorRt = ExportTensorRtCheckBox.IsChecked == true,
                 LossPoints = _lossPoints.Select(point => new LossPoint { Epoch = point.Epoch, Loss = point.Loss }).ToList(),
                 Logs = _trainingLogs.ToList(),
             });
@@ -801,6 +1144,7 @@ public partial class TrainingPage : UserControl
         }
         finally
         {
+            if (_isNewModel) CaptureCurrentDraftState();
             _trainingCancellation?.Dispose();
             _trainingCancellation = null;
             SetTrainingState(false);
@@ -815,7 +1159,18 @@ public partial class TrainingPage : UserControl
         _trainingCancellation?.Cancel();
     }
 
-    private async void PauseTraining_Click(object sender, RoutedEventArgs e)
+    private async void TrainingToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (_trainingCancellation is not null || AppServices.Instance.Yolo11Training.IsRunning || AppServices.Instance.Atu5Training.IsRunning)
+        {
+            await ToggleTrainingPauseAsync();
+            return;
+        }
+
+        await StartTrainingAsync();
+    }
+
+    private async Task ToggleTrainingPauseAsync()
     {
         var semantic = _dataset?.TaskType == "semantic_segmentation";
         var isPaused = semantic
@@ -834,8 +1189,8 @@ public partial class TrainingPage : UserControl
             }
 
             _trainingPaused = true;
-            PauseButton.Content = "继续训练";
-            StartButton.IsEnabled = false;
+            StartButton.Content = "继续训练";
+            StartButton.IsEnabled = true;
             StopButton.IsEnabled = true;
             TrainingStatusText.Text = "训练已暂停。点击“继续训练”恢复。";
             AddLog("训练已暂停。");
@@ -852,7 +1207,8 @@ public partial class TrainingPage : UserControl
         }
 
         _trainingPaused = false;
-        PauseButton.Content = "暂停训练";
+        StartButton.Content = "暂停训练";
+        StartButton.IsEnabled = true;
         StopButton.IsEnabled = true;
         TrainingStatusText.Text = "训练已继续。";
         AddLog("训练已继续。");
@@ -892,6 +1248,7 @@ public partial class TrainingPage : UserControl
                 _lossPoints.Add((progress.Epoch, loss));
                 CurrentLossText.Text = $"Epoch {progress.Epoch}/{progress.TotalEpochs}  Loss: {loss:0.0000}";
                 DrawLossCurve();
+                _ = RefreshGpuMemoryTextAsync();
             }
             AddLog(progress.Message + (progress.TrainLoss is { } value ? $"，Loss={value:0.0000}" : ""));
         }
@@ -907,20 +1264,32 @@ public partial class TrainingPage : UserControl
         if (!running)
         {
             _trainingPaused = false;
-            PauseButton.Content = "暂停训练";
+            StartButton.Content = "开始训练";
         }
-        StartButton.IsEnabled = !running && _isNewModel && _dataset?.TaskType is ("detection" or "instance_segmentation" or "semantic_segmentation");
+        StartButton.IsEnabled = !running && CanStartTraining();
+        StartButton.ToolTip = !running && _selectedModelNode is null
+            ? "请先选择或新建模型节点。"
+            : null;
+        StopButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
         StopButton.IsEnabled = running;
-        PauseButton.IsEnabled = false;
         DatasetCombo.IsEnabled = !running;
         NewModelButton.IsEnabled = !running;
-        ModelNodeList.IsEnabled = !running;
+        // 训练期间锁定节点列表的交互，但不要将 ListBox 设为禁用。
+        // WPF 的禁用模板会把滚动内容绘制成系统白色背景，破坏当前主题。
+        ModelNodeList.IsEnabled = true;
+        ModelNodeList.IsHitTestVisible = !running;
         ModelCombo.IsEnabled = !running;
         BatchSizeCombo.IsEnabled = !running;
         ImageSizeText.IsEnabled = !running;
         DeviceCombo.IsEnabled = !running;
         SetModelEditorState(!running && _isNewModel);
+        if (running) _ = RefreshGpuMemoryTextAsync();
     }
+
+    private bool CanStartTraining() =>
+        _selectedModelNode is not null &&
+        _isNewModel &&
+        _dataset?.TaskType is ("detection" or "instance_segmentation" or "pose" or "semantic_segmentation");
 
     private void ResetChart()
     {
@@ -938,6 +1307,9 @@ public partial class TrainingPage : UserControl
     {
         if (LossCanvas is null) return;
         LossCanvas.Children.Clear();
+        _lossHoverLine = null;
+        _lossHoverLabel = null;
+        _lossChartHasData = false;
         var width = Math.Max(1, LossCanvas.ActualWidth);
         var height = Math.Max(1, LossCanvas.ActualHeight);
         const double left = 42;
@@ -1004,6 +1376,12 @@ public partial class TrainingPage : UserControl
         var axisRange = maxLoss - minLoss;
         var decimalPlaces = axisRange >= 1 ? 2 : axisRange >= 0.1 ? 3 : axisRange >= 0.01 ? 4 : axisRange >= 0.001 ? 5 : 6;
         var axisFormat = "0." + new string('#', decimalPlaces);
+        _lossChartTop = top;
+        _lossChartHeight = plotHeight;
+        _lossChartMin = minLoss;
+        _lossChartMax = maxLoss;
+        _lossChartFormat = axisFormat;
+        _lossChartHasData = true;
         var gridBrush = ThemeBrush("GridLineBrush", Colors.LightGray);
         const int gridCount = 4;
         for (var index = 0; index <= gridCount; index++)
@@ -1042,6 +1420,74 @@ public partial class TrainingPage : UserControl
             polyline.Points.Add(new Point(x, y));
         }
         LossCanvas.Children.Add(polyline);
+    }
+
+    private void LossCanvas_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_lossChartHasData || LossCanvas is null) return;
+        var position = e.GetPosition(LossCanvas);
+        var plotLeft = 42d;
+        var plotRight = Math.Max(plotLeft, LossCanvas.ActualWidth - 12);
+        if (position.X < plotLeft || position.X > plotRight
+            || position.Y < _lossChartTop || position.Y > _lossChartTop + _lossChartHeight)
+        {
+            HideLossHover();
+            return;
+        }
+
+        var maxEpoch = Math.Max(1, _lossPoints.Max(point => point.Epoch));
+        var epochAtCursor = 1 + (position.X - plotLeft) * Math.Max(1, maxEpoch - 1)
+            / Math.Max(1, plotRight - plotLeft);
+        var point = _lossPoints
+            .Where(item => double.IsFinite(item.Loss))
+            .OrderBy(item => Math.Abs(item.Epoch - epochAtCursor))
+            .FirstOrDefault();
+        if (point == default)
+        {
+            HideLossHover();
+            return;
+        }
+
+        var pointX = plotLeft + (point.Epoch - 1) * Math.Max(1, plotRight - plotLeft)
+            / Math.Max(1, maxEpoch - 1);
+        var value = point.Loss;
+        _lossHoverLine ??= new Line
+        {
+            Stroke = ThemeBrush("AccentBrush", Colors.DodgerBlue),
+            StrokeThickness = 1,
+            StrokeDashArray = [3, 3],
+            IsHitTestVisible = false,
+        };
+        if (!_lossHoverLine.IsVisible) LossCanvas.Children.Add(_lossHoverLine);
+        _lossHoverLine.X1 = pointX;
+        _lossHoverLine.X2 = pointX;
+        _lossHoverLine.Y1 = _lossChartTop;
+        _lossHoverLine.Y2 = _lossChartTop + _lossChartHeight;
+
+        _lossHoverLabel ??= new TextBlock
+        {
+            Width = 92,
+            Padding = new Thickness(5, 2, 5, 2),
+            Background = ThemeBrush("SurfaceAltBrush", Colors.DimGray),
+            Foreground = ThemeBrush("TextBrush", Colors.White),
+            FontSize = 11,
+            TextAlignment = TextAlignment.Center,
+            IsHitTestVisible = false,
+        };
+        if (!_lossHoverLabel.IsVisible) LossCanvas.Children.Add(_lossHoverLabel);
+        _lossHoverLabel.Text = $"Epoch {point.Epoch}\nLoss: {value.ToString(_lossChartFormat, CultureInfo.InvariantCulture)}";
+        Canvas.SetLeft(_lossHoverLabel, Math.Max(0, LossCanvas.ActualWidth - _lossHoverLabel.Width - 4));
+        Canvas.SetTop(_lossHoverLabel, Math.Clamp(position.Y - 12, 0, Math.Max(0, LossCanvas.ActualHeight - 24)));
+    }
+
+    private void LossCanvas_MouseLeave(object sender, MouseEventArgs e) => HideLossHover();
+
+    private void HideLossHover()
+    {
+        if (_lossHoverLine is not null) LossCanvas.Children.Remove(_lossHoverLine);
+        if (_lossHoverLabel is not null) LossCanvas.Children.Remove(_lossHoverLabel);
+        _lossHoverLine = null;
+        _lossHoverLabel = null;
     }
 
     private void AddLog(string message)
@@ -1087,6 +1533,7 @@ public partial class TrainingPage : UserControl
         public int BatchSize { get; set; }
         public int ImageSize { get; set; }
         public string Device { get; set; } = "";
+        public bool ExportTensorRt { get; set; }
         public List<LossPoint> LossPoints { get; set; } = [];
         public List<string> Logs { get; set; } = [];
         public string DisplayName => $"{Name}\n已完成 · {CompletedAt:yyyy-MM-dd HH:mm:ss}";

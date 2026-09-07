@@ -15,7 +15,13 @@
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="项目" VerticalAlignment="Center" Margin="0,0,6,0"/>
             <ComboBox x:Name="ProjectCombo" Grid.Column="1" MinWidth="120" HorizontalAlignment="Stretch"
-                      SelectionChanged="Project_Changed"/>
+                      SelectionChanged="Project_Changed">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Name}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
             <Button Grid.Column="2" Content="读取配置" Click="Load_Click" Margin="8,0,0,0"/>
             <Button Grid.Column="3" Content="保存配置" Click="Save_Click" Margin="6,0,0,0"/>
             <Button Grid.Column="4" Content="启动通讯" Click="Start_Click" Margin="6,0,0,0"/>
@@ -23,7 +29,7 @@
             <TextBlock x:Name="StateText" Grid.Column="6" Text="已停止" Foreground="Green"
                        VerticalAlignment="Center" Margin="12,0,0,0"/>
         </Grid>
-        <Grid Grid.Row="1" Margin="0,12,0,0">
+                <Grid Grid.Row="1" Margin="0,12,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,12,0">
                 <StackPanel>
@@ -38,8 +44,10 @@
                             <TextBlock Text="最大连接数"/><TextBox x:Name="MaxConnectionsText"/>
                         </StackPanel>
                     </GroupBox>
-                    <GroupBox Header="协议与安全" Margin="0,10,0,0">
+                    <Expander Header="协议高级参数（通常无需修改）" IsExpanded="False" Margin="0,10,0,0">
                         <StackPanel Margin="8">
+                            <TextBlock Text="用于连接特殊设备；标准 JSON 换行通讯保持默认值即可。" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,8" />
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="编码"/><ComboBox x:Name="EncodingCombo" Grid.Column="1" MinWidth="190"><ComboBoxItem Content="utf-8"/><ComboBoxItem Content="gb18030"/></ComboBox></Grid>
                             <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="拆包方式"/><ComboBox x:Name="FrameCombo" Grid.Column="1" MinWidth="190"><ComboBoxItem Content="JSON 行（\\n）" Tag="Line"/><ComboBoxItem Content="自定义分隔符" Tag="Delimiter"/><ComboBoxItem Content="长度前缀" Tag="LengthPrefix"/></ComboBox></Grid>
                             <TextBlock Text="消息结束符（\\n 或 HEX:0D0A）" Margin="0,8,0,0"/><TextBox x:Name="TerminatorText"/>
@@ -47,7 +55,7 @@
                             <TextBlock Text="接收超时（毫秒）"/><TextBox x:Name="ReceiveTimeoutText"/>
                             <CheckBox x:Name="AutoReconnectCheck" Content="客户端自动重连" Margin="0,8,0,0"/>
                         </StackPanel>
-                    </GroupBox>
+                    </Expander>
                     <GroupBox Header="任务触发与结果回传" Margin="0,10,0,0">
                         <StackPanel Margin="8">
                             <TextBlock Text="已配置的任务规则" FontWeight="SemiBold"/>
@@ -89,8 +97,8 @@
                     </GroupBox>
                 </StackPanel>
             </ScrollViewer>
-            <Grid Grid.Column="1">
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="180"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Grid x:Name="RightContentGrid" Grid.Column="1">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="180"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <TextBlock Text="连接列表" FontWeight="Bold"/>
                 <ListBox x:Name="ConnectionsList" Grid.Row="1" Margin="0,6,0,10" DisplayMemberPath="RemoteEndpoint"/>
                 <GroupBox Header="通讯日志" Grid.Row="2" Margin="0,0,0,10"><TextBox x:Name="LogText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></GroupBox>

@@ -2,6 +2,9 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:VisionWorkbench.App">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
     <Grid Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -30,9 +33,11 @@
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
                     <TextBlock Text="从：" VerticalAlignment="Center" />
-                    <DatePicker x:Name="FromDate" Width="170" />
+                    <DatePicker x:Name="FromDate" Width="160" Loaded="DatePicker_Loaded"
+                                PreviewMouseRightButtonDown="DatePicker_PreviewMouseRightButtonDown" />
                     <TextBlock Text="到：" VerticalAlignment="Center" Margin="8,0,0,0" />
-                    <DatePicker x:Name="ToDate" Width="170" />
+                    <DatePicker x:Name="ToDate" Width="160" Loaded="DatePicker_Loaded"
+                                PreviewMouseRightButtonDown="DatePicker_PreviewMouseRightButtonDown" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                     <Button Content="查询" Click="Query_Click" Margin="0,0,8,0" />

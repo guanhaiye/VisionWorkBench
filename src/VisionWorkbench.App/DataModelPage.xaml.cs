@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace VisionWorkbench.App;
 
@@ -18,7 +19,7 @@ public partial class DataModelPage : UserControl
 
     public void SelectCategory(string category)
     {
-        if (category is not ("detection" or "semantic-segmentation" or "instance-segmentation" or "segmentation" or "behavior" or "ai-text" or "barcode" or "qrcode"))
+        if (category is not ("detection" or "pose" or "semantic-segmentation" or "instance-segmentation" or "segmentation" or "behavior" or "ai-text" or "barcode" or "qrcode"))
         {
             category = "detection";
         }
@@ -28,6 +29,7 @@ public partial class DataModelPage : UserControl
         {
             "semantic-segmentation" or "segmentation" => "语义分割",
             "instance-segmentation" => "实例分割",
+            "pose" => "AI关键点检测",
             "behavior" => "行为识别",
             "ai-text" => "AI字符识别",
             "barcode" => "AI条码识别",
@@ -35,6 +37,7 @@ public partial class DataModelPage : UserControl
             _ => "目标检测",
         };
         DetectionWorkflowPanel.Visibility = category == "detection" ? Visibility.Visible : Visibility.Collapsed;
+        PoseWorkflowPanel.Visibility = category == "pose" ? Visibility.Visible : Visibility.Collapsed;
         SemanticSegmentationWorkflowPanel.Visibility = category is "semantic-segmentation" or "segmentation" ? Visibility.Visible : Visibility.Collapsed;
         InstanceSegmentationWorkflowPanel.Visibility = category == "instance-segmentation" ? Visibility.Visible : Visibility.Collapsed;
         BehaviorWorkflowPanel.Visibility = category == "behavior" ? Visibility.Visible : Visibility.Collapsed;
@@ -42,7 +45,8 @@ public partial class DataModelPage : UserControl
         BarcodeWorkflowPanel.Visibility = category == "barcode" ? Visibility.Visible : Visibility.Collapsed;
         QrCodeWorkflowPanel.Visibility = category == "qrcode" ? Visibility.Visible : Visibility.Collapsed;
 
-        ShowPage(category == "segmentation" ? "segmentation-annotation"
+        ShowPage(category == "pose" ? "pose-annotation"
+            : category == "segmentation" ? "segmentation-annotation"
             : category == "semantic-segmentation" ? "semantic-segmentation-annotation"
             : category == "instance-segmentation" ? "instance-segmentation-annotation"
             : category == "behavior" ? "behavior-collection"
@@ -84,6 +88,7 @@ public partial class DataModelPage : UserControl
             _pageCache[pageKey] = page;
         }
         PlatformHost.Content = page;
+        ThemeManager.ApplyPageTextBrush(page);
         UpdateNodeStyles(pageKey);
     }
 
@@ -93,6 +98,7 @@ public partial class DataModelPage : UserControl
         "segmentation-annotation" => new DatasetAnnotationPage(AnnotationPlatform.Segmentation),
         "semantic-segmentation-annotation" => new DatasetAnnotationPage(AnnotationPlatform.SemanticSegmentation),
         "instance-segmentation-annotation" => new DatasetAnnotationPage(AnnotationPlatform.InstanceSegmentation),
+        "pose-annotation" => new PoseAnnotationPage(),
         "behavior-collection" => new BehaviorCollectionPage(),
         "behavior-annotation" => new BehaviorAnnotationPage(),
         "behavior-training" => new BehaviorTrainingPage(),
@@ -109,10 +115,12 @@ public partial class DataModelPage : UserControl
         "training" => new TrainingPage(),
         "semantic-segmentation-training" => new TrainingPage("semantic_segmentation"),
         "instance-segmentation-training" => new TrainingPage("instance_segmentation"),
+        "pose-training" => new TrainingPage("pose"),
         "model-test" when _category is "segmentation" or "semantic-segmentation" => new ModelTestPage(true),
         "semantic-segmentation-test" => new ModelTestPage(true),
         "instance-segmentation-test" => new ModelTestPage(false, "YOLO11-seg 实例分割"),
-        "model-test" => new ModelTestPage(),
+        "pose-test" => new ModelTestPage(false, "YOLO11 Pose 关键点检测", "pose"),
+        "model-test" => new ModelTestPage(false, "YOLO11 目标检测", "detection"),
         _ => new WelcomePage(),
     };
 
@@ -121,6 +129,7 @@ public partial class DataModelPage : UserControl
         foreach (var node in new[]
         {
             DetectionAnnotationNode, DetectionTrainingNode, DetectionTestNode,
+            PoseAnnotationNode, PoseTrainingNode, PoseTestNode,
             SemanticSegmentationAnnotationNode, SemanticSegmentationTrainingNode, SemanticSegmentationTestNode,
             InstanceSegmentationAnnotationNode, InstanceSegmentationTrainingNode, InstanceSegmentationTestNode,
             BehaviorCollectionNode, BehaviorAnnotationNode, BehaviorTrainingNode, BehaviorTestNode,
@@ -137,6 +146,9 @@ public partial class DataModelPage : UserControl
         var active = pageKey switch
         {
             "detection-annotation" => DetectionAnnotationNode,
+            "pose-annotation" => PoseAnnotationNode,
+            "pose-training" => PoseTrainingNode,
+            "pose-test" => PoseTestNode,
             "training" when _category == "detection" => DetectionTrainingNode,
             "model-test" when _category == "detection" => DetectionTestNode,
             "segmentation-annotation" or "semantic-segmentation-annotation" => SemanticSegmentationAnnotationNode,
@@ -167,6 +179,45 @@ public partial class DataModelPage : UserControl
             active.Background = ResourceBrush("AccentBrush", Brushes.DodgerBlue);
             active.Foreground = Brushes.White;
             active.BorderBrush = ResourceBrush("AccentBrush", Brushes.DodgerBlue);
+        }
+
+        // 流程节点内容是显式 TextBlock/Ellipse，不能只依赖 Button.Foreground 继承；
+        // 在模板生成后同步文字和圆点颜色，保证选中态在蓝色背景上保持高对比度。
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(() =>
+            {
+                foreach (var node in new[]
+                {
+                    DetectionAnnotationNode, DetectionTrainingNode, DetectionTestNode,
+                    PoseAnnotationNode, PoseTrainingNode, PoseTestNode,
+                    SemanticSegmentationAnnotationNode, SemanticSegmentationTrainingNode, SemanticSegmentationTestNode,
+                    InstanceSegmentationAnnotationNode, InstanceSegmentationTrainingNode, InstanceSegmentationTestNode,
+                    BehaviorCollectionNode, BehaviorAnnotationNode, BehaviorTrainingNode, BehaviorTestNode,
+                    AiTextAnnotationNode, AiTextTrainingNode, AiTextTestNode,
+                    BarcodeAnnotationNode, BarcodeTrainingNode, BarcodeTestNode,
+                    QrCodeAnnotationNode, QrCodeTrainingNode, QrCodeTestNode,
+                })
+                {
+                    ApplyNodeContentContrast(node);
+                }
+            }));
+    }
+
+    private static void ApplyNodeContentContrast(Button node)
+    {
+        if (node.Foreground is not Brush foreground) return;
+        ApplyNodeContentContrast(node, foreground);
+    }
+
+    private static void ApplyNodeContentContrast(DependencyObject parent, Brush foreground)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is TextBlock textBlock) textBlock.Foreground = foreground;
+            if (child is Ellipse ellipse) ellipse.Fill = foreground;
+            ApplyNodeContentContrast(child, foreground);
         }
     }
 
