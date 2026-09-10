@@ -42,8 +42,29 @@
                                 <ComboBoxItem Content="AI字符识别" Tag="AiText" />
                                 <ComboBoxItem Content="AI条码识别" Tag="Barcode" />
                                 <ComboBoxItem Content="AI二维码识别" Tag="QrCode" />
+                                <ComboBoxItem Content="SOP流程" Tag="Sop" />
                             </ComboBox>
                         </StackPanel>
+                        <GroupBox x:Name="SopBindingGroup" Header="SOP流程绑定" Visibility="Collapsed" Margin="0,0,0,8">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="已发布SOP：" VerticalAlignment="Center" />
+                                <ComboBox x:Name="SopCombo" Grid.Column="1" Margin="8,2,0,2"
+                                          DisplayMemberPath="DisplayName"
+                                          SelectionChanged="SopCombo_SelectionChanged" />
+                                <TextBlock x:Name="SopBindingHintText" Grid.Row="1" Grid.Column="1"
+                                           Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"
+                                           Margin="8,4,0,2"
+                                           Text="请先在“数据与模型 → SOP流程制作与配置”中保存并发布SOP，再在这里选择。" />
+                            </Grid>
+                        </GroupBox>
                         <TextBlock Text="说明" />
                         <TextBox x:Name="DescriptionText" Margin="0,2,0,8" />
                     </StackPanel>
@@ -85,7 +106,7 @@
                                    Foreground="#666" Text="尚未选择图片目录" Margin="0,0,0,6" />
                     </Grid>
                 </GroupBox>
-                <GroupBox Header="算法插件">
+                <GroupBox x:Name="AlgorithmGroup" Header="算法插件">
                     <StackPanel>
                         <Grid x:Name="GeneralPluginSelectorPanel">
                         <Grid.ColumnDefinitions>

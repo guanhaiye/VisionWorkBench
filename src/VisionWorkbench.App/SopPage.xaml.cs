@@ -262,7 +262,6 @@ public partial class SopPage : UserControl
 
             var definition = BuildDefinition();
             await AppServices.Instance.SopDefinitions.SaveAsync(definition);
-            await SyncStandaloneRuntimeTaskAsync(definition);
             _selectedDefinition = definition;
             StatusText.Text = $"已保存：{definition.Name} v{definition.Version}（{GetStatus(definition.Status)}）";
             await LoadAsync(definition.Id);
@@ -282,10 +281,17 @@ public partial class SopPage : UserControl
         }
 
         var tasks = await AppServices.Instance.Recipes.ListAsync();
-        var runtimeTasks = tasks
-            .Where(item => string.Equals(item.Recipe.Sop?.DefinitionId, definition.Id, StringComparison.Ordinal)
-                && item.Recipe.Description.StartsWith("SOP独立任务：", StringComparison.Ordinal))
+        var boundTasks = tasks
+            .Where(item => string.Equals(item.Recipe.Sop?.DefinitionId, definition.Id, StringComparison.Ordinal))
             .ToArray();
+
+        if (boundTasks.Length > 0)
+        {
+            ThemedMessageBox.Show(
+                $"SOP“{definition.Name}”已被 {boundTasks.Length} 个任务使用，请先到“任务配置”删除或改绑这些任务，再删除SOP。",
+                "无法删除SOP", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         if (ThemedMessageBox.Show($"确认删除 SOP“{definition.Name}”吗？", "删除SOP",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
@@ -295,10 +301,6 @@ public partial class SopPage : UserControl
 
         try
         {
-            foreach (var runtimeTask in runtimeTasks)
-            {
-                await AppServices.Instance.Recipes.DeleteAsync(runtimeTask.Entity.Id);
-            }
             await AppServices.Instance.SopDefinitions.DeleteAsync(definition.Id);
             _selectedDefinition = null;
             await LoadAsync();
@@ -307,63 +309,6 @@ public partial class SopPage : UserControl
         {
             ThemedMessageBox.Show($"删除 SOP 失败：{ex.Message}", "SOP流程", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-    }
-
-    private async Task SyncStandaloneRuntimeTaskAsync(SopDefinition definition)
-    {
-        if (definition.Execution is not { } execution)
-        {
-            throw new InvalidOperationException("SOP 缺少独立执行配置。");
-        }
-        var firstStepExecution = definition.Steps
-            .OrderBy(step => step.Order)
-            .Select(step => step.Execution)
-            .FirstOrDefault(item => item is not null)
-            ?? new SopStepExecution
-            {
-                PluginId = execution.PluginId,
-                TaskType = execution.TaskType,
-                ExecutionProvider = execution.ExecutionProvider,
-                SettingsJson = execution.SettingsJson,
-                Roi = execution.Roi,
-                RoiPolicy = execution.RoiPolicy,
-                Rules = execution.Rules,
-            };
-        if (string.IsNullOrWhiteSpace(firstStepExecution.PluginId))
-        {
-            throw new InvalidOperationException("SOP 至少需要为一个工序配置算法插件。");
-        }
-        var existing = (await AppServices.Instance.Recipes.ListAsync())
-            .FirstOrDefault(item => string.Equals(item.Recipe.Sop?.DefinitionId, definition.Id, StringComparison.Ordinal));
-        var binding = new SopBinding
-        {
-            DefinitionId = definition.Id,
-            Version = definition.Version,
-            RunMode = execution.RunMode,
-            Definition = definition,
-        };
-        var recipe = new Recipe
-        {
-            StationCode = execution.StationCode,
-            Name = $"SOP · {definition.Name} · v{definition.Version}",
-            Description = $"SOP独立任务：{definition.Code}",
-            CameraProviderId = execution.CameraProviderId,
-            CameraDeviceId = execution.CameraDeviceId,
-            PluginId = firstStepExecution.PluginId,
-            ExecutionProvider = firstStepExecution.ExecutionProvider,
-            TaskType = firstStepExecution.TaskType,
-            SettingsJson = firstStepExecution.SettingsJson,
-            Roi = firstStepExecution.Roi,
-            RoiPolicy = firstStepExecution.RoiPolicy,
-            CountingMode = execution.CountingMode,
-            CountingLine = execution.CountingLine,
-            Behavior = execution.Behavior,
-            PostProcess = execution.PostProcess,
-            Rules = firstStepExecution.Rules,
-            Sop = binding,
-        };
-        long? existingId = existing.Entity is null ? null : existing.Entity.Id;
-        await AppServices.Instance.Recipes.SaveAsync(recipe, existingId);
     }
 
     private void AddStep_Click(object sender, RoutedEventArgs e)

@@ -67,6 +67,7 @@ public sealed class RecipeService(TaskRepository tasks)
         if (recipe.Rules.Count == 0
             && recipe.CountingMode == CountingMode.Snapshot
             && taskType is (InspectionTaskType.Detection or InspectionTaskType.BehaviorRecognition)
+            && recipe.Sop is null
             && !(recipe.PostProcess.Mode == PostProcessMode.PythonScript
                  && !string.IsNullOrWhiteSpace(recipe.PostProcess.Script)))
         {

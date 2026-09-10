@@ -32,10 +32,16 @@ public partial class TasksPage : UserControl
     private PostProcessMode _postProcessMode = PostProcessMode.VisualRules;
     private string _postProcessScript = "";
     private bool _syncingSemanticPlugin;
+    private IReadOnlyList<SopDefinition> _sopDefinitions = [];
 
     private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId)
     {
         public override string ToString() => DisplayName;
+    }
+
+    private sealed record SopOption(SopDefinition Definition)
+    {
+        public string DisplayName => $"{Definition.Name} · v{Definition.Version}";
     }
 
     private sealed record TaskRow(long Id, string StationCode, string TaskName)
@@ -82,11 +88,15 @@ public partial class TasksPage : UserControl
         try
         {
             var tasks = await AppServices.Instance.Recipes.ListAsync();
-            // SOP 运行配方由 SOP 页面独立维护，普通任务页不再混入 SOP 任务。
             TaskList.ItemsSource = tasks
-                .Where(t => t.Recipe.Sop is null)
                 .Select(t => new TaskRow(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
                 .ToArray();
+            _sopDefinitions = (await AppServices.Instance.SopDefinitions.ListAsync())
+                .Where(definition => definition.Status == SopDefinitionStatus.Published)
+                .OrderByDescending(definition => definition.Version)
+                .ThenBy(definition => definition.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            SopCombo.ItemsSource = _sopDefinitions.Select(definition => new SopOption(definition)).ToArray();
             PluginCombo.ItemsSource = AppServices.Instance.AlgorithmManager.ScanPlugins()
                 .Where(p => p.Status == Contracts.Plugins.PluginStatus.Valid && p.Manifest is not null)
                 .Select(p => p.Manifest!.Id)
@@ -117,11 +127,19 @@ public partial class TasksPage : UserControl
         StationCodeText.Text = recipe.StationCode;
         NameText.Text = recipe.Name;
         DescriptionText.Text = recipe.Description;
-        SelectTaskType(recipe.TaskType.IsCounting()
-            && recipe.Behavior.Enabled
-            && recipe.Behavior.Zones.Count > 0
-            ? InspectionTaskType.BehaviorRecognition
-            : recipe.TaskType);
+        if (recipe.Sop is not null)
+        {
+            SelectSopTaskType();
+            SelectSopDefinition(recipe.Sop);
+        }
+        else
+        {
+            SelectTaskType(recipe.TaskType.IsCounting()
+                && recipe.Behavior.Enabled
+                && recipe.Behavior.Zones.Count > 0
+                ? InspectionTaskType.BehaviorRecognition
+                : recipe.TaskType);
+        }
         DeviceText.Text = recipe.CameraDeviceId;
         SelectInputSource(recipe.CameraProviderId, recipe.CameraDeviceId);
         UpdateDevicePreview();
@@ -184,6 +202,7 @@ public partial class TasksPage : UserControl
         NameText.Text = NextTaskName();
         DescriptionText.Text = "";
         SelectTaskType(null);
+        SopCombo.SelectedIndex = -1;
         DeviceText.Text = "";
         SelectInputSource("image-folder", "");
         UpdateDevicePreview();
@@ -265,9 +284,10 @@ public partial class TasksPage : UserControl
             ThemedMessageBox.Show("请先选择任务类型，再配置对应参数。", "任务配置", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        var isSopTask = IsSopTask();
         var taskType = SelectedTaskType();
         _postProcessMode = SelectedPostProcessMode();
-        if (_postProcessMode == PostProcessMode.PythonScript && string.IsNullOrWhiteSpace(_postProcessScript))
+        if (!isSopTask && _postProcessMode == PostProcessMode.PythonScript && string.IsNullOrWhiteSpace(_postProcessScript))
         {
             ThemedMessageBox.Show("请先点击“编辑 Python 脚本”并填写后处理脚本。", "配置校验失败",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -294,26 +314,73 @@ public partial class TasksPage : UserControl
             };
         }
         string settingsJson;
-        try
-        {
-            settingsJson = BuildSettingsJson();
-            _settingsJson = settingsJson;
-        }
-        catch (Exception ex)
-        {
-            ThemedMessageBox.Show($"模型/插件参数无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
         BehaviorRecognitionConfig behavior;
-        try
+        SopBinding? sop = null;
+        string pluginId;
+        string executionProvider;
+        if (isSopTask)
         {
-            behavior = BuildBehavior();
+            if (SopCombo.SelectedItem is not SopOption sopOption)
+            {
+                ThemedMessageBox.Show("请选择一个已发布的SOP流程。", "任务配置", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var definition = sopOption.Definition;
+            var stepExecution = GetFirstSopStepExecution(definition);
+            if (stepExecution is null || string.IsNullOrWhiteSpace(stepExecution.PluginId))
+            {
+                ThemedMessageBox.Show("所选SOP没有完整的工序模型配置，请返回SOP页面补充后再发布。", "任务配置",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var execution = definition.Execution;
+            sop = new SopBinding
+            {
+                DefinitionId = definition.Id,
+                Version = definition.Version,
+                RunMode = execution?.RunMode ?? SopRunMode.StrictOrder,
+                Definition = definition,
+            };
+            taskType = stepExecution.TaskType;
+            pluginId = stepExecution.PluginId;
+            executionProvider = NormalizeExecutionProvider(stepExecution.ExecutionProvider);
+            settingsJson = string.IsNullOrWhiteSpace(stepExecution.SettingsJson) ? "{}" : stepExecution.SettingsJson;
+            behavior = execution?.Behavior ?? new BehaviorRecognitionConfig();
+            roi = stepExecution.Roi ?? execution?.Roi;
+            policy = stepExecution.Roi is not null
+                ? stepExecution.RoiPolicy.ToString()
+                : execution?.RoiPolicy.ToString() ?? "CenterInside";
+            mode = execution?.CountingMode ?? CountingMode.Snapshot;
+            line = execution?.CountingLine;
+            _postProcessMode = execution?.PostProcess.Mode ?? PostProcessMode.VisualRules;
+            _postProcessScript = execution?.PostProcess.Script ?? "";
         }
-        catch (Exception ex)
+        else
         {
-            ThemedMessageBox.Show($"行为识别配置无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            try
+            {
+                settingsJson = BuildSettingsJson();
+                _settingsJson = settingsJson;
+            }
+            catch (Exception ex)
+            {
+                ThemedMessageBox.Show($"模型/插件参数无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                behavior = BuildBehavior();
+            }
+            catch (Exception ex)
+            {
+                ThemedMessageBox.Show($"行为识别配置无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            pluginId = PluginCombo.SelectedItem as string ?? PluginCombo.Text.Trim();
+            executionProvider = SelectedExecutionProvider();
         }
 
         var recipe = new Recipe
@@ -323,8 +390,8 @@ public partial class TasksPage : UserControl
             Description = DescriptionText.Text,
             CameraProviderId = SelectedProviderId(),
             CameraDeviceId = SelectedDeviceId(),
-            PluginId = PluginCombo.SelectedItem as string ?? PluginCombo.Text.Trim(),
-            ExecutionProvider = SelectedExecutionProvider(),
+            PluginId = pluginId,
+            ExecutionProvider = executionProvider,
             TaskType = taskType,
             SettingsJson = settingsJson,
             Roi = roi,
@@ -337,8 +404,8 @@ public partial class TasksPage : UserControl
                 Mode = _postProcessMode,
                 Script = _postProcessScript.Trim(),
             },
-            Sop = null,
-            Rules = taskType.IsCounting() || taskType.IsRegion() ? rules : [],
+            Sop = sop,
+            Rules = isSopTask ? [] : taskType.IsCounting() || taskType.IsRegion() ? rules : [],
         };
         try
         {
@@ -403,6 +470,14 @@ public partial class TasksPage : UserControl
     private void TaskTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         UpdateTaskTypeVisibility();
+    }
+
+    private void SopCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsSopTask() && SopCombo.SelectedItem is SopOption option)
+        {
+            SopBindingHintText.Text = $"已选择：{option.Definition.Name} v{option.Definition.Version}。保存任务后，该任务即可在“实时检测”中选择。";
+        }
     }
 
     private async void AddRule_Click(object sender, RoutedEventArgs e)
@@ -610,8 +685,16 @@ public partial class TasksPage : UserControl
         }
     }
 
-    private bool HasTaskTypeSelection() =>
-        Enum.TryParse<InspectionTaskType>((TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string, out _);
+    private bool HasTaskTypeSelection()
+    {
+        var tag = (TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+        return string.Equals(tag, "Sop", StringComparison.OrdinalIgnoreCase)
+            || Enum.TryParse<InspectionTaskType>(tag, out _);
+    }
+
+    private bool IsSopTask() => string.Equals(
+        (TaskTypeCombo.SelectedItem as ComboBoxItem)?.Tag as string,
+        "Sop", StringComparison.OrdinalIgnoreCase);
 
     private InspectionTaskType SelectedTaskType()
     {
@@ -620,6 +703,56 @@ public partial class TasksPage : UserControl
             ? type
             : InspectionTaskType.Detection;
     }
+
+    private void SelectSopTaskType()
+    {
+        TaskTypeCombo.SelectedItem = TaskTypeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, "Sop", StringComparison.OrdinalIgnoreCase));
+        UpdateTaskTypeVisibility();
+    }
+
+    private void SelectSopDefinition(SopBinding binding)
+    {
+        var option = SopCombo.Items.OfType<SopOption>()
+            .FirstOrDefault(item => string.Equals(item.Definition.Id, binding.DefinitionId, StringComparison.Ordinal));
+        if (option is null && binding.Definition is not null)
+        {
+            var definitions = SopCombo.Items.OfType<SopOption>().ToList();
+            definitions.Insert(0, new SopOption(binding.Definition));
+            SopCombo.ItemsSource = definitions;
+            option = definitions[0];
+        }
+        SopCombo.SelectedItem = option;
+    }
+
+    private static SopStepExecution? GetFirstSopStepExecution(SopDefinition definition)
+    {
+        var stepExecution = definition.Steps
+            .OrderBy(step => step.Order)
+            .Select(step => step.Execution)
+            .FirstOrDefault(execution => execution is not null);
+        if (stepExecution is not null)
+        {
+            return stepExecution;
+        }
+        if (definition.Execution is not { } execution)
+        {
+            return null;
+        }
+        return new SopStepExecution
+        {
+            PluginId = execution.PluginId,
+            TaskType = execution.TaskType,
+            ExecutionProvider = execution.ExecutionProvider,
+            SettingsJson = execution.SettingsJson,
+            Roi = execution.Roi,
+            RoiPolicy = execution.RoiPolicy,
+            Rules = execution.Rules,
+        };
+    }
+
+    private static string NormalizeExecutionProvider(string? provider) =>
+        string.Equals(provider, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
 
     private void SelectTaskType(InspectionTaskType? type)
     {
@@ -641,6 +774,19 @@ public partial class TasksPage : UserControl
             return;
         }
         var selectedType = SelectedTaskType();
+        var isSop = IsSopTask();
+        SopBindingGroup.Visibility = isSop ? Visibility.Visible : Visibility.Collapsed;
+        AlgorithmGroup.Visibility = isSop ? Visibility.Collapsed : Visibility.Visible;
+        if (isSop)
+        {
+            ModelGroup.Visibility = Visibility.Collapsed;
+            BehaviorGroup.Visibility = Visibility.Collapsed;
+            SetGroupVisibility(ModeCombo, false);
+            SetGroupVisibility(RoiXText, false);
+            SetGroupVisibility(RulesGrid, false);
+            return;
+        }
+        ModelGroup.Visibility = IsYoloPlugin || IsAtu5Plugin ? Visibility.Visible : Visibility.Collapsed;
         var isCounting = HasTaskTypeSelection() && selectedType.IsCounting();
         var isRegion = HasTaskTypeSelection() && selectedType.IsRegion();
         var isBehavior = HasTaskTypeSelection() && selectedType.IsBehavior();

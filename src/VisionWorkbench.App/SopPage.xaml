@@ -19,7 +19,7 @@
             </StackPanel>
             <StackPanel>
                 <TextBlock Text="SOP流程制作与管理" FontSize="22" FontWeight="SemiBold" />
-                <TextBlock Text="创建独立 SOP 流程，配置执行输入、算法和工序条件。普通任务与 SOP 任务互不影响。"
+                <TextBlock Text="创建并发布 SOP 流程，配置各工序的算法和条件；发布后请到任务配置中新建任务并绑定该 SOP。"
                            Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
             </StackPanel>
         </DockPanel>
@@ -204,7 +204,7 @@
                         </GroupBox>
 
                         <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Padding="10">
-                            <TextBlock Text="使用方式：先配置输入源，再为每个工序选择独立模型和参数。保存草稿后，确认无误再发布。发布后的 SOP 会作为独立任务出现在实时检测中，普通任务无需配置 SOP。"
+                            <TextBlock Text="使用方式：先配置输入源，再为每个工序选择独立模型和参数。保存并发布后，请到任务配置中新建任务，选择“SOP流程”并绑定本 SOP；保存任务后，实时检测中即可选择该任务。"
                                        TextWrapping="Wrap" />
                         </Border>
                     </StackPanel>
