@@ -121,8 +121,11 @@ public sealed class AppServices
     public TaskRepository Tasks { get; private set; } = null!;
     public ProjectStationRepository Projects { get; private set; } = null!;
     public RecordRepository Records { get; private set; } = null!;
+    public SopRunRepository SopRuns { get; private set; } = null!;
+    public SopProductResultReplayer SopProductResultReplayer { get; private set; } = null!;
     public BatchRepository Batches { get; private set; } = null!;
     public RecipeService Recipes { get; private set; } = null!;
+    public SopDefinitionCatalogService SopDefinitions { get; private set; } = null!;
     public BatchService BatchService { get; private set; } = null!;
     public ReInferenceService ReInference { get; private set; } = null!;
     public StationRunCoordinator StationRuns { get; private set; } = null!;
@@ -245,8 +248,15 @@ public sealed class AppServices
         Tasks = new TaskRepository(Database);
         Projects = new ProjectStationRepository(Database);
         Records = new RecordRepository(Database);
+        SopRuns = new SopRunRepository(Database);
+        SopProductResultReplayer = new SopProductResultReplayer(
+            SopRuns,
+            ResultPublisher,
+            LoggerFactory.CreateLogger<SopProductResultReplayer>());
+        SopProductResultReplayer.Start();
         Batches = new BatchRepository(Database);
         Recipes = new RecipeService(Tasks);
+        SopDefinitions = new SopDefinitionCatalogService(Settings.ConfigDirectory);
         BatchService = new BatchService(Batches);
         TcpCommunication = new ProjectCommunicationManager(
             Projects, Tasks, LoggerFactory.CreateLogger<ProjectCommunicationManager>(),
@@ -295,7 +305,9 @@ public sealed class AppServices
             Records, Batches, TempImages, ResultPublisher,
             loggerFactory.CreateLogger<StationRunCoordinator>(), loggerFactory,
             () => Settings.EnableHistory,
-            () => Settings.EnableHistory);
+            () => Settings.EnableHistory,
+            SopRuns,
+            pendingReplayTrigger: SopProductResultReplayer);
         TcpCommunication.TaskExecutor = new TcpTaskExecutionService(this).ExecuteAsync;
         BackupPackages.RestoreGuard = () => StationRuns.RunningStationIds.Count == 0
             && !Yolo11Training.IsRunning

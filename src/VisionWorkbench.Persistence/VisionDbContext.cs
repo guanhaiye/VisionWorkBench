@@ -8,6 +8,8 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
     public DbSet<ProjectEntity> Projects => Set<ProjectEntity>();
     public DbSet<StationEntity> Stations => Set<StationEntity>();
     public DbSet<TaskEntity> Tasks => Set<TaskEntity>();
+    public DbSet<SopRunEntity> SopRuns => Set<SopRunEntity>();
+    public DbSet<SopStepResultEntity> SopStepResults => Set<SopStepResultEntity>();
     public DbSet<BatchEntity> Batches => Set<BatchEntity>();
     public DbSet<InspectionRecordEntity> InspectionRecords => Set<InspectionRecordEntity>();
     public DbSet<CountingEventEntity> CountingEvents => Set<CountingEventEntity>();
@@ -57,6 +59,21 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
             e.HasIndex(x => x.StationCode);
         });
 
+        modelBuilder.Entity<SopRunEntity>(e =>
+        {
+            e.ToTable("SopRuns");
+            e.HasIndex(x => new { x.ProjectId, x.StationCode, x.CycleId }).IsUnique();
+            e.HasIndex(x => new { x.BatchId, x.StartedAtUtc });
+            e.HasIndex(x => new { x.Status, x.StartedAtUtc });
+        });
+
+        modelBuilder.Entity<SopStepResultEntity>(e =>
+        {
+            e.ToTable("SopStepResults");
+            e.HasIndex(x => new { x.SopRunId, x.StepId, x.Attempt }).IsUnique();
+            e.HasOne(x => x.SopRun).WithMany().HasForeignKey(x => x.SopRunId);
+        });
+
         modelBuilder.Entity<BatchEntity>(e =>
         {
             e.ToTable("Batches");
@@ -72,6 +89,7 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
             e.HasIndex(x => new { x.ProjectId, x.StationCode });
             e.HasIndex(x => x.StationCode);
             e.HasIndex(x => x.BatchId);
+            e.HasIndex(x => x.SopRunId);
             e.HasIndex(x => x.SourceRecordId);
             e.HasIndex(x => new { x.RunType, x.StartedAt });
             e.HasIndex(x => x.StartedAt);
@@ -94,6 +112,7 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
         {
             e.ToTable("VisionEvents");
             e.HasIndex(x => x.BatchId);
+            e.HasIndex(x => x.SopRunId);
             e.HasIndex(x => x.EventType);
             e.HasOne(x => x.Record).WithMany().HasForeignKey(x => x.RecordId);
             e.HasOne(x => x.Batch).WithMany().HasForeignKey(x => x.BatchId);
@@ -172,6 +191,62 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Stations_ProjectId_StationCode ON Stations (ProjectId, StationCode);");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_Stations_ProjectId_IsArchived ON Stations (ProjectId, IsArchived);");
 
+        // SOP 产品周期表：仅新增结构，不影响旧任务和旧记录。
+        db.Database.ExecuteSqlRaw("""
+            CREATE TABLE IF NOT EXISTS SopRuns (
+                Id INTEGER NOT NULL CONSTRAINT PK_SopRuns PRIMARY KEY AUTOINCREMENT,
+                SopDefinitionId TEXT NOT NULL,
+                SopVersion INTEGER NOT NULL DEFAULT 1,
+                DefinitionHash TEXT NOT NULL,
+                DefinitionSnapshotJson TEXT NOT NULL,
+                ProjectId TEXT NOT NULL DEFAULT 'default',
+                StationCode TEXT NOT NULL,
+                TaskId INTEGER NOT NULL,
+                BatchId INTEGER NULL,
+                CycleId TEXT NOT NULL,
+                ProductId TEXT NULL,
+                Status TEXT NOT NULL DEFAULT 'Idle',
+                CurrentStepOrder INTEGER NOT NULL DEFAULT 0,
+                StartedAtUtc TEXT NOT NULL,
+                CompletedAtUtc TEXT NULL,
+                FailureReason TEXT NULL,
+                FinalStatus TEXT NULL,
+                FinalDecisionJson TEXT NULL,
+                FinalResultJson TEXT NULL,
+                FinalizedAtUtc TEXT NULL,
+                FinalPublishedAtUtc TEXT NULL,
+                FinalPublishClaimId TEXT NULL,
+                FinalPublishClaimedAtUtc TEXT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_SopRuns_ProjectId_StationCode_CycleId ON SopRuns(ProjectId, StationCode, CycleId);
+            CREATE INDEX IF NOT EXISTS IX_SopRuns_BatchId_StartedAtUtc ON SopRuns(BatchId, StartedAtUtc);
+            CREATE INDEX IF NOT EXISTS IX_SopRuns_Status_StartedAtUtc ON SopRuns(Status, StartedAtUtc);
+            CREATE TABLE IF NOT EXISTS SopStepResults (
+                Id INTEGER NOT NULL CONSTRAINT PK_SopStepResults PRIMARY KEY AUTOINCREMENT,
+                SopRunId INTEGER NOT NULL,
+                StepId TEXT NOT NULL,
+                Attempt INTEGER NOT NULL DEFAULT 1,
+                Status TEXT NOT NULL DEFAULT 'Pending',
+                StartedAtUtc TEXT NULL,
+                CompletedAtUtc TEXT NULL,
+                Confidence REAL NULL,
+                ConditionResultJson TEXT NULL,
+                FailureReason TEXT NULL,
+                InspectionRecordId INTEGER NULL,
+                FOREIGN KEY(SopRunId) REFERENCES SopRuns(Id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_SopStepResults_SopRunId_StepId_Attempt ON SopStepResults(SopRunId, StepId, Attempt);
+            """);
+
+        var sopRunColumns = ReadColumns(db, "SopRuns");
+        if (!sopRunColumns.Contains("FinalStatus")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalStatus TEXT NULL;");
+        if (!sopRunColumns.Contains("FinalDecisionJson")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalDecisionJson TEXT NULL;");
+        if (!sopRunColumns.Contains("FinalResultJson")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalResultJson TEXT NULL;");
+        if (!sopRunColumns.Contains("FinalizedAtUtc")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalizedAtUtc TEXT NULL;");
+        if (!sopRunColumns.Contains("FinalPublishedAtUtc")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalPublishedAtUtc TEXT NULL;");
+        if (!sopRunColumns.Contains("FinalPublishClaimId")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalPublishClaimId TEXT NULL;");
+        if (!sopRunColumns.Contains("FinalPublishClaimedAtUtc")) db.Database.ExecuteSqlRaw("ALTER TABLE SopRuns ADD COLUMN FinalPublishClaimedAtUtc TEXT NULL;");
+
         var projectCount = Convert.ToInt64(db.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM Projects").AsEnumerable().Single());
         if (projectCount == 0)
         {
@@ -183,6 +258,10 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         {
             db.Database.ExecuteSqlRaw("ALTER TABLE Tasks ADD COLUMN StationCode TEXT NOT NULL DEFAULT '';");
             db.Database.ExecuteSqlRaw("UPDATE Tasks SET StationCode = printf('ST-%03d', Id) WHERE StationCode = '';");
+        }
+        if (!taskColumns.Contains("WorkflowJson"))
+        {
+            db.Database.ExecuteSqlRaw("ALTER TABLE Tasks ADD COLUMN WorkflowJson TEXT NULL;");
         }
 
         var recordColumns = ReadColumns(db, "InspectionRecords");
@@ -223,6 +302,27 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
         {
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecords ADD COLUMN RunType TEXT NOT NULL DEFAULT 'production';");
         }
+        if (!updatedRecordColumns.Contains("WorkflowResultJson"))
+        {
+            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecords ADD COLUMN WorkflowResultJson TEXT NULL;");
+        }
+        if (!updatedRecordColumns.Contains("SopRunId"))
+        {
+            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecords ADD COLUMN SopRunId INTEGER NULL;");
+        }
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InspectionRecords_SopRunId ON InspectionRecords (SopRunId);");
+
+        var visionEventColumns = ReadColumns(db, "VisionEvents");
+        if (!visionEventColumns.Contains("SopRunId")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN SopRunId INTEGER NULL;");
+        if (!visionEventColumns.Contains("SourceTaskId")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN SourceTaskId INTEGER NULL;");
+        if (!visionEventColumns.Contains("SourceStationCode")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN SourceStationCode TEXT NULL;");
+        if (!visionEventColumns.Contains("FrameSequence")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN FrameSequence INTEGER NULL;");
+        if (!visionEventColumns.Contains("BoxJson")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN BoxJson TEXT NULL;");
+        if (!visionEventColumns.Contains("TextValue")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN TextValue TEXT NULL;");
+        if (!visionEventColumns.Contains("CodeValue")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN CodeValue TEXT NULL;");
+        if (!visionEventColumns.Contains("Count")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN Count INTEGER NULL;");
+        if (!visionEventColumns.Contains("AttributesJson")) db.Database.ExecuteSqlRaw("ALTER TABLE VisionEvents ADD COLUMN AttributesJson TEXT NULL;");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_VisionEvents_SopRunId ON VisionEvents (SopRunId);");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InspectionRecords_SourceRecordId ON InspectionRecords (SourceRecordId);");
 
         // 商用化基线：旧版本数据库通过 IF NOT EXISTS 原子补齐新表；后续迁移只增加版本，不覆盖业务数据。

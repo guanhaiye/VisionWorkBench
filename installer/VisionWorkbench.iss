@@ -24,6 +24,7 @@ Source: "..\artifacts\commercial\Release\*"; DestDir: "{app}"; Flags: ignorevers
 
 [Dirs]
 Name: "{commonappdata}\VisionWorkbench"; Permissions: users-modify
+Name: "{commonappdata}\VisionWorkbench\Config"; Permissions: users-modify
 Name: "{commonappdata}\VisionWorkbench\backups"; Permissions: users-modify
 Name: "{localappdata}\VisionWorkbench"; Permissions: users-modify
 

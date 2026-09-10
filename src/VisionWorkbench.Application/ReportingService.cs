@@ -49,10 +49,15 @@ public sealed class ReportingService(VisionDbContextFactory factory)
     public async Task<InspectionReport> BuildAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
     {
         await using var db = factory.CreateDbContext();
-        var rows = await db.InspectionRecords.AsNoTracking().Where(x => x.StartedAt >= fromUtc && x.StartedAt < toUtc).Select(x => new { x.Status, x.TotalElapsedMs }).ToListAsync(ct);
-        var values = rows.Select(x => x.TotalElapsedMs).OrderBy(x => x).ToArray();
-        var ok = rows.Count(x => string.Equals(x.Status, "ok", StringComparison.OrdinalIgnoreCase));
-        return new InspectionReport(fromUtc, toUtc, rows.Count, ok, rows.Count(x => string.Equals(x.Status, "ng", StringComparison.OrdinalIgnoreCase)), rows.Count(x => string.Equals(x.Status, "review_required", StringComparison.OrdinalIgnoreCase)), rows.Count == 0 ? 0 : ok * 100d / rows.Count, Percentile(values, .50), Percentile(values, .95), Percentile(values, .99));
+        var rows = await db.InspectionRecords.AsNoTracking()
+            .Where(x => x.StartedAt >= fromUtc && x.StartedAt < toUtc)
+            .Select(x => new { x.Status, x.TotalElapsedMs })
+            .ToListAsync(ct);
+        // processing 是 SOP 产品周期的中间帧，不进入质量统计分母，也不作为错误。
+        var terminalRows = rows.Where(x => x.Status is "ok" or "ng" or "review_required").ToArray();
+        var values = terminalRows.Select(x => x.TotalElapsedMs).OrderBy(x => x).ToArray();
+        var ok = terminalRows.Count(x => string.Equals(x.Status, "ok", StringComparison.OrdinalIgnoreCase));
+        return new InspectionReport(fromUtc, toUtc, terminalRows.Length, ok, terminalRows.Count(x => string.Equals(x.Status, "ng", StringComparison.OrdinalIgnoreCase)), terminalRows.Count(x => string.Equals(x.Status, "review_required", StringComparison.OrdinalIgnoreCase)), terminalRows.Length == 0 ? 0 : ok * 100d / terminalRows.Length, Percentile(values, .50), Percentile(values, .95), Percentile(values, .99));
     }
 
     public async Task ExportCsvAsync(string path, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)

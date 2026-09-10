@@ -40,6 +40,8 @@
             <TextBlock Text="任务：" VerticalAlignment="Center" Margin="0,0,0,4" />
             <ComboBox x:Name="TaskCombo" MinWidth="140" Width="220"
                       DisplayMemberPath="Name" Margin="6,0,4,0" SelectionChanged="TaskCombo_SelectionChanged" />
+            <TextBlock x:Name="TaskModeText" Text="普通视觉检测" VerticalAlignment="Center"
+                       Foreground="{DynamicResource MutedTextBrush}" Margin="8,0,8,4" />
             <Button x:Name="StartButton" Content="开始" Click="Start_Click" Margin="4,0" Padding="10,3" />
             <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False" Padding="10,3" />
             <Button x:Name="SingleButton" Content="单次检测" Click="Single_Click" Padding="10,3" />
@@ -85,6 +87,44 @@
 
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
                 <StackPanel>
+                    <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="SOP 工序进度" Style="{StaticResource CardTitle}" />
+                                <TextBlock x:Name="SopProgressText" DockPanel.Dock="Right"
+                                           FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" />
+                            </DockPanel>
+                            <TextBlock x:Name="SopCurrentStepText" Text="等待开始"
+                                       TextWrapping="Wrap" Margin="0,0,0,8" />
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button x:Name="StartNextSopButton" Content="开始下一件" Click="StartNextSop_Click"
+                                        IsEnabled="False" Padding="9,3" />
+                                <Button x:Name="ResetSopButton" Content="复位当前产品" Click="ResetSop_Click"
+                                        IsEnabled="False" Padding="9,3" />
+                                <TextBlock x:Name="SopCycleText" Text="" Foreground="{DynamicResource MutedTextBrush}"
+                                           VerticalAlignment="Center" Margin="8,0,0,0" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <ItemsControl x:Name="SopStepsItems">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="30" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Indicator}"
+                                                       Foreground="{Binding Brush}" FontWeight="Bold" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="2" Text="{Binding StatusText}"
+                                                       Foreground="{Binding Brush}" Margin="8,0,0,0" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
                     <Border Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="当前判定" Style="{StaticResource CardTitle}" />

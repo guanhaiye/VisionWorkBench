@@ -134,6 +134,14 @@ public sealed class PythonPostProcessService
 
             var commonIndices = TryReadIndices(result, "keepIndices", out var indices) ? indices : null;
             var filteredOutput = ApplyPrimaryFilter(taskType, output, commonIndices);
+            var pythonEvents = ReadEvents(result);
+            if (pythonEvents.Count > 0)
+            {
+                filteredOutput = filteredOutput with
+                {
+                    Events = [.. filteredOutput.Events, .. pythonEvents],
+                };
+            }
 
             var explicitStatus = result.TryGetProperty("status", out var statusElement)
                 ? statusElement.GetString()
@@ -391,6 +399,7 @@ public sealed class PythonPostProcessService
             "keepIndices",
             "status",
             "message",
+            "events",
         };
         var unknown = result.EnumerateObject()
             .Select(property => property.Name)
@@ -432,6 +441,90 @@ public sealed class PythonPostProcessService
             return value;
         }).Distinct().ToArray();
         return true;
+    }
+
+    private static IReadOnlyList<VisionEvent> ReadEvents(JsonElement result)
+    {
+        if (!result.TryGetProperty("events", out var element))
+        {
+            return [];
+        }
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("result.events 必须是数组。");
+        }
+
+        var events = new List<VisionEvent>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException("result.events 中的每个事件都必须是对象。");
+
+            var eventId = ReadRequiredString(item, "eventId");
+            var eventType = ReadRequiredString(item, "eventType");
+            var phase = ReadEnum(item, "phase", VisionEventPhase.Started);
+            var severity = ReadEnum(item, "severity", VisionEventSeverity.Warning);
+
+            events.Add(new VisionEvent
+            {
+                EventId = eventId,
+                EventType = eventType,
+                Phase = phase,
+                Severity = severity,
+                SubjectId = ReadString(item, "subjectId"),
+                RegionId = ReadString(item, "regionId"),
+                Confidence = ReadDouble(item, "confidence"),
+                Message = ReadString(item, "message"),
+                TextValue = ReadString(item, "textValue"),
+                CodeValue = ReadString(item, "codeValue"),
+                EvidenceImagePath = ReadString(item, "evidenceImagePath"),
+                SourceStationCode = ReadString(item, "sourceStationCode"),
+                Count = ReadNullableLong(item, "count"),
+                FrameSequence = ReadNullableLong(item, "frameSequence"),
+                StartedAt = ReadDateTimeOffset(item, "startedAt"),
+                EndedAt = ReadDateTimeOffset(item, "endedAt"),
+            });
+        }
+        return events;
+    }
+
+    private static string ReadRequiredString(JsonElement item, string propertyName)
+    {
+        var value = ReadString(item, propertyName);
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidOperationException($"result.events 中每个事件都必须包含 {propertyName}。");
+        return value;
+    }
+
+    private static string? ReadString(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetString()
+            : null;
+
+    private static double ReadDouble(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetDouble()
+            : 0;
+
+    private static long? ReadNullableLong(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetInt64()
+            : null;
+
+    private static DateTimeOffset? ReadDateTimeOffset(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetDateTimeOffset()
+            : null;
+
+    private static TEnum ReadEnum<TEnum>(JsonElement item, string propertyName, TEnum fallback)
+        where TEnum : struct, Enum
+    {
+        var text = ReadString(item, propertyName);
+        return string.IsNullOrWhiteSpace(text)
+            ? fallback
+            : Enum.TryParse<TEnum>(text, ignoreCase: true, out var value)
+                ? value
+                : throw new InvalidOperationException($"result.events.{propertyName} 值无效：{text}。");
     }
 
     private static IReadOnlyList<T> FilterByIndices<T>(IReadOnlyList<T> source, IReadOnlyList<int> indices)

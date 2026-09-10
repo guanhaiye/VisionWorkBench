@@ -10,7 +10,7 @@ $localDotnet = Join-Path (Split-Path $repo -Parent) '.dotnet10\dotnet.exe'
 $dotnet = if (Test-Path -LiteralPath $localDotnet) { $localDotnet } else { (Get-Command dotnet -ErrorAction Stop).Source }
 $publish = Join-Path $repo "artifacts\commercial\$Configuration"
 New-Item -ItemType Directory -Force -Path $publish | Out-Null
-& $dotnet restore (Join-Path $repo 'VisionWorkbench.slnx')
+& $dotnet restore (Join-Path $repo 'VisionWorkbench.slnx') -r win-x64
 & $dotnet build (Join-Path $repo 'src\VisionWorkbench.App\VisionWorkbench.App.csproj') -c $Configuration --no-restore
 if (-not $SkipTests) { & $dotnet test (Join-Path $repo 'tests\VisionWorkbench.Tests\VisionWorkbench.Tests.csproj') -c $Configuration --no-restore --filter 'FullyQualifiedName!~UiSmokeTests' }
 & $dotnet publish (Join-Path $repo 'src\VisionWorkbench.App\VisionWorkbench.App.csproj') -c $Configuration -r win-x64 --self-contained true --no-restore -o $publish

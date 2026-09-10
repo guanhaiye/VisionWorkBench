@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using VisionWorkbench.Algorithms;
@@ -29,6 +30,7 @@ public sealed class RecordCompletedEventArgs : EventArgs
     public VideoFrame? Frame { get; init; }
     public required AlgorithmOutput Output { get; init; }
     public required DecisionResult Decision { get; init; }
+    public SopSnapshot? Sop { get; init; }
     public long CountAfter { get; init; }
 }
 
@@ -52,15 +54,22 @@ public sealed class DetectionRunService : IAsyncDisposable
     private readonly Func<bool> _shouldPersist;
     private readonly Func<bool> _shouldSaveFullImages;
     private readonly PythonPostProcessService _pythonPostProcess;
+    private readonly SopRunRepository? _sopRuns;
+    private readonly ISopPendingReplayTrigger? _pendingReplayTrigger;
     private readonly Channel<Func<CancellationToken, Task>> _dbWrites =
         Channel.CreateUnbounded<Func<CancellationToken, Task>>(
             new UnboundedChannelOptions { SingleReader = true });
     private readonly CancellationTokenSource _cts = new();
     private readonly string _counterId;
     private readonly object _singleCaptureLock = new();
+    private readonly object _sopGate = new();
+    private readonly SemaphoreSlim _sopCycleGate = new(1, 1);
+    private readonly HashSet<string> _activeSopFinalizations = new(StringComparer.Ordinal);
+    private string? _lastCycleSwitchCycleId;
     private Task? _dbLoopTask;
     private long _pendingDbWrites;
     private Task? _processingLoopTask;
+    private Task? _sopClockTask;
     private TaskCompletionSource<RecordCompletedEventArgs?>? _singleCaptureRequest;
     private FrameRoutingStrategy _routingStrategy = FrameRoutingStrategy.LatestOnly;
 
@@ -81,6 +90,8 @@ public sealed class DetectionRunService : IAsyncDisposable
 
     private ICameraSession? _camera;
     private IAlgorithmSession? _algorithm;
+    private IReadOnlyDictionary<string, IAlgorithmSession> _sopAlgorithms =
+        new Dictionary<string, IAlgorithmSession>(StringComparer.Ordinal);
     private Recipe _recipe = null!;
     private long _taskId;
     private string _projectId = "default";
@@ -88,14 +99,25 @@ public sealed class DetectionRunService : IAsyncDisposable
     private volatile bool _paused;
     private int _disposed;
     private BehaviorEngine? _behaviorEngine;
+    private SopStateMachine? _sopStateMachine;
+    private long? _sopRunId;
+    private string? _sopCycleId;
+
+    public SopSnapshot? Sop => _sopStateMachine?.Snapshot;
+    public long? SopRunId => _sopRunId;
+    public string? SopCycleId => _sopCycleId;
 
     public event EventHandler<RecordCompletedEventArgs>? RecordCompleted;
+    /// <summary>SOP 状态变化，包括无新算法帧时由独立超时钟触发的变化。</summary>
+    public event Action<SopSnapshot>? SopChanged;
     public event EventHandler<RunFaultedEventArgs>? Faulted;
     public event EventHandler? SourceCompleted;
     public event EventHandler<DetectionRunState>? StateChanged;
 
     /// <summary>预览帧 tap（相机线程回调；UI 订阅方必须自行 Dispatcher 编组）。</summary>
     public event EventHandler<VideoFrame>? PreviewReceived;
+
+    private sealed record ModelSession(Recipe Recipe, IAlgorithmSession Session);
 
     public DetectionRunService(
         RecordRepository records,
@@ -105,7 +127,9 @@ public sealed class DetectionRunService : IAsyncDisposable
         IResultPublisher? publisher = null,
         Func<bool>? shouldPersist = null,
         Func<bool>? shouldSaveFullImages = null,
-        string? pythonExecutable = null)
+        string? pythonExecutable = null,
+        SopRunRepository? sopRuns = null,
+        ISopPendingReplayTrigger? pendingReplayTrigger = null)
     {
         _records = records;
         _tempStore = tempStore;
@@ -117,6 +141,8 @@ public sealed class DetectionRunService : IAsyncDisposable
         // 也会让 OK 记录违反只保存结构化结果的约定。
         _shouldSaveFullImages = shouldSaveFullImages ?? (() => false);
         _pythonPostProcess = new PythonPostProcessService(pythonExecutable, logger);
+        _sopRuns = sopRuns;
+        _pendingReplayTrigger = pendingReplayTrigger;
         _counterId = counterId ?? "default";
         Counting = new CountingService(_counterId);
         // 落库循环随服务启动（人工修正可在未开始检测时使用），随 DisposeAsync 结束
@@ -137,7 +163,8 @@ public sealed class DetectionRunService : IAsyncDisposable
         FrameRoutingStrategy routingStrategy = FrameRoutingStrategy.LatestOnly,
         CancellationToken cancellationToken = default,
         string? projectId = null,
-        bool startProcessingLoop = true)
+        bool startProcessingLoop = true,
+        IReadOnlyDictionary<string, IAlgorithmSession>? sopAlgorithms = null)
     {
         ArgumentNullException.ThrowIfNull(recipe);
         ArgumentNullException.ThrowIfNull(camera);
@@ -153,32 +180,47 @@ public sealed class DetectionRunService : IAsyncDisposable
         _projectId = string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
         _camera = camera;
         _algorithm = algorithm;
+        _sopAlgorithms = sopAlgorithms ?? new Dictionary<string, IAlgorithmSession>(StringComparer.Ordinal);
         _routingStrategy = routingStrategy;
         BatchId = batchId;
         _behaviorEngine = new BehaviorEngine(recipe.Behavior);
+        _sopRunId = null;
+        _sopCycleId = null;
+        _lastCycleSwitchCycleId = null;
+        await TriggerPendingReplayAsync(cancellationToken);
+        await StartSopCycleAsync(DateTimeOffset.UtcNow);
         _evidenceDir = Path.Combine(
             Path.GetDirectoryName(_tempStore.RootDirectory.TrimEnd(Path.DirectorySeparatorChar)) ?? ".",
             "evidence", DateTimeOffset.UtcNow.ToString("yyyyMMdd"));
         Directory.CreateDirectory(_evidenceDir);
 
-        // 允许实时检测页在启动阶段提前完成 initialize（模型加载），开始检测时直接复用。
-        if (algorithm.State == AlgorithmSessionState.Uninitialized)
+        // 普通任务只启动一个会话；SOP 任务按步骤启动各自模型会话。
+        var sessions = _sopAlgorithms.Count == 0
+            ? [new ModelSession(recipe, algorithm)]
+            : _sopAlgorithms
+                .Select(pair => new ModelSession(FindStepRecipe(recipe, pair.Key), pair.Value))
+                .DistinctBy(item => item.Session, ReferenceEqualityComparer.Instance)
+                .ToArray();
+        foreach (var model in sessions)
         {
-            await algorithm.InitializeAsync(new AlgorithmInitialization
+            if (model.Session.State == AlgorithmSessionState.Uninitialized)
             {
-                Settings = BuildAlgorithmSettings(recipe),
-                ExecutionProvider = recipe.ExecutionProvider,
+                await model.Session.InitializeAsync(new AlgorithmInitialization
+                {
+                    Settings = BuildAlgorithmSettings(model.Recipe),
+                    ExecutionProvider = model.Recipe.ExecutionProvider,
+                }, cancellationToken);
+            }
+            else if (model.Session.State != AlgorithmSessionState.Ready)
+            {
+                throw new InvalidOperationException($"算法会话未就绪（当前状态：{model.Session.State}）");
+            }
+            await model.Session.StartAsync(new AlgorithmStartOptions
+            {
+                Mode = "stream",
+                Roi = model.Recipe.Roi,
             }, cancellationToken);
         }
-        else if (algorithm.State != AlgorithmSessionState.Ready)
-        {
-            throw new InvalidOperationException($"算法会话未就绪（当前状态：{algorithm.State}）");
-        }
-        await algorithm.StartAsync(new AlgorithmStartOptions
-        {
-            Mode = "stream",
-            Roi = recipe.Roi,
-        }, cancellationToken);
 
         // 帧调度器接线
         Scheduler = new FrameScheduler(routingStrategy);
@@ -186,17 +228,267 @@ public sealed class DetectionRunService : IAsyncDisposable
         camera.FrameReceived += OnCameraFrame;
         camera.Completed += OnCameraCompleted;
         camera.Faulted += OnCameraFaulted;
-        algorithm.Faulted += OnAlgorithmFaulted;
+        foreach (var session in sessions.Select(item => item.Session))
+        {
+            session.Faulted += OnAlgorithmFaulted;
+        }
         await camera.StartAsync(cancellationToken);
 
         _paused = false;
         SetState(DetectionRunState.Running);
+        StartSopClock();
         if (startProcessingLoop)
         {
             _processingLoopTask = Task.Run(() => ProcessingLoopAsync(_cts.Token));
         }
         _logger?.LogInformation("检测开始: task={TaskId} batch={BatchId} counter={Counter}",
             taskId, batchId, _counterId);
+    }
+
+    private async Task TriggerPendingReplayAsync(CancellationToken cancellationToken)
+    {
+        if (_pendingReplayTrigger is null)
+        {
+            return;
+        }
+
+        await _pendingReplayTrigger.TriggerAsync(cancellationToken);
+    }
+
+    private async Task StartSopCycleAsync(DateTimeOffset startedAt)
+    {
+        await _sopCycleGate.WaitAsync();
+        try
+        {
+            await StartSopCycleCoreAsync(startedAt);
+        }
+        finally
+        {
+            _sopCycleGate.Release();
+        }
+    }
+
+    private async Task StartSopCycleCoreAsync(DateTimeOffset startedAt)
+    {
+        if (_recipe.Sop?.Definition is not { } definition)
+        {
+            lock (_sopGate)
+            {
+                _sopStateMachine = null;
+                _sopRunId = null;
+                _sopCycleId = null;
+            }
+            return;
+        }
+
+        var machine = new SopStateMachine(definition, _recipe.Sop.RunMode);
+        var started = machine.Start(startedAt);
+        var cycleId = $"cycle-{Guid.NewGuid():N}";
+        long? runId = null;
+        if (_sopRuns is not null && _shouldPersist())
+        {
+            var snapshotJson = JsonSerializer.Serialize(definition, JsonOpts);
+            var run = await _sopRuns.StartAsync(new SopRunEntity
+            {
+                SopDefinitionId = _recipe.Sop.DefinitionId,
+                SopVersion = _recipe.Sop.Version,
+                DefinitionHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(snapshotJson))),
+                DefinitionSnapshotJson = snapshotJson,
+                ProjectId = _projectId,
+                StationCode = _recipe.StationCode,
+                TaskId = _taskId,
+                BatchId = BatchId,
+                CycleId = cycleId,
+                Status = started.Snapshot.Status.ToString(),
+                CurrentStepOrder = started.Snapshot.CurrentStepOrder,
+                StartedAtUtc = startedAt.UtcDateTime,
+            });
+            runId = run.Id;
+        }
+
+        lock (_sopGate)
+        {
+            _sopStateMachine = machine;
+            _sopRunId = runId;
+            _sopCycleId = cycleId;
+        }
+        SopChanged?.Invoke(started.Snapshot);
+    }
+
+    /// <summary>当前 SOP 产品已进入终态后，手动开始下一件产品，创建全新的周期和运行记录。</summary>
+    public async Task<SopSnapshot?> StartNextProductAsync()
+    {
+        if (State is not (DetectionRunState.Running or DetectionRunState.Paused))
+        {
+            throw new InvalidOperationException("检测尚未运行，不能开始下一件产品。");
+        }
+
+        string? observedCycleId;
+        SopRunStatus observedStatus;
+        lock (_sopGate)
+        {
+            if (_sopStateMachine is null)
+            {
+                throw new InvalidOperationException("当前任务未绑定 SOP。");
+            }
+            observedCycleId = _sopCycleId;
+            observedStatus = _sopStateMachine.Snapshot.Status;
+        }
+
+        await _sopCycleGate.WaitAsync();
+        try
+        {
+            lock (_sopGate)
+            {
+                // 第二个并发调用观察到的是旧周期；第一个调用已切换成功时直接返回新周期，
+                // 从而把按钮连点/重复请求变成幂等操作。
+                if (!string.Equals(observedCycleId, _sopCycleId, StringComparison.Ordinal))
+                {
+                    return _sopStateMachine?.Snapshot;
+                }
+                if (_sopStateMachine is null)
+                {
+                    throw new InvalidOperationException("当前产品尚未完成或失败，不能直接开始下一件产品；如需放弃请点击复位当前产品。");
+                }
+                if (!IsSopTerminal(observedStatus) || !IsSopTerminal(_sopStateMachine.Snapshot.Status))
+                {
+                    if (string.Equals(_lastCycleSwitchCycleId, observedCycleId, StringComparison.Ordinal))
+                    {
+                        return _sopStateMachine.Snapshot;
+                    }
+                    throw new InvalidOperationException("当前产品尚未完成或失败，不能直接开始下一件产品；如需放弃请点击复位当前产品。");
+                }
+            }
+
+            await TriggerPendingReplayAsync(CancellationToken.None);
+            await StartSopCycleCoreAsync(DateTimeOffset.UtcNow);
+            _lastCycleSwitchCycleId = _sopCycleId;
+            return Sop;
+        }
+        finally
+        {
+            _sopCycleGate.Release();
+        }
+    }
+
+    /// <summary>放弃当前产品并立即创建一个新的 SOP 产品周期；不停止相机和算法会话。</summary>
+    public async Task<SopSnapshot?> ResetProductAsync()
+    {
+        if (State is not (DetectionRunState.Running or DetectionRunState.Paused))
+        {
+            throw new InvalidOperationException("检测尚未运行，不能复位产品周期。");
+        }
+
+        string? observedCycleId;
+        lock (_sopGate)
+        {
+            if (_sopStateMachine is null)
+            {
+                throw new InvalidOperationException("当前任务未绑定 SOP。");
+            }
+            observedCycleId = _sopCycleId;
+        }
+
+        await _sopCycleGate.WaitAsync();
+        try
+        {
+            lock (_sopGate)
+            {
+                if (!string.Equals(observedCycleId, _sopCycleId, StringComparison.Ordinal))
+                {
+                    return _sopStateMachine?.Snapshot;
+                }
+            }
+
+            SopTransition? aborted = null;
+            long? runId = null;
+            string? abortedCycleId = null;
+            lock (_sopGate)
+            {
+                if (_sopStateMachine is { } machine && !IsSopTerminal(machine.Snapshot.Status))
+                {
+                    aborted = machine.Abort("人工复位当前产品", interrupted: true);
+                    runId = _sopRunId;
+                    abortedCycleId = _sopCycleId;
+                }
+            }
+            if (aborted is { } transition)
+            {
+                await PersistSopSnapshotAsync(runId, transition.Snapshot);
+                SopChanged?.Invoke(transition.Snapshot);
+                QueueProductFinalization(runId, abortedCycleId, transition.Snapshot, decision: null);
+            }
+
+            await TriggerPendingReplayAsync(CancellationToken.None);
+            await StartSopCycleCoreAsync(DateTimeOffset.UtcNow);
+            _lastCycleSwitchCycleId = _sopCycleId;
+            return Sop;
+        }
+        finally
+        {
+            _sopCycleGate.Release();
+        }
+    }
+
+    private void StartSopClock()
+    {
+        if (_sopStateMachine is null || _sopClockTask is not null)
+        {
+            return;
+        }
+
+        _sopClockTask = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(_cts.Token))
+                {
+                    // 统一采用“暂停即暂停 SOP 计时”的策略；恢复后继续原步骤计时。
+                    if (State != DetectionRunState.Running)
+                    {
+                        continue;
+                    }
+
+                    SopTransition transition;
+                    long? runId;
+                    string? cycleId;
+                    lock (_sopGate)
+                    {
+                        if (_sopStateMachine is null || IsSopTerminal(_sopStateMachine.Snapshot.Status))
+                        {
+                            continue;
+                        }
+                        transition = _sopStateMachine.AdvanceTime(DateTimeOffset.UtcNow);
+                        runId = _sopRunId;
+                        cycleId = _sopCycleId;
+                    }
+                    if (!transition.Changed)
+                    {
+                        continue;
+                    }
+
+                    await PersistSopSnapshotAsync(runId, transition.Snapshot);
+                    SopChanged?.Invoke(transition.Snapshot);
+                    if (transition.IsTerminal)
+                    {
+                        QueueProductFinalization(runId, cycleId, transition.Snapshot, decision: null);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
+                // 正常停止。
+            }
+        });
+    }
+
+    private async Task PersistSopSnapshotAsync(long? runId, SopSnapshot snapshot, long? inspectionRecordId = null)
+    {
+        if (runId is { } id && _sopRuns is not null && _shouldPersist())
+        {
+            await _sopRuns.SaveSnapshotAsync(id, snapshot, inspectionRecordId);
+        }
     }
 
     /// <summary>替换单次测试输入源，但保留当前算法会话和已加载模型。</summary>
@@ -247,6 +539,10 @@ public sealed class DetectionRunService : IAsyncDisposable
             {
                 await _camera.PauseAsync(CancellationToken.None);
             }
+            lock (_sopGate)
+            {
+                _sopStateMachine?.Pause(DateTimeOffset.UtcNow);
+            }
             SetState(DetectionRunState.Paused);
         }
     }
@@ -258,6 +554,10 @@ public sealed class DetectionRunService : IAsyncDisposable
             lock (_pauseSync)
             {
                 _paused = false;
+            }
+            lock (_sopGate)
+            {
+                _sopStateMachine?.Resume(DateTimeOffset.UtcNow);
             }
             SetState(DetectionRunState.Running);
             if (_camera is not null)
@@ -446,9 +746,39 @@ public sealed class DetectionRunService : IAsyncDisposable
         {
             return;
         }
+        SopTransition? stoppedSop = null;
+        long? stoppedSopRunId = null;
+        string? stoppedSopCycleId = null;
+        lock (_sopGate)
+        {
+            if (_sopStateMachine is { } sop && !IsSopTerminal(sop.Snapshot.Status))
+            {
+                stoppedSop = sop.Abort("检测已停止", interrupted: true);
+                stoppedSopRunId = _sopRunId;
+                stoppedSopCycleId = _sopCycleId;
+            }
+        }
+        if (stoppedSop is { } stoppedTransition)
+        {
+            await PersistSopSnapshotAsync(stoppedSopRunId, stoppedTransition.Snapshot);
+            SopChanged?.Invoke(stoppedTransition.Snapshot);
+            QueueProductFinalization(stoppedSopRunId, stoppedSopCycleId, stoppedTransition.Snapshot, decision: null);
+        }
         SetState(DetectionRunState.Stopped);
         CompleteSingleCapture(null);
         _cts.Cancel();
+        if (_sopClockTask is not null)
+        {
+            try
+            {
+                await _sopClockTask.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception)
+            {
+                // 超时钟退出失败不阻塞相机和算法停止。
+            }
+            _sopClockTask = null;
+        }
 
         if (_camera is not null)
         {
@@ -456,9 +786,9 @@ public sealed class DetectionRunService : IAsyncDisposable
             DetachCamera(camera);
             await camera.StopAsync(CancellationToken.None);
         }
-        if (_algorithm is not null)
+        foreach (var session in AlgorithmSessions())
         {
-            _algorithm.Faulted -= OnAlgorithmFaulted;
+            session.Faulted -= OnAlgorithmFaulted;
         }
         if (_processingLoopTask is not null)
         {
@@ -471,11 +801,11 @@ public sealed class DetectionRunService : IAsyncDisposable
                 // 循环自行退出
             }
         }
-        if (_algorithm is not null)
+        foreach (var session in AlgorithmSessions())
         {
             try
             {
-                await _algorithm.StopAsync(CancellationToken.None);
+                await session.StopAsync(CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -487,6 +817,13 @@ public sealed class DetectionRunService : IAsyncDisposable
         _logger?.LogInformation("检测停止: counter={Counter} total={Total} dropped={Dropped}",
             _counterId, Counting.State.CurrentTotal, Scheduler.DroppedFrameCount);
     }
+
+    private IEnumerable<IAlgorithmSession> AlgorithmSessions()
+        => new[] { _algorithm }
+            .Where(session => session is not null)
+            .Cast<IAlgorithmSession>()
+            .Concat(_sopAlgorithms.Values)
+            .Distinct();
 
     /// <summary>人工修正计数（CNT-S-010）：原因必填，事件落库。</summary>
     public async Task<CountingAdjustment> AdjustCountAsync(long delta, string reason, string @operator)
@@ -650,6 +987,15 @@ public sealed class DetectionRunService : IAsyncDisposable
                 break;
             }
         }
+        if (_sopStateMachine is { } sop && !IsSopTerminal(sop.Snapshot.Status))
+        {
+            var transition = sop.Abort("输入源结束，产品周期未完成", interrupted: true);
+            if (_sopRunId is { } runId && _sopRuns is not null)
+            {
+                await _sopRuns.SaveSnapshotAsync(runId, transition.Snapshot);
+            }
+            QueueProductFinalization(_sopRunId, _sopCycleId, transition.Snapshot, decision: null);
+        }
         if (State == DetectionRunState.Running)
         {
             SetState(DetectionRunState.Idle);
@@ -679,35 +1025,44 @@ public sealed class DetectionRunService : IAsyncDisposable
         var tempPath = _tempStore.SaveFrame(frame);
         try
         {
-            var output = await _algorithm!.SubmitAsync(new AlgorithmInput
+            var activeModel = GetActiveModel();
+            var activeRecipe = activeModel.Recipe;
+            var output = await activeModel.Session.SubmitAsync(new AlgorithmInput
             {
                 InputId = $"in-{frame.Sequence}",
                 ImagePath = tempPath,
                 FrameSequence = frame.Sequence,
                 CapturedAt = frame.Timestamp,
-                Roi = _recipe.Roi,
+                Roi = activeRecipe.Roi,
             }, CancellationToken.None); // 在途帧必须完成（Stop 只阻止取新帧，不打断推理）
 
-            var behavior = _behaviorEngine?.Process(
-                BehaviorFrame.FromAlgorithmOutput(_recipe.CameraDeviceId, output, frame.Sequence, frame.Timestamp));
+            var behavior = activeRecipe.TaskType.IsBehavior()
+                ? _behaviorEngine?.Process(
+                    BehaviorFrame.FromAlgorithmOutput(_recipe.CameraDeviceId, output, frame.Sequence, frame.Timestamp))
+                : null;
             if (behavior is { Events.Count: > 0 })
             {
                 output = output with { Events = [.. output.Events, .. behavior.Events] };
             }
 
-            var decision = RuleEngine.Evaluate(output, _recipe.Rules, _recipe.Roi, _recipe.RoiPolicy);
-            if (_recipe.PostProcess.Mode == PostProcessMode.PythonScript
-                && !string.IsNullOrWhiteSpace(_recipe.PostProcess.Script))
+            // Python 后处理可以修改输出和事件；必须先完成后处理，再把最终 output 送入 SOP。
+            var decision = RuleEngine.Evaluate(output, activeRecipe.Rules, activeRecipe.Roi, activeRecipe.RoiPolicy);
+            if (activeRecipe.PostProcess.Mode == PostProcessMode.PythonScript
+                && !string.IsNullOrWhiteSpace(activeRecipe.PostProcess.Script))
             {
                 var postProcess = await _pythonPostProcess.ExecuteAsync(
-                    _recipe.PostProcess.Script,
+                    activeRecipe.PostProcess.Script,
                     tempPath,
                     output,
-                    _recipe.TaskType,
+                    activeRecipe.TaskType,
                     CancellationToken.None);
                 output = postProcess.Output;
                 decision = postProcess.Decision;
             }
+            var sopResult = ApplySopEvents(output);
+            var sopSnapshot = sopResult.Snapshot;
+            var sopRunId = sopResult.RunId;
+            decision = CombineDecision(decision, sopSnapshot);
             var countingEvents = Counting.ApplyOutput(
                 output, snapshotFallback: _recipe.CountingMode == CountingMode.Snapshot);
             // 快照模式的普通模型由宿主补齐计数事件，确保界面累计、持久化和批次恢复一致。
@@ -756,6 +1111,8 @@ public sealed class DetectionRunService : IAsyncDisposable
                 TotalElapsedMs = sw.Elapsed.TotalMilliseconds,
                 RawResultJson = JsonSerializer.Serialize(rawEnvelope, JsonOpts),
                 FinalResultJson = JsonSerializer.Serialize(finalEnvelope, JsonOpts),
+                WorkflowResultJson = sopSnapshot is null ? null : JsonSerializer.Serialize(sopSnapshot, JsonOpts),
+                SopRunId = sopRunId,
             };
 
             if (shouldPersist)
@@ -763,15 +1120,49 @@ public sealed class DetectionRunService : IAsyncDisposable
                 EnqueueWrite(async ct =>
                 {
                     var saved = await _records.AddAsync(record, output.CountingEvents, output.Events, ct);
+                    if (sopRunId is { } runId && _sopRuns is not null && sopSnapshot is not null)
+                    {
+                        var publishedEnvelope = finalEnvelope with { RecordId = saved.Id };
+                        if (sopResult.TerminalReached)
+                        {
+                            await FinalizeProductAsync(
+                                runId,
+                                sopResult.CycleId,
+                                sopSnapshot,
+                                decision,
+                                saved.Id,
+                                ct);
+                        }
+                        else
+                        {
+                            await _sopRuns.SaveSnapshotAsync(runId, sopSnapshot, saved.Id, ct);
+                        }
+                    }
                     if (_publisher is not null)
                     {
                         await _publisher.PublishAsync(finalEnvelope with { RecordId = saved.Id }, ct);
                     }
                 });
             }
-            else if (_publisher is not null)
+            else if (_publisher is not null || (sopResult.TerminalReached && sopSnapshot is not null))
             {
-                EnqueueWrite(ct => _publisher.PublishAsync(finalEnvelope, ct));
+                EnqueueWrite(async ct =>
+                {
+                    if (sopResult.TerminalReached && sopSnapshot is not null)
+                    {
+                        await FinalizeProductAsync(
+                            sopRunId,
+                            sopResult.CycleId,
+                            sopSnapshot,
+                            decision,
+                            inspectionRecordId: null,
+                            ct);
+                    }
+                    if (_publisher is not null)
+                    {
+                        await _publisher.PublishAsync(finalEnvelope, ct);
+                    }
+                });
             }
 
             var args = new RecordCompletedEventArgs
@@ -781,6 +1172,7 @@ public sealed class DetectionRunService : IAsyncDisposable
                 Frame = frame,
                 Output = output,
                 Decision = decision,
+                Sop = sopSnapshot,
                 CountAfter = Counting.State.CurrentTotal,
             };
             RecordCompleted?.Invoke(this, args);
@@ -790,6 +1182,235 @@ public sealed class DetectionRunService : IAsyncDisposable
         {
             _tempStore.Delete(tempPath);
         }
+    }
+
+    private ModelSession GetActiveModel()
+    {
+        if (_sopAlgorithms.Count > 0 && _sopStateMachine?.CurrentStepId is { } stepId
+            && _sopAlgorithms.TryGetValue(stepId, out var session))
+        {
+            return new ModelSession(FindStepRecipe(_recipe, stepId), session);
+        }
+        return new ModelSession(_recipe, _algorithm!);
+    }
+
+    private static Recipe FindStepRecipe(Recipe root, string stepId)
+    {
+        var step = root.Sop?.Definition?.Steps.FirstOrDefault(item =>
+            string.Equals(item.Id, stepId, StringComparison.Ordinal));
+        var execution = step?.Execution;
+        if (execution is null)
+        {
+            return root;
+        }
+        return root with
+        {
+            PluginId = execution.PluginId,
+            TaskType = execution.TaskType,
+            ExecutionProvider = execution.ExecutionProvider,
+            SettingsJson = execution.SettingsJson,
+            Roi = execution.Roi,
+            RoiPolicy = execution.RoiPolicy,
+            Rules = execution.Rules,
+        };
+    }
+
+    private (SopSnapshot? Snapshot, long? RunId, string? CycleId, bool TerminalReached) ApplySopEvents(AlgorithmOutput output)
+    {
+        SopTransition transition;
+        long? runId;
+        string? cycleId;
+        bool terminalReached;
+        lock (_sopGate)
+        {
+            if (_sopStateMachine is null)
+            {
+                return (null, null, null, false);
+            }
+            runId = _sopRunId;
+            cycleId = _sopCycleId;
+            var inputs = BuildSopInputs(output, cycleId);
+            transition = _sopStateMachine.ApplyFrame(inputs, output.Sequence, output.Timestamp);
+            terminalReached = transition.IsTerminal;
+        }
+
+        if (transition.Changed)
+        {
+            SopChanged?.Invoke(transition.Snapshot);
+        }
+        return (transition.Snapshot, runId, cycleId, terminalReached);
+    }
+
+    private void QueueProductFinalization(
+        long? runId,
+        string? cycleId,
+        SopSnapshot snapshot,
+        DecisionResult? decision)
+    {
+        if (string.IsNullOrWhiteSpace(cycleId))
+        {
+            return;
+        }
+        EnqueueWrite(async ct =>
+        {
+            await FinalizeProductAsync(runId, cycleId, snapshot, decision, null, ct);
+        });
+    }
+
+    /// <summary>
+    /// 统一产品终态路径。内存集合只抑制当前进程内的并发调用，成功或失败都会清理；
+    /// 是否已经最终发布由 SopRuns 的持久化状态决定，发布失败可再次进入此方法重试。
+    /// </summary>
+    private async Task FinalizeProductAsync(
+        long? runId,
+        string? cycleId,
+        SopSnapshot snapshot,
+        DecisionResult? decision,
+        long? inspectionRecordId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(cycleId))
+        {
+            return;
+        }
+
+        var key = $"{runId?.ToString() ?? cycleId}:final";
+        lock (_sopGate)
+        {
+            if (!_activeSopFinalizations.Add(key))
+            {
+                return;
+            }
+        }
+
+        try
+        {
+            var finalDecision = decision ?? CombineDecision(
+                new DecisionResult { Status = DecisionStatus.Processing },
+                snapshot);
+            var envelope = new ProductResultEnvelope
+            {
+                ResultId = $"sop-product:{runId?.ToString() ?? cycleId}:final",
+                ProjectId = _projectId,
+                StationCode = _recipe.StationCode,
+                TaskId = _taskId,
+                BatchId = BatchId,
+                SopRunId = runId,
+                CycleId = cycleId,
+                Timestamp = DateTimeOffset.UtcNow,
+                Decision = finalDecision,
+                WorkflowResultJson = JsonSerializer.Serialize(snapshot, JsonOpts),
+            };
+
+            Exception? lastError = null;
+            var publishClaimId = _sopRuns is not null && runId is not null && _shouldPersist()
+                ? $"service:{Environment.ProcessId}:{Guid.NewGuid():N}"
+                : null;
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                try
+                {
+                    var shouldPublish = _publisher is not null;
+                    if (_sopRuns is not null && runId is { } persistedRunId && _shouldPersist())
+                    {
+                        shouldPublish = await _sopRuns.PrepareFinalizationAsync(
+                            persistedRunId,
+                            snapshot,
+                            ToStatusString(finalDecision.Status),
+                            JsonSerializer.Serialize(finalDecision, JsonOpts),
+                            JsonSerializer.Serialize(envelope, JsonOpts),
+                            inspectionRecordId,
+                            publishClaimId,
+                            ct);
+                    }
+
+                    if (shouldPublish && _publisher is not null)
+                    {
+                        await _publisher.PublishProductAsync(envelope, ct);
+                        if (_sopRuns is not null && runId is { } publishedRunId && _shouldPersist())
+                        {
+                            await _sopRuns.MarkFinalPublishedAsync(publishedRunId, publishClaimId, ct);
+                        }
+                    }
+                    return;
+                }
+                catch (Exception ex) when (attempt < 2 && !ct.IsCancellationRequested)
+                {
+                    lastError = ex;
+                    if (_sopRuns is not null && runId is { } failedRunId && publishClaimId is not null)
+                    {
+                        await _sopRuns.ReleaseFinalizationClaimAsync(failedRunId, publishClaimId, ct);
+                    }
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    break;
+                }
+            }
+
+            if (lastError is not null)
+            {
+                if (_sopRuns is not null && runId is { } failedRunId && publishClaimId is not null)
+                {
+                    await _sopRuns.ReleaseFinalizationClaimAsync(failedRunId, publishClaimId, CancellationToken.None);
+                }
+                _logger?.LogError(lastError, "产品最终结果持久化/发布失败，将保留可重试状态: cycle={CycleId}", cycleId);
+                throw lastError;
+            }
+        }
+        finally
+        {
+            lock (_sopGate)
+            {
+                _activeSopFinalizations.Remove(key);
+            }
+        }
+    }
+
+    /// <summary>将算法输出（含 Python 后处理追加的事件）转换为 SOP 标准输入。</summary>
+    public static IReadOnlyList<SopInputEvent> BuildSopInputs(AlgorithmOutput output, string? sopCycleId)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var inputs = new List<SopInputEvent>(output.Detections.Count + output.Events.Count);
+        foreach (var (detection, index) in output.Detections.Select((item, index) => (item, index)))
+        {
+            inputs.Add(new SopInputEvent
+            {
+                EventId = $"{output.OutputId}:object:{index}",
+                EventType = "object.present",
+                SopRunId = sopCycleId,
+                Source = "algorithm.detection",
+                FrameSequence = output.Sequence,
+                OccurredAt = output.Timestamp,
+                ClassId = detection.ClassId,
+                Confidence = detection.Confidence,
+                Box = detection.Box,
+            });
+        }
+
+        foreach (var visionEvent in output.Events)
+        {
+            inputs.Add(new SopInputEvent
+            {
+                EventId = $"{output.OutputId}:vision:{visionEvent.EventId}",
+                EventType = visionEvent.EventType,
+                SopRunId = sopCycleId,
+                Source = "algorithm.event",
+                FrameSequence = output.Sequence,
+                OccurredAt = visionEvent.StartedAt ?? output.Timestamp,
+                Phase = visionEvent.Phase,
+                SubjectId = visionEvent.SubjectId,
+                Confidence = visionEvent.Confidence,
+                RegionId = visionEvent.RegionId,
+                TextValue = visionEvent.TextValue,
+                CodeValue = visionEvent.CodeValue,
+                Count = visionEvent.Count,
+                Box = visionEvent.Box,
+            });
+        }
+        return inputs;
     }
 
     // ---- 内部：后台落库 ----
@@ -871,11 +1492,70 @@ public sealed class DetectionRunService : IAsyncDisposable
         StateChanged?.Invoke(this, state);
     }
 
+    private static bool IsSopTerminal(SopRunStatus status)
+        => status is SopRunStatus.CompletedOk
+            or SopRunStatus.NgTimeout
+            or SopRunStatus.NgConditionFailed
+            or SopRunStatus.NgWrongOrder
+            or SopRunStatus.Interrupted
+            or SopRunStatus.Aborted;
+
+    /// <summary>
+    /// 统一产品最终判定：普通视觉规则和 SOP 必须共同通过才允许 OK。
+    /// SOP 的错序、超时和条件失败优先覆盖普通规则的 OK；中止/中断不伪造 NG。
+    /// </summary>
+    public static DecisionResult CombineDecision(DecisionResult visual, SopSnapshot? sop)
+    {
+        ArgumentNullException.ThrowIfNull(visual);
+        if (sop is null)
+        {
+            return visual;
+        }
+
+        var sopMessage = string.IsNullOrWhiteSpace(sop.FailureReason)
+            ? $"SOP 未完成（{sop.CompletedCount}/{sop.TotalCount}）"
+            : $"SOP：{sop.FailureReason}";
+        var sopOutcome = new RuleOutcome
+        {
+            RuleId = "sop-workflow",
+            RuleKind = nameof(SopStateMachine),
+            Passed = sop.Status == SopRunStatus.CompletedOk,
+            Message = sop.Status == SopRunStatus.CompletedOk ? "SOP 工序全部完成" : sopMessage,
+        };
+        var outcomes = visual.Outcomes.Append(sopOutcome).ToArray();
+
+        return sop.Status switch
+        {
+            SopRunStatus.CompletedOk when visual.Status == DecisionStatus.Ok
+                => visual with { Outcomes = outcomes },
+            SopRunStatus.CompletedOk when visual.Status == DecisionStatus.Unknown
+                => new DecisionResult { Status = DecisionStatus.Ok, Outcomes = outcomes },
+            SopRunStatus.CompletedOk
+                => visual with { Outcomes = outcomes },
+            SopRunStatus.NgTimeout or SopRunStatus.NgConditionFailed or SopRunStatus.NgWrongOrder
+                => new DecisionResult { Status = DecisionStatus.Ng, Outcomes = outcomes },
+            SopRunStatus.ReviewRequired
+                => new DecisionResult { Status = DecisionStatus.ReviewRequired, Outcomes = outcomes },
+            SopRunStatus.Interrupted or SopRunStatus.Aborted
+                => visual.Status is DecisionStatus.Ng or DecisionStatus.ReviewRequired
+                    ? visual with { Outcomes = outcomes }
+                    : new DecisionResult { Status = DecisionStatus.Processing, Outcomes = outcomes },
+            _ => visual.Status switch
+            {
+                DecisionStatus.Ng => visual with { Outcomes = outcomes },
+                DecisionStatus.ReviewRequired => visual with { Outcomes = outcomes },
+                _ => new DecisionResult { Status = DecisionStatus.Processing, Outcomes = outcomes },
+            },
+        };
+    }
+
     private static string ToStatusString(DecisionStatus status) => status switch
     {
         DecisionStatus.Ok => "ok",
         DecisionStatus.Ng => "ng",
         DecisionStatus.ReviewRequired => "review_required",
+        DecisionStatus.Processing => "processing",
+        DecisionStatus.Unknown => "unknown",
         DecisionStatus.Error => "error",
         _ => "error",
     };

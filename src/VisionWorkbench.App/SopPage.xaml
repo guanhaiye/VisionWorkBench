@@ -1,0 +1,215 @@
+<UserControl x:Name="Root" x:Class="VisionWorkbench.App.SopPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+    </UserControl.Resources>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,10">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button Content="新建SOP" Click="New_Click" />
+                <Button Content="删除" Click="Delete_Click" />
+                <Button Content="保存" Click="Save_Click" />
+                <Button Content="刷新" Click="Refresh_Click" />
+            </StackPanel>
+            <StackPanel>
+                <TextBlock Text="SOP流程制作与管理" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock Text="创建独立 SOP 流程，配置执行输入、算法和工序条件。普通任务与 SOP 任务互不影响。"
+                           Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </DockPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="275" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="8">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="SOP定义目录" FontWeight="SemiBold" Margin="4,2,4,8" />
+                    <ListBox x:Name="DefinitionList" DisplayMemberPath="DisplayName"
+                             SelectionChanged="DefinitionList_SelectionChanged" />
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="EditorPanel" IsEnabled="False">
+                        <DockPanel Margin="0,0,0,10">
+                            <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Foreground="{DynamicResource MutedTextBrush}"
+                                       VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <TextBlock Text="SOP定义" FontSize="18" FontWeight="SemiBold" />
+                        </DockPanel>
+
+                        <GroupBox Header="基本信息" Margin="0,0,0,10">
+                            <Grid Margin="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="170" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="流程名称" VerticalAlignment="Center" />
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="DefinitionNameText" Margin="4,2,12,5" />
+                                <TextBlock Grid.Row="0" Grid.Column="2" Text="流程编号" VerticalAlignment="Center" />
+                                <TextBox Grid.Row="0" Grid.Column="3" x:Name="DefinitionCodeText" Margin="4,2,0,5" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="产品/工艺编号" VerticalAlignment="Center" />
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="ProductCodeText" Margin="4,2,12,5" />
+                                <TextBlock Grid.Row="1" Grid.Column="2" Text="版本" VerticalAlignment="Center" />
+                                <TextBox Grid.Row="1" Grid.Column="3" x:Name="VersionText" Margin="4,2,0,5" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="生命周期" VerticalAlignment="Center" />
+                                <ComboBox Grid.Row="2" Grid.Column="1" x:Name="StatusCombo" Margin="4,2,12,2">
+                                    <ComboBoxItem Content="草稿" Tag="Draft" />
+                                    <ComboBoxItem Content="已发布" Tag="Published" />
+                                    <ComboBoxItem Content="已停用" Tag="Retired" />
+                                </ComboBox>
+                                <TextBlock Grid.Row="2" Grid.Column="2" Text="目录ID" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="2" Grid.Column="3" x:Name="DefinitionIdText" Foreground="{DynamicResource MutedTextBrush}"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="SOP运行配置（全局）" Margin="0,0,0,10">
+                            <Grid Margin="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="输入源" VerticalAlignment="Center" />
+                                <ComboBox x:Name="SopProviderCombo" Grid.Column="1" Margin="4,2,12,5"
+                                          DisplayMemberPath="DisplayName" SelectionChanged="SopProviderCombo_SelectionChanged" />
+                                <TextBlock Grid.Row="1" Text="设备/路径" VerticalAlignment="Center" />
+                                <TextBox x:Name="SopDeviceText" Grid.Row="1" Grid.Column="1" Margin="4,2,12,5" />
+                                <TextBlock Grid.Row="1" Grid.Column="2" Text="运行模式" VerticalAlignment="Center" />
+                                <ComboBox x:Name="SopRunModeCombo" Grid.Row="1" Grid.Column="3" Margin="4,2,0,5">
+                                    <ComboBoxItem Content="严格按顺序" Tag="StrictOrder" IsSelected="True" />
+                                    <ComboBoxItem Content="允许跳步" Tag="AllowSkip" />
+                                    <ComboBoxItem Content="人工确认" Tag="ManualReview" />
+                                </ComboBox>
+                                <TextBlock Grid.Row="2" Grid.ColumnSpan="4"
+                                           Text="模型不在全局配置：请在下方每个工序中分别选择模型类型、算法插件、推理设备和参数。多个工序即可组合多个模型。"
+                                           Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="工序步骤" Margin="0,0,0,10">
+                            <DockPanel Margin="8">
+                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,7">
+                                    <Button Content="新增步骤" Click="AddStep_Click" />
+                                    <Button Content="删除步骤" Click="RemoveStep_Click" />
+                                    <TextBlock Text="每个工序对应一个模型；按步骤顺序组合目标检测、OCR、条码、二维码、行为识别等模型。"
+                                               Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                </StackPanel>
+                                <DataGrid x:Name="StepsGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                                          DockPanel.Dock="Top" VerticalAlignment="Top" SelectionMode="Single"
+                                          MinHeight="0" MaxHeight="360">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=LostFocus}" Width="55" />
+                                        <DataGridTextColumn Header="步骤编号" Binding="{Binding Code, UpdateSourceTrigger=LostFocus}" Width="105" />
+                                        <DataGridTextColumn Header="步骤名称" Binding="{Binding Name, UpdateSourceTrigger=LostFocus}" Width="*" MinWidth="120" />
+                                        <DataGridTemplateColumn Header="模型类型" Width="145">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox SelectedValue="{Binding ModelType, UpdateSourceTrigger=PropertyChanged}"
+                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0">
+                                                        <ComboBoxItem Content="目标检测" Tag="目标检测" />
+                                                        <ComboBoxItem Content="语义分割" Tag="语义分割" />
+                                                        <ComboBoxItem Content="实例分割" Tag="实例分割" />
+                                                        <ComboBoxItem Content="行为识别" Tag="行为识别" />
+                                                        <ComboBoxItem Content="AI字符识别" Tag="AI字符识别" />
+                                                        <ComboBoxItem Content="AI条码识别" Tag="AI条码识别" />
+                                                        <ComboBoxItem Content="AI二维码识别" Tag="AI二维码识别" />
+                                                    </ComboBox>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox SelectedValue="{Binding ModelType, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag">
+                                                        <ComboBoxItem Content="目标检测" Tag="目标检测" />
+                                                        <ComboBoxItem Content="语义分割" Tag="语义分割" />
+                                                        <ComboBoxItem Content="实例分割" Tag="实例分割" />
+                                                        <ComboBoxItem Content="行为识别" Tag="行为识别" />
+                                                        <ComboBoxItem Content="AI字符识别" Tag="AI字符识别" />
+                                                        <ComboBoxItem Content="AI条码识别" Tag="AI条码识别" />
+                                                        <ComboBoxItem Content="AI二维码识别" Tag="AI二维码识别" />
+                                                    </ComboBox>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="模型ID" Binding="{Binding ModelId, UpdateSourceTrigger=LostFocus}" Width="170" />
+                                        <DataGridTextColumn Header="模型版本" Binding="{Binding ModelVersion, UpdateSourceTrigger=LostFocus}" Width="90" />
+                                        <DataGridTemplateColumn Header="算法插件" Width="210">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox IsEditable="True" ItemsSource="{Binding PluginIds, ElementName=Root}"
+                                                              Text="{Binding PluginId, UpdateSourceTrigger=PropertyChanged}"
+                                                              Padding="4,0" BorderThickness="0" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox IsEditable="True" ItemsSource="{Binding PluginIds, ElementName=Root}"
+                                                              Text="{Binding PluginId, UpdateSourceTrigger=PropertyChanged}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="推理设备" Width="95">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}"
+                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0">
+                                                        <ComboBoxItem Content="CPU" Tag="CPU" />
+                                                        <ComboBoxItem Content="CUDA" Tag="CUDA" />
+                                                    </ComboBox>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag">
+                                                        <ComboBoxItem Content="CPU" Tag="CPU" />
+                                                        <ComboBoxItem Content="CUDA" Tag="CUDA" />
+                                                    </ComboBox>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="类别/匹配值" Binding="{Binding ClassId, UpdateSourceTrigger=LostFocus}" Width="140" />
+                                        <DataGridTextColumn Header="置信度" Binding="{Binding MinConfidence, UpdateSourceTrigger=LostFocus}" Width="75" />
+                                        <DataGridTextColumn Header="稳定帧" Binding="{Binding StableFrames, UpdateSourceTrigger=LostFocus}" Width="65" />
+                                        <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="65" />
+                                        <DataGridTextColumn Header="模型参数 JSON" Binding="{Binding SettingsJson, UpdateSourceTrigger=LostFocus}" Width="220" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock Text="模型类型填写 Detection、AiText、Barcode、QrCode、BehaviorRecognition、SemanticSegmentation 或 InstanceSegmentation；算法插件填写插件 ID，模型参数填写 JSON 对象。类别/匹配值用于生成对应 SOP 事件条件。"
+                                           DockPanel.Dock="Top" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,7,0,0" />
+                            </DockPanel>
+                        </GroupBox>
+
+                        <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Padding="10">
+                            <TextBlock Text="使用方式：先配置输入源，再为每个工序选择独立模型和参数。保存草稿后，确认无误再发布。发布后的 SOP 会作为独立任务出现在实时检测中，普通任务无需配置 SOP。"
+                                       TextWrapping="Wrap" />
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

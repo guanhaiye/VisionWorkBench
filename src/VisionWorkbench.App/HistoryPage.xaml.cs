@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -220,7 +221,31 @@ public partial class HistoryPage : UserControl
         DetailText.Text = $"记录 {record.Id} | 项目 {record.ProjectId} | 工位 {record.StationCode} | 任务 {record.TaskId} | 批次 {record.BatchId?.ToString() ?? "—"}\n"
             + $"{record.StartedAt:yyyy-MM-dd HH:mm:ss} → {(record.CompletedAt?.ToString("HH:mm:ss") ?? "—")}\n"
             + $"插件: {record.PluginVersion ?? "—"}\n"
-            + $"判定: {record.FinalResultJson}";
+            + $"判定: {record.FinalResultJson}"
+            + FormatWorkflow(record);
+    }
+
+    private static string FormatWorkflow(InspectionRecordEntity record)
+    {
+        if (string.IsNullOrWhiteSpace(record.WorkflowResultJson))
+        {
+            return "\n模式: 普通视觉检测";
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(record.WorkflowResultJson);
+            var root = json.RootElement;
+            var status = root.TryGetProperty("status", out var statusValue)
+                ? statusValue.GetString() : null;
+            var current = root.TryGetProperty("currentStepName", out var stepValue)
+                ? stepValue.GetString() : null;
+            return $"\n模式: SOP | 状态: {status ?? "—"} | 当前步骤: {current ?? "—"}";
+        }
+        catch (JsonException)
+        {
+            return "\n模式: SOP | 过程快照损坏";
+        }
     }
 
 }

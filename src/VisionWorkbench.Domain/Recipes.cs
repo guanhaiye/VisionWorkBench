@@ -206,5 +206,8 @@ public sealed record Recipe
     /// <summary>可视化规则与 Python 后处理脚本二选一。</summary>
     public PostProcessConfig PostProcess { get; init; } = new();
 
+    /// <summary>可选实时工作流；为空时保持普通任务页面和普通检测语义。</summary>
+    public SopBinding? Sop { get; init; }
+
     public IReadOnlyList<InspectionRule> Rules { get; init; } = [];
 }

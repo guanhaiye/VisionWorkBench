@@ -82,7 +82,11 @@ public partial class TasksPage : UserControl
         try
         {
             var tasks = await AppServices.Instance.Recipes.ListAsync();
-            TaskList.ItemsSource = tasks.Select(t => new TaskRow(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name)).ToArray();
+            // SOP 运行配方由 SOP 页面独立维护，普通任务页不再混入 SOP 任务。
+            TaskList.ItemsSource = tasks
+                .Where(t => t.Recipe.Sop is null)
+                .Select(t => new TaskRow(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
+                .ToArray();
             PluginCombo.ItemsSource = AppServices.Instance.AlgorithmManager.ScanPlugins()
                 .Where(p => p.Status == Contracts.Plugins.PluginStatus.Valid && p.Manifest is not null)
                 .Select(p => p.Manifest!.Id)
@@ -333,6 +337,7 @@ public partial class TasksPage : UserControl
                 Mode = _postProcessMode,
                 Script = _postProcessScript.Trim(),
             },
+            Sop = null,
             Rules = taskType.IsCounting() || taskType.IsRegion() ? rules : [],
         };
         try

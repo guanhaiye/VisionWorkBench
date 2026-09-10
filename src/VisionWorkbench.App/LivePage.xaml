@@ -58,11 +58,14 @@
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto"
                       CanContentScroll="False"
+                      SizeChanged="PanelsScrollViewer_SizeChanged"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
                       HorizontalContentAlignment="Stretch"
                       VerticalContentAlignment="Stretch">
             <ItemsControl x:Name="PanelsHost"
+                          Width="{Binding ViewportWidth, ElementName=PanelsScrollViewer}"
+                          HorizontalAlignment="Left"
                           HorizontalContentAlignment="Stretch"
                           VerticalContentAlignment="Stretch"
                           MinHeight="{Binding ViewportHeight, ElementName=PanelsScrollViewer}">

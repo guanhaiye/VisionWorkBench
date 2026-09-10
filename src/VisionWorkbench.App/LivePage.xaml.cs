@@ -60,6 +60,8 @@ public partial class LivePage : UserControl
         {
             var tasks = await AppServices.Instance.Recipes.ListAsync();
             var items = tasks
+                .Where(t => t.Recipe.Sop is null
+                    || t.Recipe.Sop.Definition?.Status == SopDefinitionStatus.Published)
                 .Select(t => new LiveTaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
                 .ToArray();
             _availableTasks = items;
@@ -209,6 +211,15 @@ public partial class LivePage : UserControl
         }
     }
 
+    private void PanelsScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // 只有在网格布局下，窗口宽度变化才会影响列数；纵向/横向布局不需要重建。
+        if (IsLoaded && (LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() == "grid")
+        {
+            ApplyLayout();
+        }
+    }
+
     private void SaveWorkspaceSettings()
     {
         var settings = AppServices.Instance.Settings;
@@ -281,7 +292,9 @@ public partial class LivePage : UserControl
                 break;
             default:
                 factory = new FrameworkElementFactory(typeof(UniformGrid));
-                factory.SetValue(UniformGrid.ColumnsProperty, 2);
+                // 单个任务占满工作区，多个任务仅在空间足够时分成两列，避免窄窗口中控件互相挤压。
+                var columns = _panels.Count > 1 && PanelsScrollViewer.ActualWidth >= 1100 ? 2 : 1;
+                factory.SetValue(UniformGrid.ColumnsProperty, columns);
                 break;
         }
 

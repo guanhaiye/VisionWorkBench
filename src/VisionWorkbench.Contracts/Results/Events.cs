@@ -61,4 +61,14 @@ public sealed record VisionEvent
     public double Confidence { get; init; }
     public string? Message { get; init; }
     public string? EvidenceImagePath { get; init; }
+
+    // 可选来源字段：旧 Worker 不提供时保持 null，兼容现有插件协议。
+    public long? SourceTaskId { get; init; }
+    public string? SourceStationCode { get; init; }
+    public long? FrameSequence { get; init; }
+    public NormalizedRect? Box { get; init; }
+    public string? TextValue { get; init; }
+    public string? CodeValue { get; init; }
+    public long? Count { get; init; }
+    public string? AttributesJson { get; init; }
 }

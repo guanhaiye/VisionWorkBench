@@ -25,7 +25,9 @@ public sealed class TcpTaskExecutionService(AppServices services)
         var run = new DetectionRunService(services.Records, services.TempImages,
             services.LoggerFactory.CreateLogger<DetectionRunService>(), $"tcp-task-{task.Id}", services.ResultPublisher,
             () => services.Settings.EnableHistory,
-            () => services.Settings.EnableHistory);
+            () => services.Settings.EnableHistory,
+            sopRuns: services.SopRuns,
+            pendingReplayTrigger: services.SopProductResultReplayer);
         var batchService = new BatchService(services.Batches);
         var completion = new TaskCompletionSource<RecordCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
         run.RecordCompleted += (_, result) => completion.TrySetResult(result);

@@ -28,6 +28,7 @@
                         <ComboBoxItem Content="ok" />
                         <ComboBoxItem Content="ng" />
                         <ComboBoxItem Content="review_required" />
+                        <ComboBoxItem Content="processing" />
                         <ComboBoxItem Content="error" />
                     </ComboBox>
                 </StackPanel>

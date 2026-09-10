@@ -76,6 +76,8 @@ public sealed class ReInferenceService(
                 DecisionStatus.Ok => "ok",
                 DecisionStatus.Ng => "ng",
                 DecisionStatus.ReviewRequired => "review_required",
+                DecisionStatus.Processing => "processing",
+                DecisionStatus.Unknown => "processing",
                 _ => "error",
             },
             OriginalImagePath = source.OriginalImagePath,

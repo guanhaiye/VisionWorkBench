@@ -296,7 +296,11 @@ public sealed class LicenseService
         };
         if (evidence.Any(item => item.Present && !item.IsValid))
             throw new InvalidDataException("本机许可证时间状态已损坏或被修改");
-        if (HasClockTopologyMarker() && evidence.Any(item => !item.Present))
+        // 注册表副本可能因用户配置迁移、组策略或清理工具丢失；只要两个
+        // DPAPI 文件副本仍可解密，就可以安全地用当前时间重新补齐注册表副本。
+        // 只有所有文件副本都不可用时，才判定时间状态不可恢复。
+        var validFileEvidence = evidence.Take(2).Count(item => item.Present && item.IsValid);
+        if (HasClockTopologyMarker() && validFileEvidence == 0)
             throw new InvalidDataException("本机许可证时间状态副本缺失");
         values.AddRange(evidence.Where(item => item.Value is not null).Select(item => item.Value!.Value));
 

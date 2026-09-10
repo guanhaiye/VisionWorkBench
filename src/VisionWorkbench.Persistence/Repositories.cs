@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using VisionWorkbench.Domain;
 
 namespace VisionWorkbench.Persistence;
 
@@ -379,6 +381,7 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
                 {
                     Record = record,
                     BatchId = record.BatchId,
+                    SopRunId = record.SopRunId,
                     EventType = e.EventType,
                     Phase = e.Phase.ToString(),
                     Severity = e.Severity.ToString().ToLowerInvariant(),
@@ -388,6 +391,14 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
                     EndedAt = e.EndedAt?.UtcDateTime,
                     Confidence = e.Confidence,
                     EvidenceImagePath = e.EvidenceImagePath,
+                    SourceTaskId = e.SourceTaskId,
+                    SourceStationCode = e.SourceStationCode,
+                    FrameSequence = e.FrameSequence,
+                    BoxJson = e.Box is null ? null : JsonSerializer.Serialize(e.Box),
+                    TextValue = e.TextValue,
+                    CodeValue = e.CodeValue,
+                    Count = e.Count,
+                    AttributesJson = e.AttributesJson,
                 });
             }
         }
@@ -621,5 +632,219 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
             EvidenceImagePath = evt.EvidenceImagePath,
         });
         await db.SaveChangesAsync(ct);
+    }
+}
+
+/// <summary>SOP 产品周期仓储：保存周期快照和步骤结果，不影响普通检测记录。</summary>
+public sealed class SopRunRepository(IDbContextFactory<VisionDbContext> factory)
+{
+    public async Task<SopRunEntity> StartAsync(SopRunEntity run, CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        db.SopRuns.Add(run);
+        await db.SaveChangesAsync(ct);
+        return run;
+    }
+
+    public async Task SaveSnapshotAsync(
+        long runId,
+        SopSnapshot snapshot,
+        long? inspectionRecordId = null,
+        CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var run = await db.SopRuns.FirstOrDefaultAsync(item => item.Id == runId, ct);
+        if (run is null)
+        {
+            return;
+        }
+
+        run.Status = snapshot.Status.ToString();
+        run.CurrentStepOrder = snapshot.CurrentStepOrder;
+        run.FailureReason = snapshot.FailureReason;
+        if (snapshot.Status is SopRunStatus.CompletedOk
+            or SopRunStatus.NgTimeout
+            or SopRunStatus.NgConditionFailed
+            or SopRunStatus.NgWrongOrder
+            or SopRunStatus.Interrupted
+            or SopRunStatus.Aborted)
+        {
+            run.CompletedAtUtc ??= DateTime.UtcNow;
+        }
+
+        foreach (var step in snapshot.Steps)
+        {
+            var result = await db.SopStepResults.FirstOrDefaultAsync(item =>
+                item.SopRunId == runId && item.StepId == step.StepId && item.Attempt == 1, ct);
+            if (result is null)
+            {
+                result = new SopStepResultEntity
+                {
+                    SopRunId = runId,
+                    StepId = step.StepId,
+                    Attempt = 1,
+                };
+                db.SopStepResults.Add(result);
+            }
+            result.Status = step.Status.ToString();
+            result.StartedAtUtc = step.StartedAt?.UtcDateTime;
+            result.CompletedAtUtc = step.CompletedAt?.UtcDateTime;
+            result.FailureReason = step.FailureReason;
+            result.InspectionRecordId = inspectionRecordId ?? result.InspectionRecordId;
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>持久化产品终态并返回是否仍需要向外部发布。</summary>
+    public async Task<bool> PrepareFinalizationAsync(
+        long runId,
+        SopSnapshot snapshot,
+        string finalStatus,
+        string finalDecisionJson,
+        string finalResultJson,
+        long? inspectionRecordId = null,
+        string? publishClaimId = null,
+        CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var existing = await db.SopRuns.FirstOrDefaultAsync(item => item.Id == runId, ct);
+        if (existing is null)
+        {
+            return false;
+        }
+
+        if (existing.FinalizedAtUtc is null)
+        {
+            var finalizedAt = DateTime.UtcNow;
+            var claimed = await db.SopRuns
+                .Where(item => item.Id == runId && item.FinalizedAtUtc == null)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.FinalStatus, finalStatus)
+                    .SetProperty(item => item.FinalDecisionJson, finalDecisionJson)
+                    .SetProperty(item => item.FinalResultJson, finalResultJson)
+                    .SetProperty(item => item.FinalizedAtUtc, finalizedAt)
+                    .SetProperty(item => item.Status, snapshot.Status.ToString())
+                    .SetProperty(item => item.CurrentStepOrder, snapshot.CurrentStepOrder)
+                    .SetProperty(item => item.FailureReason, snapshot.FailureReason)
+                    .SetProperty(item => item.CompletedAtUtc, finalizedAt), ct);
+            if (claimed == 1)
+            {
+                existing = await db.SopRuns.FirstAsync(item => item.Id == runId, ct);
+            }
+            else
+            {
+                existing = await db.SopRuns.FirstOrDefaultAsync(item => item.Id == runId, ct);
+                if (existing is null)
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (existing.FinalizedAtUtc is not null && existing.FinalPublishedAtUtc is null)
+        {
+            foreach (var step in snapshot.Steps)
+            {
+                var result = await db.SopStepResults.FirstOrDefaultAsync(item =>
+                    item.SopRunId == runId && item.StepId == step.StepId && item.Attempt == 1, ct);
+                if (result is null)
+                {
+                    result = new SopStepResultEntity
+                    {
+                        SopRunId = runId,
+                        StepId = step.StepId,
+                        Attempt = 1,
+                    };
+                    db.SopStepResults.Add(result);
+                }
+                result.Status = step.Status.ToString();
+                result.StartedAtUtc = step.StartedAt?.UtcDateTime;
+                result.CompletedAtUtc = step.CompletedAt?.UtcDateTime;
+                result.FailureReason = step.FailureReason;
+                result.InspectionRecordId = inspectionRecordId ?? result.InspectionRecordId;
+            }
+            await db.SaveChangesAsync(ct);
+        }
+        if (existing.FinalPublishedAtUtc is not null)
+        {
+            return false;
+        }
+        return publishClaimId is null
+            || await TryClaimPendingFinalizationAsync(runId, publishClaimId, ct: ct);
+    }
+
+    /// <summary>查询已最终化但尚未成功发布的产品结果，供启动/后台重放使用。</summary>
+    public async Task<IReadOnlyList<SopRunEntity>> QueryPendingFinalizationsAsync(
+        int limit = 100,
+        CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        return await db.SopRuns.AsNoTracking()
+            .Where(item => item.FinalizedAtUtc != null
+                && item.FinalPublishedAtUtc == null
+                && item.FinalResultJson != null)
+            .OrderBy(item => item.FinalizedAtUtc)
+            .Take(Math.Clamp(limit, 1, 1000))
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// 持久化投递 Claim，避免两个进程同时重放；过期 Claim 可被接管，保证故障可恢复。
+    /// </summary>
+    public async Task<bool> TryClaimPendingFinalizationAsync(
+        long runId,
+        string claimId,
+        DateTime? nowUtc = null,
+        TimeSpan? lease = null,
+        CancellationToken ct = default)
+    {
+        var now = nowUtc ?? DateTime.UtcNow;
+        var expiresBefore = now - (lease ?? TimeSpan.FromMinutes(2));
+        await using var db = factory.CreateDbContext();
+        var changed = await db.SopRuns
+            .Where(item => item.Id == runId
+                && item.FinalizedAtUtc != null
+                && item.FinalPublishedAtUtc == null
+                && (item.FinalPublishClaimId == null
+                    || item.FinalPublishClaimedAtUtc == null
+                    || item.FinalPublishClaimedAtUtc < expiresBefore))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.FinalPublishClaimId, claimId)
+                .SetProperty(item => item.FinalPublishClaimedAtUtc, now), ct);
+        return changed == 1;
+    }
+
+    /// <summary>发布成功后幂等标记；发布失败时保留 pending 状态。</summary>
+    public async Task<bool> MarkFinalPublishedAsync(
+        long runId,
+        string? claimId = null,
+        CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var changed = await db.SopRuns
+            .Where(item => item.Id == runId
+                && item.FinalizedAtUtc != null
+                && item.FinalPublishedAtUtc == null
+                && (claimId == null || item.FinalPublishClaimId == claimId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.FinalPublishedAtUtc, DateTime.UtcNow)
+                .SetProperty(item => item.FinalPublishClaimId, (string?)null)
+                .SetProperty(item => item.FinalPublishClaimedAtUtc, (DateTime?)null), ct);
+        return changed == 1;
+    }
+
+    /// <summary>发布失败释放本次 Claim，允许下一次扫描或重启重试。</summary>
+    public async Task<bool> ReleaseFinalizationClaimAsync(
+        long runId,
+        string claimId,
+        CancellationToken ct = default)
+    {
+        await using var db = factory.CreateDbContext();
+        var changed = await db.SopRuns
+            .Where(item => item.Id == runId && item.FinalPublishClaimId == claimId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.FinalPublishClaimId, (string?)null)
+                .SetProperty(item => item.FinalPublishClaimedAtUtc, (DateTime?)null), ct);
+        return changed == 1;
     }
 }

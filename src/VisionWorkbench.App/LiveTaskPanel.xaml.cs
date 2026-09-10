@@ -18,10 +18,13 @@ namespace VisionWorkbench.App;
 /// <summary>实时检测页（文档 §8.2）：预览+叠加、结果面板和批次控制。</summary>
 public partial class LiveTaskPanel : UserControl
 {
+    private sealed record SopStepView(string Indicator, string Name, string StatusText, Brush Brush);
+
     private readonly PreviewRenderer _preview = new();
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private DetectionRunService? _run;
     private IAlgorithmSession? _algorithmSession;
+    private readonly Dictionary<string, IAlgorithmSession> _sopAlgorithmSessions = new(StringComparer.Ordinal);
     private ICameraSession? _cameraSession;
     private long _okCount;
     private long _ngCount;
@@ -133,12 +136,7 @@ public partial class LiveTaskPanel : UserControl
                 return;
             }
 
-            if (_algorithmSession is not null)
-            {
-                await _algorithmSession.DisposeAsync();
-                _algorithmSession = null;
-                _preparedTaskId = 0;
-            }
+            await DisposePreparedModelsAsync();
 
             var found = await AppServices.Instance.Recipes.FindAsync(item.Id);
             if (found is not { } pair)
@@ -148,25 +146,66 @@ public partial class LiveTaskPanel : UserControl
 
             var recipe = pair.Recipe with { Roi = _roiOverrideSet ? _roiOverride : pair.Recipe.Roi };
             StatusText.Text = "正在预加载模型…";
-            var session = await AppServices.Instance.AlgorithmManager.CreateSessionAsync(
-                recipe.PluginId, CancellationToken.None);
+            var modelDefinitions = recipe.Sop?.Definition?.Steps
+                .OrderBy(step => step.Order)
+                .Where(step => !string.IsNullOrWhiteSpace(step.Execution?.PluginId))
+                .Select(step => (step.Id, Execution: step.Execution!))
+                .ToArray() ?? [];
+            if (modelDefinitions.Length == 0)
+            {
+                modelDefinitions = [("__root", new SopStepExecution
+                {
+                    PluginId = recipe.PluginId,
+                    TaskType = recipe.TaskType,
+                    ExecutionProvider = recipe.ExecutionProvider,
+                    SettingsJson = recipe.SettingsJson,
+                    Roi = recipe.Roi,
+                    RoiPolicy = recipe.RoiPolicy,
+                    Rules = recipe.Rules,
+                })];
+            }
+
+            var created = new List<IAlgorithmSession>();
             try
             {
-                await session.InitializeAsync(new AlgorithmInitialization
+                foreach (var model in modelDefinitions)
                 {
-                    Settings = DetectionRunService.BuildAlgorithmSettings(recipe),
-                    ExecutionProvider = recipe.ExecutionProvider,
-                }, CancellationToken.None);
+                    var session = await AppServices.Instance.AlgorithmManager.CreateSessionAsync(
+                        model.Execution.PluginId, CancellationToken.None);
+                    created.Add(session);
+                    var modelRecipe = recipe with
+                    {
+                        PluginId = model.Execution.PluginId,
+                        TaskType = model.Execution.TaskType,
+                        ExecutionProvider = model.Execution.ExecutionProvider,
+                        SettingsJson = model.Execution.SettingsJson,
+                        Roi = model.Execution.Roi,
+                        RoiPolicy = model.Execution.RoiPolicy,
+                        Rules = model.Execution.Rules,
+                    };
+                    await session.InitializeAsync(new AlgorithmInitialization
+                    {
+                        Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
+                        ExecutionProvider = model.Execution.ExecutionProvider,
+                    }, CancellationToken.None);
+                    _sopAlgorithmSessions[model.Id] = session;
+                }
             }
             catch
             {
-                await session.DisposeAsync();
+                foreach (var session in created)
+                {
+                    await session.DisposeAsync();
+                }
+                _sopAlgorithmSessions.Clear();
                 throw;
             }
 
-            _algorithmSession = session;
+            _algorithmSession = _sopAlgorithmSessions.Values.First();
             _preparedTaskId = item.Id;
-            StatusText.Text = "模型已加载，等待开始检测";
+            StatusText.Text = modelDefinitions.Length > 1
+                ? $"已加载 {modelDefinitions.Length} 个 SOP 模型，等待开始检测"
+                : "模型已加载，等待开始检测";
         }
         catch (Exception ex)
         {
@@ -205,9 +244,167 @@ public partial class LiveTaskPanel : UserControl
         RenderRoi();
         ResetStatistics();
         ClearDetectionLog();
+        _ = RefreshTaskPresentationAsync();
         TaskSelectionChanged?.Invoke(this, EventArgs.Empty);
         PrepareModelInBackground();
     }
+
+    private async Task RefreshTaskPresentationAsync()
+    {
+        var taskId = TaskId;
+        if (taskId == 0)
+        {
+            TaskModeText.Text = "请选择任务";
+            SopCard.Visibility = Visibility.Collapsed;
+            UpdateSopControls(null);
+            return;
+        }
+
+        var found = await AppServices.Instance.Recipes.FindAsync(taskId);
+        if (found is not { } pair || TaskId != taskId)
+        {
+            return;
+        }
+
+        _activeRecipe = pair.Recipe;
+        TaskModeText.Text = GetTaskModeText(pair.Recipe);
+        if (pair.Recipe.Sop?.Definition is { } definition)
+        {
+            SopCard.Visibility = Visibility.Visible;
+            UpdateSopUi(new SopStateMachine(definition, pair.Recipe.Sop.RunMode).Snapshot);
+        }
+        else
+        {
+            SopCard.Visibility = Visibility.Collapsed;
+            SopStepsItems.ItemsSource = null;
+            UpdateSopControls(null);
+        }
+    }
+
+    private static string GetTaskModeText(Recipe recipe)
+    {
+        if (recipe.Sop is not null)
+        {
+            return "SOP 工序检测";
+        }
+        return recipe.TaskType.Normalize() switch
+        {
+            InspectionTaskType.BehaviorRecognition => "人员行为识别",
+            InspectionTaskType.SemanticSegmentation => "语义分割",
+            InspectionTaskType.InstanceSegmentation => "实例分割",
+            InspectionTaskType.AiText => "AI 文字识别",
+            InspectionTaskType.Barcode => "条码识别",
+            InspectionTaskType.QrCode => "二维码识别",
+            _ when recipe.CountingMode != CountingMode.Snapshot => "视觉计数",
+            _ => "普通视觉检测",
+        };
+    }
+
+    private void UpdateSopUi(SopSnapshot snapshot)
+    {
+        SopProgressText.Text = $"{snapshot.CompletedCount} / {snapshot.TotalCount}";
+        SopCurrentStepText.Text = snapshot.Status switch
+        {
+            SopRunStatus.CompletedOk => "当前产品：SOP 完成",
+            SopRunStatus.NgTimeout or SopRunStatus.NgConditionFailed or SopRunStatus.NgWrongOrder
+                => $"当前产品：NG · {snapshot.FailureReason}",
+            SopRunStatus.ReviewRequired => $"当前产品：待人工确认 · {snapshot.FailureReason}",
+            SopRunStatus.Interrupted or SopRunStatus.Aborted => $"当前产品：已中止 · {snapshot.FailureReason}",
+            _ => string.IsNullOrWhiteSpace(snapshot.CurrentStepName)
+                ? "等待开始"
+                : $"当前步骤：{snapshot.CurrentStepOrder:00} {snapshot.CurrentStepName}",
+        };
+        SopStepsItems.ItemsSource = snapshot.Steps.Select(step =>
+        {
+            var (text, brush) = step.Status switch
+            {
+                SopStepStatus.Completed => ("已完成", Brushes.Green),
+                SopStepStatus.InProgress => ("进行中", Brushes.DodgerBlue),
+                SopStepStatus.Failed => ("失败", Brushes.Red),
+                SopStepStatus.ReviewRequired => ("待确认", Brushes.DarkOrange),
+                SopStepStatus.Skipped => ("已跳过", Brushes.Gray),
+                _ => ("未完成", Brushes.Gray),
+            };
+            return new SopStepView($"{step.Order:00}", step.Name, text, brush);
+        }).ToArray();
+        UpdateSopControls(snapshot);
+    }
+
+    private void UpdateSopControls(SopSnapshot? snapshot)
+    {
+        var hasSop = snapshot is not null && _run is not null;
+        var active = _run?.State is DetectionRunState.Running or DetectionRunState.Paused;
+        var terminal = snapshot is not null && IsSopTerminal(snapshot.Status);
+        StartNextSopButton.IsEnabled = hasSop && active && terminal;
+        ResetSopButton.IsEnabled = hasSop && active;
+        SopCycleText.Text = string.IsNullOrWhiteSpace(_run?.SopCycleId)
+            ? ""
+            : $"周期：{_run.SopCycleId[..Math.Min(16, _run.SopCycleId.Length)]}";
+    }
+
+    private async void StartNextSop_Click(object sender, RoutedEventArgs e)
+    {
+        if (_run is null)
+        {
+            return;
+        }
+        try
+        {
+            var snapshot = await _run.StartNextProductAsync();
+            if (snapshot is not null)
+            {
+                UpdateSopUi(snapshot);
+            }
+            StatusText.Text = "已开始下一件产品，SOP 周期已重新建立。";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show(ex.Message, "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    private async void ResetSop_Click(object sender, RoutedEventArgs e)
+    {
+        if (_run is null)
+        {
+            return;
+        }
+        try
+        {
+            var snapshot = await _run.ResetProductAsync();
+            if (snapshot is not null)
+            {
+                UpdateSopUi(snapshot);
+            }
+            StatusText.Text = "当前产品已复位，已开始新的 SOP 周期。";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show(ex.Message, "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void OnSopChanged(SopSnapshot snapshot)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            UpdateSopUi(snapshot);
+            if (snapshot.Status is SopRunStatus.NgTimeout or SopRunStatus.NgConditionFailed or SopRunStatus.NgWrongOrder)
+            {
+                DecisionText.Text = "NG";
+                DecisionText.Foreground = Brushes.Red;
+            }
+            else if (snapshot.Status is SopRunStatus.Interrupted or SopRunStatus.Aborted)
+            {
+                DecisionText.Text = "已中止";
+                DecisionText.Foreground = Brushes.Gray;
+            }
+        });
+    }
+
+    private static bool IsSopTerminal(SopRunStatus status) => status is
+        SopRunStatus.CompletedOk or SopRunStatus.NgTimeout or SopRunStatus.NgConditionFailed
+        or SopRunStatus.NgWrongOrder or SopRunStatus.Interrupted or SopRunStatus.Aborted;
 
     private void Roi_Click(object sender, RoutedEventArgs e)
     {
@@ -290,8 +487,10 @@ public partial class LiveTaskPanel : UserControl
         }
         var (entity, recipe) = pair;
         recipe = recipe with { Roi = _roiOverrideSet ? _roiOverride : recipe.Roi };
-        _activeRecipe = recipe;
-        ConfigureOfflineProgress(recipe, singleFrame);
+            _activeRecipe = recipe;
+            TaskModeText.Text = GetTaskModeText(recipe);
+            SopCard.Visibility = recipe.Sop is null ? Visibility.Collapsed : Visibility.Visible;
+            ConfigureOfflineProgress(recipe, singleFrame);
         // 离线图片单次检测按目录顺序逐张读取；处理完最后一张后，下一次点击从第一张重新开始。
         if (singleFrame
             && string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase)
@@ -337,7 +536,9 @@ public partial class LiveTaskPanel : UserControl
                 svcs.LoggerFactory.CreateLogger<DetectionRunService>(), $"task-{entity.Id}", svcs.ResultPublisher,
                 () => svcs.Settings.EnableHistory,
                 () => svcs.Settings.EnableHistory,
-                svcs.Settings.PythonExecutable);
+                svcs.Settings.PythonExecutable,
+                svcs.SopRuns,
+                pendingReplayTrigger: svcs.SopProductResultReplayer);
             var batch = await svcs.BatchService.ResumeOrStartAsync(
                 entity.Id, _run.Counting, svcs.Records);
             if (!singleFrame)
@@ -345,6 +546,7 @@ public partial class LiveTaskPanel : UserControl
                 _run.PreviewReceived += (_, frame) => RenderPreview(frame);
             }
             _run.RecordCompleted += OnRecordCompleted;
+            _run.SopChanged += OnSopChanged;
             _run.Faulted += OnRunFaulted;
             if (!singleFrame)
             {
@@ -352,7 +554,8 @@ public partial class LiveTaskPanel : UserControl
             }
             await _run.StartAsync(
                 recipe, entity.Id, _cameraSession, _algorithmSession, batch.Id,
-                startProcessingLoop: !singleFrame);
+                startProcessingLoop: !singleFrame,
+                sopAlgorithms: recipe.Sop?.Definition is not null ? _sopAlgorithmSessions : null);
 
             UpdateStatisticsText();
             BatchText.Text = $"批次: {batch.BatchNumber}";
@@ -525,16 +728,14 @@ public partial class LiveTaskPanel : UserControl
         if (_run is not null)
         {
             _run.RecordCompleted -= OnRecordCompleted;
+            _run.SopChanged -= OnSopChanged;
             _run.Faulted -= OnRunFaulted;
             await _run.DisposeAsync();
             _run = null;
         }
-        if (_algorithmSession is not null
-            && (disposeAlgorithm || _algorithmSession.State == AlgorithmSessionState.Faulted))
+        if (disposeAlgorithm || _algorithmSession?.State == AlgorithmSessionState.Faulted)
         {
-            await _algorithmSession.DisposeAsync();
-            _algorithmSession = null;
-            _preparedTaskId = 0;
+            await DisposePreparedModelsAsync();
         }
         if (_cameraSession is not null)
         {
@@ -543,6 +744,23 @@ public partial class LiveTaskPanel : UserControl
         }
         _singleFrameBusy = false;
         await Dispatcher.InvokeAsync(() => SetButtons(running: false));
+    }
+
+    private async Task DisposePreparedModelsAsync()
+    {
+        var sessions = _sopAlgorithmSessions.Values
+            .Append(_algorithmSession)
+            .Where(session => session is not null)
+            .Cast<IAlgorithmSession>()
+            .Distinct()
+            .ToArray();
+        _sopAlgorithmSessions.Clear();
+        _algorithmSession = null;
+        _preparedTaskId = 0;
+        foreach (var session in sessions)
+        {
+            await session.DisposeAsync();
+        }
     }
 
     private async void OnRunFaulted(object? sender, RunFaultedEventArgs e)
@@ -877,13 +1095,11 @@ public partial class LiveTaskPanel : UserControl
             }
             _lastOutput = e.Output;
             _lastRenderedResultSequence = resultSequence;
-            var (text, color) = e.Decision.Status switch
+            if (e.Sop is not null)
             {
-                DecisionStatus.Ok => ("OK", Brushes.Green),
-                DecisionStatus.Ng => ("NG", Brushes.Red),
-                DecisionStatus.ReviewRequired => ("待确认", Brushes.Orange),
-                _ => ("错误", Brushes.Gray),
-            };
+                UpdateSopUi(e.Sop);
+            }
+            var (text, color) = GetDisplayDecision(e);
             DecisionText.Text = text;
             DecisionText.Foreground = color;
             var behaviorResults = e.Output.Keypoints
@@ -934,6 +1150,31 @@ public partial class LiveTaskPanel : UserControl
             }
             DrawOverlay(e.Output);
         });
+    }
+
+    private static (string Text, Brush Brush) GetDisplayDecision(RecordCompletedEventArgs args)
+    {
+        if (args.Sop is { } sop)
+        {
+            return args.Decision.Status switch
+            {
+                DecisionStatus.Ok when sop.Status == SopRunStatus.CompletedOk => ("OK", Brushes.Green),
+                DecisionStatus.Ng => ("NG", Brushes.Red),
+                DecisionStatus.ReviewRequired => ("待确认", Brushes.Orange),
+                DecisionStatus.Unknown when sop.Status is SopRunStatus.Interrupted or SopRunStatus.Aborted
+                    => ("已中止", Brushes.Gray),
+                _ => ("检测中", Brushes.DodgerBlue),
+            };
+        }
+
+        return args.Decision.Status switch
+        {
+            DecisionStatus.Ok => ("OK", Brushes.Green),
+            DecisionStatus.Ng => ("NG", Brushes.Red),
+            DecisionStatus.ReviewRequired => ("待确认", Brushes.Orange),
+            DecisionStatus.Processing or DecisionStatus.Unknown => ("检测中", Brushes.DodgerBlue),
+            _ => ("错误", Brushes.Gray),
+        };
     }
 
     /// <summary>归一化检测框 → 像素叠加（按预览控件实际尺寸）。</summary>
@@ -1144,6 +1385,7 @@ public partial class LiveTaskPanel : UserControl
         StopButton.IsEnabled = running;
         ResetCountButton.IsEnabled = true;
         TaskCombo.IsEnabled = !running && !_startInProgress;
+        UpdateSopControls(_run?.Sop);
     }
 
 }

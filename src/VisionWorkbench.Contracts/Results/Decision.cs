@@ -6,6 +6,8 @@ public enum DecisionStatus
     Ok,
     Ng,
     ReviewRequired,
+    /// <summary>检测仍在进行，尚未形成产品终态；不计入 OK/NG/错误。</summary>
+    Processing,
     Unknown,
     Error,
 }

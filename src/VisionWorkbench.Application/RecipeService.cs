@@ -61,6 +61,7 @@ public sealed class RecipeService(TaskRepository tasks)
         }
         var taskType = recipe.TaskType.Normalize();
         ValidateGeometry(recipe);
+        ValidateSop(recipe.Sop);
         ValidateSettingsJson(recipe.SettingsJson);
         // 流水计数模式和轮廓分析不需要 OK/NG 判定，允许零规则（§16.3/§16.4）
         if (recipe.Rules.Count == 0
@@ -118,6 +119,9 @@ public sealed class RecipeService(TaskRepository tasks)
                 PostProcess = recipe.PostProcess,
             }, JsonOptions)
             : null;
+        entity.WorkflowJson = recipe.Sop is null
+            ? null
+            : JsonSerializer.Serialize(recipe.Sop, JsonOptions);
         return await tasks.SaveAsync(entity, ct);
     }
 
@@ -142,6 +146,7 @@ public sealed class RecipeService(TaskRepository tasks)
         var executionProvider = "cpu";
         var behavior = new BehaviorRecognitionConfig();
         var postProcess = new PostProcessConfig();
+        SopBinding? sop = null;
         if (!string.IsNullOrWhiteSpace(entity.RegionsJson))
         {
             try
@@ -170,6 +175,18 @@ public sealed class RecipeService(TaskRepository tasks)
                 // 区域损坏退回整幅图 + 快照模式
             }
         }
+        if (!string.IsNullOrWhiteSpace(entity.WorkflowJson))
+        {
+            try
+            {
+                sop = JsonSerializer.Deserialize<SopBinding>(entity.WorkflowJson, JsonOptions);
+                ValidateSop(sop);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
         return new Recipe
         {
             StationCode = string.IsNullOrWhiteSpace(entity.StationCode) ? $"ST-{entity.Id:000}" : entity.StationCode,
@@ -188,6 +205,7 @@ public sealed class RecipeService(TaskRepository tasks)
             CountingLine = line,
             Behavior = behavior,
             PostProcess = postProcess,
+            Sop = sop,
             Rules = rules,
         };
     }
@@ -266,6 +284,36 @@ public sealed class RecipeService(TaskRepository tasks)
             {
                 throw new ArgumentException("行为识别阈值必须为有效的非负数，置信度必须在 0~1 之间（CFG-006）。");
             }
+        }
+    }
+
+    private static void ValidateSop(SopBinding? binding)
+    {
+        if (binding is null)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(binding.DefinitionId)
+            || binding.Version < 1
+            || binding.Definition is null
+            || binding.Definition.Steps.Count == 0)
+        {
+            throw new JsonException("SOP 绑定缺少已发布定义或步骤");
+        }
+        var steps = binding.Definition.Steps.OrderBy(step => step.Order).ToArray();
+        if (steps.Any(step => string.IsNullOrWhiteSpace(step.Id)
+                              || string.IsNullOrWhiteSpace(step.Name)
+                              || step.Order < 1
+                              || step.MinimumStableFrames < 1
+                              || step.TimeoutSeconds < 0
+                              || step.Conditions.Count == 0))
+        {
+            throw new JsonException("SOP 步骤配置无效");
+        }
+        if (steps.Select(step => step.Order).Distinct().Count() != steps.Length
+            || steps.SelectMany(step => step.Conditions).Any(condition => string.IsNullOrWhiteSpace(condition.Id)))
+        {
+            throw new JsonException("SOP 步骤顺序或条件 ID 重复");
         }
     }
 

@@ -65,6 +65,7 @@ public partial class Shell : Window
         _pages["welcome"] = () => new WelcomePage();
         _pages["live"] = () => new LivePage();
         _pages["tasks"] = () => new TasksPage();
+        _pages["sop"] = () => new SopPage();
         _pages["detection-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.Detection);
         _pages["segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.Segmentation);
         _pages["semantic-segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.SemanticSegmentation);
@@ -84,11 +85,6 @@ public partial class Shell : Window
         _pages["monitor"] = () => new SystemMonitorPage();
         _pages["license"] = () => new LicensePage();
         _pages["settings"] = () => new SettingsPage();
-        // 实时检测工作区在主窗口启动时预先创建并加载已保存任务的模型，
-        // 用户进入实时检测后可直接开始，不再等待模型初始化。
-        var livePage = new LivePage();
-        _cache["live"] = livePage;
-        livePage.OnShown();
         TryAutoLogin();
         RefreshUserHeader();
         var license = AppServices.Instance.License.Validate();

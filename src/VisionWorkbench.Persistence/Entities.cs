@@ -85,11 +85,60 @@ public sealed class TaskEntity
     /// <summary>区域定义 JSON（v1 只用单 ROI）。</summary>
     public string? RegionsJson { get; set; }
 
+    /// <summary>可选实时工作流 JSON；为空表示普通任务，不影响旧任务兼容。</summary>
+    public string? WorkflowJson { get; set; }
+
     public string? TriggerJson { get; set; }
     public string? StoragePolicyJson { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>SOP 产品周期聚合，表 SopRuns。</summary>
+public sealed class SopRunEntity
+{
+    [Key] public long Id { get; set; }
+    [Required, MaxLength(128)] public string SopDefinitionId { get; set; } = "";
+    public int SopVersion { get; set; } = 1;
+    [Required] public string DefinitionHash { get; set; } = "";
+    [Required] public string DefinitionSnapshotJson { get; set; } = "{}";
+    [Required, MaxLength(64)] public string ProjectId { get; set; } = "default";
+    [Required, MaxLength(64)] public string StationCode { get; set; } = "";
+    public long TaskId { get; set; }
+    public long? BatchId { get; set; }
+    [Required, MaxLength(128)] public string CycleId { get; set; } = "";
+    public string? ProductId { get; set; }
+    [Required, MaxLength(32)] public string Status { get; set; } = "Idle";
+    public int CurrentStepOrder { get; set; }
+    public DateTime StartedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? CompletedAtUtc { get; set; }
+    public string? FailureReason { get; set; }
+    /// <summary>产品级最终结论；无算法帧超时时也通过此字段追溯。</summary>
+    [MaxLength(24)] public string? FinalStatus { get; set; }
+    public string? FinalDecisionJson { get; set; }
+    public string? FinalResultJson { get; set; }
+    public DateTime? FinalizedAtUtc { get; set; }
+    public DateTime? FinalPublishedAtUtc { get; set; }
+    [MaxLength(96)] public string? FinalPublishClaimId { get; set; }
+    public DateTime? FinalPublishClaimedAtUtc { get; set; }
+}
+
+/// <summary>SOP 步骤结果，表 SopStepResults。</summary>
+public sealed class SopStepResultEntity
+{
+    [Key] public long Id { get; set; }
+    public long SopRunId { get; set; }
+    public SopRunEntity? SopRun { get; set; }
+    [Required, MaxLength(128)] public string StepId { get; set; } = "";
+    public int Attempt { get; set; } = 1;
+    [Required, MaxLength(32)] public string Status { get; set; } = "Pending";
+    public DateTime? StartedAtUtc { get; set; }
+    public DateTime? CompletedAtUtc { get; set; }
+    public double? Confidence { get; set; }
+    public string? ConditionResultJson { get; set; }
+    public string? FailureReason { get; set; }
+    public long? InspectionRecordId { get; set; }
 }
 
 /// <summary>批次实体，表 Batches（文档 §20.1，CNT-L-012）。</summary>
@@ -142,6 +191,9 @@ public sealed class InspectionRecordEntity
     public long? BatchId { get; set; }
     public BatchEntity? Batch { get; set; }
 
+    public long? SopRunId { get; set; }
+    public SopRunEntity? SopRun { get; set; }
+
     /// <summary>重新推理来源记录；重新运行永远新增记录，不覆盖旧结果。</summary>
     public long? SourceRecordId { get; set; }
 
@@ -168,6 +220,9 @@ public sealed class InspectionRecordEntity
     /// <summary>算法原始输出（RawResultJson）与最终判定（FinalResultJson）分开保存（文档 §20.2）。</summary>
     public string RawResultJson { get; set; } = "{}";
     public string FinalResultJson { get; set; } = "{}";
+
+    /// <summary>可选 SOP 产品周期/步骤快照；普通检测为空。</summary>
+    public string? WorkflowResultJson { get; set; }
 
     public bool WasCorrected { get; set; }
 
@@ -216,6 +271,9 @@ public sealed class VisionEventEntity
     public long? BatchId { get; set; }
     public BatchEntity? Batch { get; set; }
 
+    public long? SopRunId { get; set; }
+    public SopRunEntity? SopRun { get; set; }
+
     [Required, MaxLength(128)]
     public string EventType { get; set; } = "";
 
@@ -231,6 +289,14 @@ public sealed class VisionEventEntity
     public DateTime? EndedAt { get; set; }
     public double Confidence { get; set; }
     public string? EvidenceImagePath { get; set; }
+    public long? SourceTaskId { get; set; }
+    public string? SourceStationCode { get; set; }
+    public long? FrameSequence { get; set; }
+    public string? BoxJson { get; set; }
+    public string? TextValue { get; set; }
+    public string? CodeValue { get; set; }
+    public long? Count { get; set; }
+    public string? AttributesJson { get; set; }
 }
 
 /// <summary>人工纠错实体，表 Corrections（文档 §20.1）。</summary>

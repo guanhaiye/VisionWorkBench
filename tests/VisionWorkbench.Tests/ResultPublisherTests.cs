@@ -42,4 +42,39 @@ public sealed class ResultPublisherTests
             }
         }
     }
+
+    [Fact]
+    public async Task Product_ResultId_Is_Idempotent_In_Local_Jsonl()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "VisionWorkbenchTests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "results.jsonl");
+        try
+        {
+            var envelope = new ProductResultEnvelope
+            {
+                ResultId = "sop-product:42:final",
+                ProjectId = "project-a",
+                StationCode = "ST-001",
+                TaskId = 7,
+                SopRunId = 42,
+                CycleId = "cycle-42",
+                Decision = new DecisionResult { Status = DecisionStatus.Ng },
+                WorkflowResultJson = "{}",
+            };
+            await using (var publisher = new ResultPublisher(path))
+            {
+                await publisher.PublishProductAsync(envelope);
+                await publisher.PublishProductAsync(envelope);
+            }
+
+            Assert.Single(await File.ReadAllLinesAsync(path));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
 }

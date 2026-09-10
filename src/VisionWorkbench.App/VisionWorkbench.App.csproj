@@ -6,6 +6,7 @@
     <RootNamespace>VisionWorkbench.App</RootNamespace>
     <Description>VisionWorkbench 主程序（WPF）</Description>
     <AssemblyName>VisionWorkbench</AssemblyName>
+    <ApplicationIcon>..\..\assets\branding\visionworkbench-app.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
@@ -31,9 +32,6 @@
     <Resource Include="..\..\assets\branding\visionworkbench-taskbar.ico">
       <Link>Assets\Branding\visionworkbench-taskbar.ico</Link>
     </Resource>
-    <ApplicationIcon Include="..\..\assets\branding\visionworkbench-taskbar.ico">
-      <Link>Assets\Branding\visionworkbench-taskbar.ico</Link>
-    </ApplicationIcon>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\VisionWorkbench.Application\VisionWorkbench.Application.csproj" />

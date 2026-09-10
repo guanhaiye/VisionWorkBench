@@ -111,19 +111,7 @@ public partial class App : System.Windows.Application
             Shutdown(-1);
             return;
         }
-        // 软件启动阶段立即开始预热，但不阻塞 WPF 主窗口创建。
-        _ = AppServices.Instance.SmartAnnotations.WarmupYoloEAsync()
-            .ContinueWith(task =>
-            {
-                if (task.IsFaulted)
-                    System.Diagnostics.Debug.WriteLine($"YOLOE 启动预热失败：{task.Exception?.GetBaseException().Message}");
-            }, TaskScheduler.Default);
-        _ = AppServices.Instance.SmartAnnotations.WarmupSam1Async()
-            .ContinueWith(task =>
-            {
-                if (task.IsFaulted)
-                    System.Diagnostics.Debug.WriteLine($"SAM1 启动预热失败：{task.Exception?.GetBaseException().Message}");
-            }, TaskScheduler.Default);
+        // 智能标注模型改为首次使用时按需启动，避免 Python/模型环境异常拖住主界面启动和退出。
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -190,6 +178,14 @@ public partial class App : System.Windows.Application
         catch (Exception)
         {
             // 智能标注 Worker 关闭失败不影响应用退出
+        }
+        try
+        {
+            AppServices.Instance.SopProductResultReplayer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception)
+        {
+            // SOP 结果重放器关闭失败不影响应用退出
         }
         try
         {

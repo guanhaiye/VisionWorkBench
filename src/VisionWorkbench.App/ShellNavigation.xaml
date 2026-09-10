@@ -259,6 +259,7 @@
                                 <ListBoxItem Content="AI&#x6761;&#x7801;&#x8BC6;&#x522B;" Tag="data-model-barcode" />
                                 <ListBoxItem Content="AI&#x4E8C;&#x7EF4;&#x7801;&#x8BC6;&#x522B;" Tag="data-model-qrcode" />
                                 <ListBoxItem Content="AI&#x5173;&#x952E;&#x70B9;&#x68C0;&#x6D4B;" Tag="data-model-pose" />
+                                <ListBoxItem Content="SOP流程制作与配置" Tag="sop" />
                             </ListBox>
                         </Expander>
                         <Expander Header="&#x7ED3;&#x679C;&#x67E5;&#x770B;" IsExpanded="False">
