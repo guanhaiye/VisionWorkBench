@@ -24,3 +24,9 @@ public interface ICameraSession : IAsyncDisposable
     /// <summary>有限输入源（图片目录/视频文件）播放完毕时触发；实时源不触发。</summary>
     event EventHandler? Completed;
 }
+
+/// <summary>支持软件触发的工业相机会话。</summary>
+public interface ITriggerableCameraSession
+{
+    Task TriggerSoftwareAsync(CancellationToken cancellationToken = default);
+}

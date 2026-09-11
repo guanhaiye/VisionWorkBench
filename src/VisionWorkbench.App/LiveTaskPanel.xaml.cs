@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
@@ -46,6 +47,9 @@ public partial class LiveTaskPanel : UserControl
     private long _lastRenderedResultSequence = -1;
     private long _lastRenderedPreviewSequence = -1;
     private bool _roiDrawing;
+    private SopSnapshot? _lastSopSnapshot;
+    private string? _lastSopRoundText;
+    private ImageSource? _lastSopRoundImage;
     private bool _roiOverrideSet;
     private Point _roiDragStart;
     private NormalizedRect? _roiOverride;
@@ -242,6 +246,7 @@ public partial class LiveTaskPanel : UserControl
         RoiButton.Content = "绘制检测区域";
         ClearRoiButton.IsEnabled = false;
         RenderRoi();
+        SetSopLayout(false);
         ResetStatistics();
         ClearDetectionLog();
         _ = RefreshTaskPresentationAsync();
@@ -255,7 +260,7 @@ public partial class LiveTaskPanel : UserControl
         if (taskId == 0)
         {
             TaskModeText.Text = "请选择任务";
-            SopCard.Visibility = Visibility.Collapsed;
+            SetSopLayout(false);
             UpdateSopControls(null);
             return;
         }
@@ -270,12 +275,12 @@ public partial class LiveTaskPanel : UserControl
         TaskModeText.Text = GetTaskModeText(pair.Recipe);
         if (pair.Recipe.Sop?.Definition is { } definition)
         {
-            SopCard.Visibility = Visibility.Visible;
+            SetSopLayout(true);
             UpdateSopUi(new SopStateMachine(definition, pair.Recipe.Sop.RunMode).Snapshot);
         }
         else
         {
-            SopCard.Visibility = Visibility.Collapsed;
+            SetSopLayout(false);
             SopStepsItems.ItemsSource = null;
             UpdateSopControls(null);
         }
@@ -302,7 +307,8 @@ public partial class LiveTaskPanel : UserControl
 
     private void UpdateSopUi(SopSnapshot snapshot)
     {
-        SopProgressText.Text = $"{snapshot.CompletedCount} / {snapshot.TotalCount}";
+        _lastSopSnapshot = snapshot;
+        UpdateSopMetrics(snapshot);
         SopCurrentStepText.Text = snapshot.Status switch
         {
             SopRunStatus.CompletedOk => "当前产品：SOP 完成",
@@ -314,6 +320,10 @@ public partial class LiveTaskPanel : UserControl
                 ? "等待开始"
                 : $"当前步骤：{snapshot.CurrentStepOrder:00} {snapshot.CurrentStepName}",
         };
+        var quality = GetSopQuality(snapshot);
+        SopCurrentQualityText.Text = quality.Text;
+        SopCurrentQualityBadgeText.Text = quality.Badge;
+        SopCurrentQualityBadge.Background = quality.Brush;
         SopStepsItems.ItemsSource = snapshot.Steps.Select(step =>
         {
             var (text, brush) = step.Status switch
@@ -328,6 +338,96 @@ public partial class LiveTaskPanel : UserControl
             return new SopStepView($"{step.Order:00}", step.Name, text, brush);
         }).ToArray();
         UpdateSopControls(snapshot);
+    }
+
+    private void SetSopLayout(bool hasSop)
+    {
+        SopCard.Visibility = hasSop ? Visibility.Visible : Visibility.Collapsed;
+        DecisionCard.Visibility = hasSop ? Visibility.Collapsed : Visibility.Visible;
+        ResultCard.Visibility = hasSop ? Visibility.Collapsed : Visibility.Visible;
+        StatsCard.Visibility = hasSop ? Visibility.Collapsed : Visibility.Visible;
+        LogCard.Visibility = hasSop ? Visibility.Collapsed : Visibility.Visible;
+        if (!hasSop)
+        {
+            _lastSopSnapshot = null;
+            _lastSopRoundText = null;
+            _lastSopRoundImage = null;
+            SopPreviousImage.Source = null;
+            SopPreviousImage.Visibility = Visibility.Collapsed;
+            SopPreviousResultText.Text = "暂无上一轮结果";
+        }
+    }
+
+    private void UpdateSopMetrics(SopSnapshot snapshot)
+    {
+        SopMetricCurrentStep.Text = string.IsNullOrWhiteSpace(snapshot.CurrentStepName)
+            ? "--"
+            : $"{snapshot.CurrentStepOrder:00} · {snapshot.CurrentStepName}";
+        SopMetricCompleted.Text = $"{snapshot.CompletedCount} / {snapshot.TotalCount}";
+        var current = snapshot.Steps.FirstOrDefault(step => step.Status == SopStepStatus.InProgress);
+        SopMetricElapsed.Text = current?.StartedAt is { } started
+            ? FormatElapsed(DateTimeOffset.UtcNow - started)
+            : "--";
+        SopMetricExceptions.Text = snapshot.Status is SopRunStatus.NgTimeout
+            or SopRunStatus.NgConditionFailed or SopRunStatus.NgWrongOrder or SopRunStatus.ReviewRequired
+            ? "1"
+            : "0";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+        return elapsed.TotalHours >= 1
+            ? elapsed.ToString(@"h\:mm\:ss")
+            : elapsed.ToString(@"m\:ss");
+    }
+
+    private static (string Text, string Badge, Brush Brush) GetSopQuality(SopSnapshot snapshot) =>
+        snapshot.Status switch
+        {
+            SopRunStatus.CompletedOk => ("本轮外观检测合格", "OK", Brushes.SeaGreen),
+            SopRunStatus.NgTimeout or SopRunStatus.NgConditionFailed or SopRunStatus.NgWrongOrder
+                => ("本轮外观检测不合格", "NG", Brushes.IndianRed),
+            SopRunStatus.ReviewRequired => ("本轮检测等待人工确认", "待确认", Brushes.DarkOrange),
+            SopRunStatus.Interrupted or SopRunStatus.Aborted => ("本轮检测已中止", "中止", Brushes.Gray),
+            _ when !string.IsNullOrWhiteSpace(snapshot.CurrentStepName)
+                => ($"正在检测：{snapshot.CurrentStepName}", "进行中", Brushes.DodgerBlue),
+            _ => ("等待步骤确认", "等待", Brushes.DarkOrange),
+        };
+
+    private void ShowPreviousSopResult()
+    {
+        SopPreviousResultText.Text = _lastSopRoundText ?? "暂无上一轮结果";
+        SopPreviousImage.Source = _lastSopRoundImage;
+        SopPreviousImage.Visibility = _lastSopRoundImage is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private static string BuildSopRoundText(RecordCompletedEventArgs args)
+    {
+        var completedStep = args.Sop?.Steps
+            .Where(step => step.Status == SopStepStatus.Completed)
+            .OrderByDescending(step => step.CompletedAt)
+            .FirstOrDefault();
+        var stepName = completedStep?.Name ?? args.Sop?.CurrentStepName ?? "外观检测";
+        var result = args.Decision.Status switch
+        {
+            DecisionStatus.Ok => "OK",
+            DecisionStatus.Ng => "NG",
+            DecisionStatus.ReviewRequired => "待确认",
+            _ => "检测中",
+        };
+        return $"{stepName}  {result}";
+    }
+
+    private static ImageSource? CloneImageSource(ImageSource? source)
+    {
+        if (source is not BitmapSource bitmap)
+        {
+            return null;
+        }
+        var clone = new WriteableBitmap(bitmap);
+        clone.Freeze();
+        return clone;
     }
 
     private void UpdateSopControls(SopSnapshot? snapshot)
@@ -489,7 +589,7 @@ public partial class LiveTaskPanel : UserControl
         recipe = recipe with { Roi = _roiOverrideSet ? _roiOverride : recipe.Roi };
             _activeRecipe = recipe;
             TaskModeText.Text = GetTaskModeText(recipe);
-            SopCard.Visibility = recipe.Sop is null ? Visibility.Collapsed : Visibility.Visible;
+            SetSopLayout(recipe.Sop is not null);
             ConfigureOfflineProgress(recipe, singleFrame);
         // 离线图片单次检测按目录顺序逐张读取；处理完最后一张后，下一次点击从第一张重新开始。
         if (singleFrame
@@ -832,9 +932,12 @@ public partial class LiveTaskPanel : UserControl
             DeviceId = recipe.CameraDeviceId,
             DisplayName = recipe.CameraDeviceId,
         };
-        var options = singleFrame && recipe.CameraProviderId is ("image-folder" or "video-file")
-            ? _cameraOptions with { MaxFrames = 1, StartFrameIndex = _singleFrameNextIndex }
-            : _cameraOptions;
+        var options = _cameraOptions with { Parameters = recipe.CameraParameters };
+        if (singleFrame && recipe.CameraProviderId is ("image-folder" or "video-file"))
+        {
+            options = options with { MaxFrames = 1, StartFrameIndex = _singleFrameNextIndex };
+        }
+        options = AppServices.Instance.ApplyCameraDefaults(descriptor, options);
         var session = await AppServices.Instance.Cameras.OpenSessionAsync(
             descriptor, options, cancellationToken);
         await session.OpenAsync(options, cancellationToken);
@@ -1097,7 +1200,9 @@ public partial class LiveTaskPanel : UserControl
             _lastRenderedResultSequence = resultSequence;
             if (e.Sop is not null)
             {
+                ShowPreviousSopResult();
                 UpdateSopUi(e.Sop);
+                _lastSopRoundText = BuildSopRoundText(e);
             }
             var (text, color) = GetDisplayDecision(e);
             DecisionText.Text = text;
@@ -1138,6 +1243,10 @@ public partial class LiveTaskPanel : UserControl
             if (e.Frame is not null)
             {
                 _preview.Render(PreviewImage, e.Frame, force: true);
+                if (e.Sop is not null)
+                {
+                    _lastSopRoundImage = CloneImageSource(PreviewImage.Source);
+                }
                 _lastRenderedPreviewSequence = e.Frame.Sequence;
                 RenderRoi();
                 if (_offlineImageTotal > 0)
@@ -1364,6 +1473,10 @@ public partial class LiveTaskPanel : UserControl
 
     private void UpdateStatus()
     {
+        if (_lastSopSnapshot is not null && SopCard.Visibility == Visibility.Visible)
+        {
+            UpdateSopMetrics(_lastSopSnapshot);
+        }
         var svcs = AppServices.Instance;
         var provider = _activeRecipe?.ExecutionProvider ?? svcs.Settings.ExecutionProvider;
         StatusText.Text =

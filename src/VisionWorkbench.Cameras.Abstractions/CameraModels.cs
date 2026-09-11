@@ -80,10 +80,25 @@ public sealed record CameraOpenOptions
 
     /// <summary>虚拟源：从指定的帧索引开始输出，索引从 0 开始。</summary>
     public int StartFrameIndex { get; init; }
+
+    /// <summary>工业相机参数；不支持的 Provider 忽略未使用项。</summary>
+    public CameraParameterSet? Parameters { get; init; }
 }
 
-/// <summary>相机参数集合（首版占位，仅接口形状落地）。</summary>
-public sealed record CameraParameterSet;
+/// <summary>跨厂商相机参数。海康 MVS Provider 会将这些参数映射到 GenICam 节点。</summary>
+public sealed record CameraParameterSet
+{
+    public int? Width { get; init; }
+    public int? Height { get; init; }
+    public double? FrameRate { get; init; }
+    public double? ExposureTimeUs { get; init; }
+    public double? GainDb { get; init; }
+    public bool? TriggerMode { get; init; }
+    public string? TriggerSource { get; init; }
+    public uint? PixelFormat { get; init; }
+    public bool? AutoExposure { get; init; }
+    public bool? AutoGain { get; init; }
+}
 
 public sealed class VideoFrameReceivedEventArgs : EventArgs
 {

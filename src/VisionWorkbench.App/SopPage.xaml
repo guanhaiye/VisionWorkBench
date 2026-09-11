@@ -13,6 +13,7 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,10">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button Content="新建SOP" Click="New_Click" />
+                <Button Content="复制SOP" Click="Copy_Click" />
                 <Button Content="删除" Click="Delete_Click" />
                 <Button Content="保存" Click="Save_Click" />
                 <Button Content="刷新" Click="Refresh_Click" />
@@ -69,45 +70,9 @@
                                 <TextBox Grid.Row="1" Grid.Column="1" x:Name="ProductCodeText" Margin="4,2,12,5" />
                                 <TextBlock Grid.Row="1" Grid.Column="2" Text="版本" VerticalAlignment="Center" />
                                 <TextBox Grid.Row="1" Grid.Column="3" x:Name="VersionText" Margin="4,2,0,5" />
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="生命周期" VerticalAlignment="Center" />
-                                <ComboBox Grid.Row="2" Grid.Column="1" x:Name="StatusCombo" Margin="4,2,12,2">
-                                    <ComboBoxItem Content="草稿" Tag="Draft" />
-                                    <ComboBoxItem Content="已发布" Tag="Published" />
-                                    <ComboBoxItem Content="已停用" Tag="Retired" />
-                                </ComboBox>
-                                <TextBlock Grid.Row="2" Grid.Column="2" Text="目录ID" VerticalAlignment="Center" />
-                                <TextBlock Grid.Row="2" Grid.Column="3" x:Name="DefinitionIdText" Foreground="{DynamicResource MutedTextBrush}"
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="目录ID" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="DefinitionIdText" Foreground="{DynamicResource MutedTextBrush}"
                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            </Grid>
-                        </GroupBox>
-
-                        <GroupBox Header="SOP运行配置（全局）" Margin="0,0,0,10">
-                            <Grid Margin="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="100" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="100" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="输入源" VerticalAlignment="Center" />
-                                <ComboBox x:Name="SopProviderCombo" Grid.Column="1" Margin="4,2,12,5"
-                                          DisplayMemberPath="DisplayName" SelectionChanged="SopProviderCombo_SelectionChanged" />
-                                <TextBlock Grid.Row="1" Text="设备/路径" VerticalAlignment="Center" />
-                                <TextBox x:Name="SopDeviceText" Grid.Row="1" Grid.Column="1" Margin="4,2,12,5" />
-                                <TextBlock Grid.Row="1" Grid.Column="2" Text="运行模式" VerticalAlignment="Center" />
-                                <ComboBox x:Name="SopRunModeCombo" Grid.Row="1" Grid.Column="3" Margin="4,2,0,5">
-                                    <ComboBoxItem Content="严格按顺序" Tag="StrictOrder" IsSelected="True" />
-                                    <ComboBoxItem Content="允许跳步" Tag="AllowSkip" />
-                                    <ComboBoxItem Content="人工确认" Tag="ManualReview" />
-                                </ComboBox>
-                                <TextBlock Grid.Row="2" Grid.ColumnSpan="4"
-                                           Text="模型不在全局配置：请在下方每个工序中分别选择模型类型、算法插件、推理设备和参数。多个工序即可组合多个模型。"
-                                           Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
                             </Grid>
                         </GroupBox>
 
@@ -156,22 +121,6 @@
                                             </DataGridTemplateColumn.CellEditingTemplate>
                                         </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="模型ID" Binding="{Binding ModelId, UpdateSourceTrigger=LostFocus}" Width="170" />
-                                        <DataGridTextColumn Header="模型版本" Binding="{Binding ModelVersion, UpdateSourceTrigger=LostFocus}" Width="90" />
-                                        <DataGridTemplateColumn Header="算法插件" Width="210">
-                                            <DataGridTemplateColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <ComboBox IsEditable="True" ItemsSource="{Binding PluginIds, ElementName=Root}"
-                                                              Text="{Binding PluginId, UpdateSourceTrigger=PropertyChanged}"
-                                                              Padding="4,0" BorderThickness="0" />
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellTemplate>
-                                            <DataGridTemplateColumn.CellEditingTemplate>
-                                                <DataTemplate>
-                                                    <ComboBox IsEditable="True" ItemsSource="{Binding PluginIds, ElementName=Root}"
-                                                              Text="{Binding PluginId, UpdateSourceTrigger=PropertyChanged}" />
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellEditingTemplate>
-                                        </DataGridTemplateColumn>
                                         <DataGridTemplateColumn Header="推理设备" Width="95">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
@@ -198,13 +147,13 @@
                                         <DataGridTextColumn Header="模型参数 JSON" Binding="{Binding SettingsJson, UpdateSourceTrigger=LostFocus}" Width="220" />
                                     </DataGrid.Columns>
                                 </DataGrid>
-                                <TextBlock Text="模型类型填写 Detection、AiText、Barcode、QrCode、BehaviorRecognition、SemanticSegmentation 或 InstanceSegmentation；算法插件填写插件 ID，模型参数填写 JSON 对象。类别/匹配值用于生成对应 SOP 事件条件。"
+                            <TextBlock Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。模型参数填写 JSON 对象，类别/匹配值用于生成对应 SOP 事件条件。"
                                            DockPanel.Dock="Top" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,7,0,0" />
                             </DockPanel>
                         </GroupBox>
 
                         <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Padding="10">
-                            <TextBlock Text="使用方式：先配置输入源，再为每个工序选择独立模型和参数。保存并发布后，请到任务配置中新建任务，选择“SOP流程”并绑定本 SOP；保存任务后，实时检测中即可选择该任务。"
+                            <TextBlock Text="使用方式：在这里配置 SOP 流程、步骤和每步模型。保存并发布后，请到任务配置选择输入源、设备/路径、运行模式并绑定本 SOP；保存任务后，实时检测中即可选择该任务。"
                                        TextWrapping="Wrap" />
                         </Border>
                     </StackPanel>

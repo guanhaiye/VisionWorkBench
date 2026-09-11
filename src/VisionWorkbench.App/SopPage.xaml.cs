@@ -11,18 +11,12 @@ using VisionWorkbench.Domain;
 
 namespace VisionWorkbench.App;
 
-/// <summary>SOP 流程模型、独立运行配置与版本管理。</summary>
+/// <summary>SOP 流程模型、步骤模型配置与版本管理。</summary>
 public partial class SopPage : UserControl
 {
-    private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId)
-    {
-        // WPF 收起 ComboBox 时可能使用对象 ToString；确保选中态也使用中文 DisplayName。
-        public override string ToString() => DisplayName;
-    }
-
     private sealed record DefinitionRow(SopDefinition Definition)
     {
-        public string DisplayName => $"{Definition.Name}  ·  v{Definition.Version}  ·  {GetStatus(Definition.Status)}";
+        public string DisplayName => $"{Definition.Name}  ·  {Definition.Code}  ·  v{Definition.Version}  ·  {GetStatus(Definition.Status)}";
     }
 
     private sealed class StepEditorRow : INotifyPropertyChanged
@@ -62,11 +56,7 @@ public partial class SopPage : UserControl
     private IReadOnlyList<SopDefinition> _definitions = [];
     private SopDefinition? _selectedDefinition;
     private bool _loading;
-    private string? _lastProviderId;
-    private bool _suppressProviderChange;
     private IReadOnlySet<string> _availablePluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-    public IReadOnlyList<string> PluginIds => _availablePluginIds.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToArray();
 
     public SopPage()
     {
@@ -82,7 +72,7 @@ public partial class SopPage : UserControl
         _loading = true;
         try
         {
-            await LoadExecutionOptionsAsync();
+            LoadAvailablePlugins();
             var catalog = (await AppServices.Instance.SopDefinitions.ListAsync()).ToList();
 
             // 兼容第一版直接写入任务的 SOP：第一次进入制作页时自动收编到独立目录。
@@ -147,95 +137,12 @@ public partial class SopPage : UserControl
         LoadDefinition(row.Definition);
     }
 
-    private async Task LoadExecutionOptionsAsync()
+    private void LoadAvailablePlugins()
     {
         _availablePluginIds = AppServices.Instance.AlgorithmManager.ScanPlugins()
             .Where(plugin => plugin.Status == Contracts.Plugins.PluginStatus.Valid && plugin.Manifest is not null)
             .Select(plugin => plugin.Manifest!.Id)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        Root.DataContext = this;
-
-        var sources = new List<InputSourceOption>
-        {
-            new("离线图片目录（image-folder）", "image-folder", ""),
-            new("视频文件（video-file）", "video-file", ""),
-        };
-        try
-        {
-            var cameras = await AppServices.Instance.Cameras.DiscoverAllAsync(CancellationToken.None);
-            sources.AddRange(cameras.Select(camera => new InputSourceOption(
-                $"{camera.DisplayName}（{camera.ProviderId}/{camera.DeviceId}）",
-                camera.ProviderId,
-                camera.DeviceId)));
-        }
-        catch
-        {
-            // 设备发现失败时仍保留离线输入源。
-        }
-        SopProviderCombo.ItemsSource = sources
-            .DistinctBy(source => $"{source.ProviderId}/{source.DeviceId}", StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (SopProviderCombo.SelectedItem is null)
-        {
-            SopProviderCombo.SelectedIndex = 0;
-        }
-    }
-
-    private void SelectExecutionProfile(SopExecutionProfile? profile)
-    {
-        var execution = profile ?? new SopExecutionProfile
-        {
-            CameraProviderId = "image-folder",
-            CameraDeviceId = "",
-        };
-        SelectRunMode(execution.RunMode);
-        SopDeviceText.Text = execution.CameraDeviceId;
-
-        var options = SopProviderCombo.Items.OfType<InputSourceOption>().ToList();
-        var source = options.FirstOrDefault(item =>
-            string.Equals(item.ProviderId, execution.CameraProviderId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(item.DeviceId, execution.CameraDeviceId, StringComparison.OrdinalIgnoreCase));
-        if (source is null)
-        {
-            source = new InputSourceOption(
-                $"未发现设备（{execution.CameraProviderId}/{execution.CameraDeviceId}）",
-                execution.CameraProviderId,
-                execution.CameraDeviceId);
-            options.Add(source);
-            SopProviderCombo.ItemsSource = options;
-        }
-        _suppressProviderChange = true;
-        try { SopProviderCombo.SelectedItem = source; }
-        finally { _suppressProviderChange = false; }
-        _lastProviderId = execution.CameraProviderId;
-    }
-
-    private void SopProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressProviderChange || SopProviderCombo.SelectedItem is not InputSourceOption source)
-        {
-            return;
-        }
-        if (!IsPathInputSource(source.ProviderId))
-        {
-            SopDeviceText.Text = source.DeviceId;
-        }
-        else if (_lastProviderId is not null && !IsPathInputSource(_lastProviderId))
-        {
-            SopDeviceText.Text = "";
-        }
-        _lastProviderId = source.ProviderId;
-    }
-
-    private static bool IsPathInputSource(string providerId) =>
-        string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(providerId, "video-file", StringComparison.OrdinalIgnoreCase);
-
-    private void SelectRunMode(SopRunMode mode)
-    {
-        SopRunModeCombo.SelectedItem = SopRunModeCombo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), mode.ToString(), StringComparison.OrdinalIgnoreCase))
-            ?? SopRunModeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
     }
 
     private void New_Click(object sender, RoutedEventArgs e)
@@ -247,6 +154,49 @@ public partial class SopPage : UserControl
         DefinitionNameText.Focus();
         StatusText.Text = "正在制作新SOP草稿，填写步骤后点击“保存”。";
     }
+
+    private void Copy_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedDefinition is not { } definition)
+        {
+            ThemedMessageBox.Show("请先选择要复制的 SOP。", "复制SOP", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        // 先完整加载源定义，再切换为未保存的新定义；这样步骤、模型参数和条件都会被带入。
+        LoadDefinition(definition);
+        _selectedDefinition = null;
+        DefinitionList.SelectedItem = null;
+        DefinitionIdText.Text = "保存时生成";
+        DefinitionNameText.Text = BuildCopyName(definition.Name);
+        DefinitionCodeText.Text = BuildCopyCode();
+        VersionText.Text = "1";
+        EditorPanel.IsEnabled = true;
+        DefinitionNameText.Focus();
+        StatusText.Text = "已复制为新 SOP 草稿；修改完成后点击“保存”即可生成独立流程。";
+    }
+
+    private string BuildCopyName(string sourceName)
+    {
+        var baseName = $"{sourceName}（副本）";
+        if (!_definitions.Any(item => string.Equals(item.Name, baseName, StringComparison.CurrentCultureIgnoreCase)))
+        {
+            return baseName;
+        }
+
+        for (var index = 2; index < 1000; index++)
+        {
+            var candidate = $"{baseName} {index}";
+            if (!_definitions.Any(item => string.Equals(item.Name, candidate, StringComparison.CurrentCultureIgnoreCase)))
+            {
+                return candidate;
+            }
+        }
+        return $"{baseName} {Guid.NewGuid():N}";
+    }
+
+    private static string BuildCopyCode() =>
+        $"SOP-{DateTime.Now:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
 
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
@@ -346,8 +296,6 @@ public partial class SopPage : UserControl
         DefinitionCodeText.Text = definition.Code;
         ProductCodeText.Text = definition.ProductCode;
         VersionText.Text = definition.Version.ToString(CultureInfo.InvariantCulture);
-        SelectStatus(definition.Status);
-        SelectExecutionProfile(definition.Execution);
         _steps.Clear();
         foreach (var step in definition.Steps.OrderBy(item => item.Order))
         {
@@ -377,14 +325,13 @@ public partial class SopPage : UserControl
 
     private void ClearEditor()
     {
+        var stamp = DateTime.Now.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
         EditorPanel.IsEnabled = false;
         DefinitionIdText.Text = "保存时生成";
-        DefinitionNameText.Text = "新建SOP流程";
-        DefinitionCodeText.Text = $"SOP-{DateTime.Now:yyyyMMddHHmmss}";
+        DefinitionNameText.Text = $"新建SOP流程-{stamp}";
+        DefinitionCodeText.Text = $"SOP-{stamp}";
         ProductCodeText.Text = "";
         VersionText.Text = "1";
-        SelectStatus(SopDefinitionStatus.Draft);
-        SelectExecutionProfile(null);
         _steps.Clear();
     }
 
@@ -439,14 +386,6 @@ public partial class SopPage : UserControl
             {
                 throw new InvalidOperationException($"步骤“{row.Name}”的模型类型无效：{row.ModelType}。");
             }
-            if (string.IsNullOrWhiteSpace(row.PluginId))
-            {
-                throw new InvalidOperationException($"步骤“{row.Name}”必须填写算法插件 ID。");
-            }
-            if (_availablePluginIds.Count > 0 && !_availablePluginIds.Contains(row.PluginId.Trim()))
-            {
-                throw new InvalidOperationException($"步骤“{row.Name}”的算法插件不存在或未通过校验：{row.PluginId}。");
-            }
             if (!TryParseExecutionProvider(row.ExecutionProvider, out var executionProvider))
             {
                 throw new InvalidOperationException($"步骤“{row.Name}”的推理设备只能填写 cpu 或 cuda。");
@@ -492,7 +431,7 @@ public partial class SopPage : UserControl
                 {
                     ModelId = string.IsNullOrWhiteSpace(row.ModelId) ? $"{code}-model-{order:00}" : row.ModelId.Trim(),
                     ModelVersion = row.ModelVersion.Trim(),
-                    PluginId = row.PluginId.Trim(),
+                    PluginId = ResolveAutomaticPluginId(taskType),
                     TaskType = taskType,
                     ExecutionProvider = executionProvider,
                     SettingsJson = settingsJson,
@@ -510,9 +449,6 @@ public partial class SopPage : UserControl
             throw new InvalidOperationException("步骤顺序不能重复，请按 1、2、3……配置。");
         }
 
-        var status = Enum.TryParse<SopDefinitionStatus>((StatusCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var parsedStatus)
-            ? parsedStatus
-            : SopDefinitionStatus.Draft;
         return new SopDefinition
         {
             Id = _selectedDefinition?.Id ?? $"sop:{Guid.NewGuid():N}",
@@ -520,41 +456,12 @@ public partial class SopPage : UserControl
             Name = name,
             ProductCode = ProductCodeText.Text.Trim(),
             Version = version,
-            Status = status,
-            Execution = BuildExecutionProfile(parsedSteps),
+            // SOP 不再暴露生命周期字段，保存即形成可绑定的正式版本。
+            Status = SopDefinitionStatus.Published,
+            // 输入源、设备/路径和运行模式属于任务实例，不属于可复用的 SOP 定义。
+            // 保留旧版 Definition.Execution 的读取兼容性，但新 SOP 不再写入全局运行配置。
+            Execution = null,
             Steps = parsedSteps.OrderBy(step => step.Order).ToArray(),
-        };
-    }
-
-    private SopExecutionProfile BuildExecutionProfile(IReadOnlyList<SopStep> steps)
-    {
-        var source = SopProviderCombo.SelectedItem as InputSourceOption;
-        var providerId = source?.ProviderId ?? "image-folder";
-        var deviceId = IsPathInputSource(providerId) ? SopDeviceText.Text.Trim() : source?.DeviceId ?? SopDeviceText.Text.Trim();
-        if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(deviceId))
-        {
-            throw new InvalidOperationException("SOP 执行配置必须选择输入源并填写设备/路径。");
-        }
-
-        var runMode = Enum.TryParse<SopRunMode>(
-            (SopRunModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var parsedRunMode)
-            ? parsedRunMode
-            : SopRunMode.StrictOrder;
-        var first = steps.OrderBy(step => step.Order).Select(step => step.Execution).FirstOrDefault(item => item is not null)
-            ?? throw new InvalidOperationException("SOP 至少需要为一个工序配置模型。");
-        return new SopExecutionProfile
-        {
-            StationCode = $"SOP-{DefinitionCodeText.Text.Trim()}",
-            CameraProviderId = providerId,
-            CameraDeviceId = deviceId,
-            PluginId = first.PluginId,
-            ExecutionProvider = first.ExecutionProvider,
-            TaskType = first.TaskType,
-            SettingsJson = first.SettingsJson,
-            Roi = first.Roi,
-            CountingMode = CountingMode.Snapshot,
-            RunMode = runMode,
-            Rules = first.Rules,
         };
     }
 
@@ -599,17 +506,28 @@ public partial class SopPage : UserControl
             }]
             : [];
 
+    /// <summary>
+    /// 算法插件是运行时实现细节，不在 SOP 编辑器中暴露给用户。
+    /// 根据工序模型类型选择宿主内置运行时；保留 PluginId 仅用于内部会话创建和历史兼容。
+    /// </summary>
+    private string ResolveAutomaticPluginId(InspectionTaskType taskType)
+    {
+        var normalized = taskType.Normalize();
+        var preferred = normalized == InspectionTaskType.SemanticSegmentation
+            ? new[] { "com.vision.atu5", "com.vision.yolo11" }
+            : new[] { "com.vision.yolo11", "com.vision.atu5" };
+        var pluginId = preferred.FirstOrDefault(id => _availablePluginIds.Contains(id));
+        if (pluginId is null)
+        {
+            throw new InvalidOperationException($"步骤模型类型“{GetTaskTypeDisplay(taskType.ToString())}”没有可用的算法运行时，请检查安装目录中的算法组件。");
+        }
+        return pluginId;
+    }
+
     private void CommitGridEdits()
     {
         StepsGrid.CommitEdit(DataGridEditingUnit.Cell, true);
         StepsGrid.CommitEdit(DataGridEditingUnit.Row, true);
-    }
-
-    private void SelectStatus(SopDefinitionStatus status)
-    {
-        StatusCombo.SelectedItem = StatusCombo.Items
-            .OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), status.ToString(), StringComparison.Ordinal));
     }
 
     private static string GetTaskTypeDisplay(string value)

@@ -177,6 +177,9 @@ public sealed record Recipe
     public required string CameraProviderId { get; init; }
     public required string CameraDeviceId { get; init; }
 
+    /// <summary>相机采集参数；普通输入源为空，海康 MVS 任务可配置曝光/触发等参数。</summary>
+    public Cameras.Abstractions.CameraParameterSet? CameraParameters { get; init; }
+
     public required string PluginId { get; init; }
     public string? PluginVersion { get; init; }
 

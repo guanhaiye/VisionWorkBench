@@ -41,7 +41,7 @@ public sealed class UsbCameraProvider(ILogger? logger = null) : ICameraProvider
             {
                 ProviderId = ProviderIdValue,
                 DeviceId = i.ToString(),
-                DisplayName = $"USB 相机 {i}（{mode.Width}x{mode.Height}）",
+                DisplayName = $"USB 相机 {i}",
             });
             logger?.LogDebug("发现 USB 相机: index={Index} {Mode}", i, mode);
         }

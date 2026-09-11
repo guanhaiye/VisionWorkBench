@@ -5,6 +5,7 @@
     <Project Path="src/VisionWorkbench.Application/VisionWorkbench.Application.csproj" />
     <Project Path="src/VisionWorkbench.Cameras.Abstractions/VisionWorkbench.Cameras.Abstractions.csproj" />
     <Project Path="src/VisionWorkbench.Cameras.Files/VisionWorkbench.Cameras.Files.csproj" />
+    <Project Path="src/VisionWorkbench.Cameras.Hikvision/VisionWorkbench.Cameras.Hikvision.csproj" />
     <Project Path="src/VisionWorkbench.Cameras.Usb/VisionWorkbench.Cameras.Usb.csproj" />
     <Project Path="src/VisionWorkbench.Contracts/VisionWorkbench.Contracts.csproj" />
     <Project Path="src/VisionWorkbench.Domain/VisionWorkbench.Domain.csproj" />

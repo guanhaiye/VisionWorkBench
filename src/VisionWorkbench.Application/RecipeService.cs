@@ -1,4 +1,5 @@
 using System.Text.Json;
+using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Domain;
 using VisionWorkbench.Persistence;
 
@@ -35,7 +36,7 @@ public sealed class RecipeService(TaskRepository tasks)
         return recipe is null ? null : (entity, recipe);
     }
 
-    /// <summary>保存：校验规则 JSON 可序列化、相机与插件非空（CFG-004）。</summary>
+    /// <summary>保存：校验规则 JSON、输入源路径、相机和插件配置（CFG-004）。</summary>
     public async Task<TaskEntity> SaveAsync(Recipe recipe, long? existingId = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(recipe);
@@ -47,9 +48,32 @@ public sealed class RecipeService(TaskRepository tasks)
         {
             throw new ArgumentException("工位编号不能超过 64 个字符");
         }
-        if (string.IsNullOrWhiteSpace(recipe.CameraProviderId) || string.IsNullOrWhiteSpace(recipe.CameraDeviceId))
+        var providerId = recipe.CameraProviderId?.Trim() ?? "";
+        var deviceId = recipe.CameraDeviceId?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(deviceId))
         {
-            throw new ArgumentException("必须选择相机（CFG-004）");
+            throw new ArgumentException(providerId switch
+            {
+                "image-folder" => "请选择有效的离线图片目录（CFG-004）",
+                "video-file" => "请选择有效的视频文件（CFG-004）",
+                _ => "必须选择相机（CFG-004）",
+            });
+        }
+        if (string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase)
+            && !Directory.Exists(deviceId))
+        {
+            throw new ArgumentException("离线图片目录不存在，请重新选择有效目录（CFG-004）");
+        }
+        if (string.Equals(providerId, "video-file", StringComparison.OrdinalIgnoreCase)
+            && !File.Exists(deviceId))
+        {
+            throw new ArgumentException("视频文件不存在，请重新选择有效文件（CFG-004）");
+        }
+        if (string.Equals(providerId, "network", StringComparison.OrdinalIgnoreCase)
+            && !(Uri.TryCreate(deviceId, UriKind.Absolute, out var networkUri)
+                 && networkUri.Scheme is "rtsp" or "rtsps" or "http" or "https"))
+        {
+            throw new ArgumentException("请输入有效的网络相机地址，例如 rtsp:// 或 http:// 地址（CFG-004）");
         }
         if (string.IsNullOrWhiteSpace(recipe.PluginId))
         {
@@ -89,8 +113,8 @@ public sealed class RecipeService(TaskRepository tasks)
             ? $"ST-{Guid.NewGuid():N}"[..11].ToUpperInvariant()
             : recipe.StationCode.Trim();
         entity.Description = recipe.Description;
-        entity.CameraProviderId = recipe.CameraProviderId;
-        entity.CameraDeviceId = recipe.CameraDeviceId;
+        entity.CameraProviderId = providerId;
+        entity.CameraDeviceId = deviceId;
         entity.PluginId = recipe.PluginId;
         entity.PluginVersion = recipe.PluginVersion;
         entity.SettingsJson = string.IsNullOrWhiteSpace(recipe.SettingsJson) ? "{}" : recipe.SettingsJson;
@@ -104,7 +128,8 @@ public sealed class RecipeService(TaskRepository tasks)
             || recipe.Behavior.Enabled
             || recipe.Behavior.Zones.Count > 0
             || recipe.PostProcess.Mode != PostProcessMode.VisualRules
-            || !string.IsNullOrWhiteSpace(recipe.PostProcess.Script);
+            || !string.IsNullOrWhiteSpace(recipe.PostProcess.Script)
+            || recipe.CameraParameters is not null;
         entity.RegionsJson = hasRegions
             ? JsonSerializer.Serialize(new
             {
@@ -116,6 +141,7 @@ public sealed class RecipeService(TaskRepository tasks)
                 Mode = recipe.CountingMode.ToString(),
                 Line = recipe.CountingLine,
                 ExecutionProvider = recipe.ExecutionProvider,
+                CameraParameters = recipe.CameraParameters,
                 Behavior = recipe.Behavior,
                 PostProcess = recipe.PostProcess,
             }, JsonOptions)
@@ -145,6 +171,7 @@ public sealed class RecipeService(TaskRepository tasks)
         var mode = CountingMode.Snapshot;
         CountingLineConfig? line = null;
         var executionProvider = "cpu";
+        CameraParameterSet? cameraParameters = null;
         var behavior = new BehaviorRecognitionConfig();
         var postProcess = new PostProcessConfig();
         SopBinding? sop = null;
@@ -168,6 +195,7 @@ public sealed class RecipeService(TaskRepository tasks)
                 }
                 line = doc?.Line;
                 executionProvider = doc?.ExecutionProvider is "cuda" ? "cuda" : "cpu";
+                cameraParameters = doc?.CameraParameters;
                 behavior = doc?.Behavior ?? new BehaviorRecognitionConfig();
                 postProcess = doc?.PostProcess ?? new PostProcessConfig();
             }
@@ -195,6 +223,7 @@ public sealed class RecipeService(TaskRepository tasks)
             Description = entity.Description ?? "",
             CameraProviderId = entity.CameraProviderId,
             CameraDeviceId = entity.CameraDeviceId,
+            CameraParameters = cameraParameters,
             PluginId = entity.PluginId,
             PluginVersion = entity.PluginVersion,
             ExecutionProvider = executionProvider,
@@ -218,6 +247,7 @@ public sealed class RecipeService(TaskRepository tasks)
         CountingMode? Mode,
         CountingLineConfig? Line,
         string? ExecutionProvider,
+        CameraParameterSet? CameraParameters,
         BehaviorRecognitionConfig? Behavior,
         PostProcessConfig? PostProcess);
 

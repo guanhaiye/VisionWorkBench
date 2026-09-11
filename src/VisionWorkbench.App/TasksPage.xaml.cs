@@ -131,6 +131,7 @@ public partial class TasksPage : UserControl
         {
             SelectSopTaskType();
             SelectSopDefinition(recipe.Sop);
+            SelectSopRunMode(recipe.Sop.RunMode);
         }
         else
         {
@@ -142,6 +143,7 @@ public partial class TasksPage : UserControl
         }
         DeviceText.Text = recipe.CameraDeviceId;
         SelectInputSource(recipe.CameraProviderId, recipe.CameraDeviceId);
+        LoadHikvisionParameters(recipe.CameraParameters);
         UpdateDevicePreview();
         PluginCombo.SelectedItem = recipe.PluginId;
         if (PluginCombo.SelectedItem is null)
@@ -203,8 +205,10 @@ public partial class TasksPage : UserControl
         DescriptionText.Text = "";
         SelectTaskType(null);
         SopCombo.SelectedIndex = -1;
+        SelectSopRunMode(SopRunMode.StrictOrder);
         DeviceText.Text = "";
         SelectInputSource("image-folder", "");
+        LoadHikvisionParameters(null);
         UpdateDevicePreview();
         PluginCombo.SelectedIndex = PluginCombo.Items.Count > 0 ? 0 : -1;
         SelectExecutionProvider(AppServices.Instance.Settings.ExecutionProvider);
@@ -315,6 +319,16 @@ public partial class TasksPage : UserControl
         }
         string settingsJson;
         BehaviorRecognitionConfig behavior;
+        CameraParameterSet? cameraParameters;
+        try
+        {
+            cameraParameters = BuildHikvisionParameters();
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"海康相机参数无效：{ex.Message}", "配置校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         SopBinding? sop = null;
         string pluginId;
         string executionProvider;
@@ -340,7 +354,7 @@ public partial class TasksPage : UserControl
             {
                 DefinitionId = definition.Id,
                 Version = definition.Version,
-                RunMode = execution?.RunMode ?? SopRunMode.StrictOrder,
+                RunMode = SelectedSopRunMode(),
                 Definition = definition,
             };
             taskType = stepExecution.TaskType;
@@ -390,6 +404,7 @@ public partial class TasksPage : UserControl
             Description = DescriptionText.Text,
             CameraProviderId = SelectedProviderId(),
             CameraDeviceId = SelectedDeviceId(),
+            CameraParameters = cameraParameters,
             PluginId = pluginId,
             ExecutionProvider = executionProvider,
             TaskType = taskType,
@@ -725,6 +740,27 @@ public partial class TasksPage : UserControl
         SopCombo.SelectedItem = option;
     }
 
+    private SopRunMode SelectedSopRunMode()
+    {
+        return Enum.TryParse<SopRunMode>(
+            (SopRunModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            ignoreCase: true,
+            out var mode)
+            ? mode
+            : SopRunMode.StrictOrder;
+    }
+
+    private void SelectSopRunMode(SopRunMode mode)
+    {
+        if (SopRunModeCombo is null)
+        {
+            return;
+        }
+        SopRunModeCombo.SelectedItem = SopRunModeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), mode.ToString(), StringComparison.OrdinalIgnoreCase))
+            ?? SopRunModeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+    }
+
     private static SopStepExecution? GetFirstSopStepExecution(SopDefinition definition)
     {
         var stepExecution = definition.Steps
@@ -868,15 +904,17 @@ public partial class TasksPage : UserControl
     {
         var sources = new List<InputSourceOption>
         {
-            new("离线图片目录（image-folder）", "image-folder", ""),
-            new("视频文件（video-file）", "video-file", ""),
+            new("离线图片目录", "image-folder", ""),
+            new("视频文件", "video-file", ""),
+            new("网络相机", "network", ""),
+            new("海康工业相机", "hikvision", ""),
         };
         try
         {
             var cameras = await AppServices.Instance.Cameras.DiscoverAllAsync(CancellationToken.None);
             sources.AddRange(cameras
                 .Select(camera => new InputSourceOption(
-                    $"{camera.DisplayName}（{camera.ProviderId}/{camera.DeviceId}）",
+                    camera.DisplayName,
                     camera.ProviderId,
                     camera.DeviceId))
                 .DistinctBy(source => $"{source.ProviderId}/{source.DeviceId}", StringComparer.OrdinalIgnoreCase));
@@ -903,7 +941,7 @@ public partial class TasksPage : UserControl
         if (selected is null)
         {
             selected = new InputSourceOption(
-                $"未发现设备（{providerId}/{deviceId}）", providerId, deviceId);
+                "未发现相机", providerId, deviceId);
             options.Add(selected);
             ProviderCombo.ItemsSource = options;
         }
@@ -949,19 +987,41 @@ public partial class TasksPage : UserControl
         string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase)
         || string.Equals(providerId, "video-file", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsNetworkInputSource(string providerId) =>
+        string.Equals(providerId, "network", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsHikvisionInputSource(string providerId) =>
+        string.Equals(providerId, "hikvision", StringComparison.OrdinalIgnoreCase);
+
     private string SelectedDeviceId()
     {
         var source = ProviderCombo.SelectedItem as InputSourceOption;
-        return source is not null && !IsPathInputSource(source.ProviderId)
-            ? source.DeviceId
-            : DeviceText.Text.Trim();
+        if (source is null || IsPathInputSource(source.ProviderId))
+        {
+            return DeviceText.Text.Trim();
+        }
+        return IsNetworkInputSource(source.ProviderId)
+            ? DeviceText.Text.Trim()
+            : source.DeviceId;
     }
 
     private void UpdateInputSourceFields()
     {
         var providerId = SelectedProviderId();
         var isPathSource = IsPathInputSource(providerId);
-        DeviceText.Visibility = isPathSource ? Visibility.Visible : Visibility.Collapsed;
+        DevicePathLabel.Text = providerId switch
+        {
+            "image-folder" => "图片目录：",
+            "video-file" => "视频文件：",
+            "network" => "网络地址：",
+            _ => "设备：",
+        };
+        DeviceText.Visibility = isPathSource || IsNetworkInputSource(providerId)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        HikvisionCameraSettingsGroup.Visibility = IsHikvisionInputSource(providerId)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         BrowseDeviceButton.Visibility = string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase)
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -1001,7 +1061,7 @@ public partial class TasksPage : UserControl
             var deviceId = SelectedDeviceId();
             CameraPreviewStatusText.Visibility = Visibility.Visible;
             CameraPreviewStatusText.Text = string.IsNullOrWhiteSpace(deviceId)
-                ? "未选择相机"
+                ? IsNetworkInputSource(providerId) ? "未填写网络地址" : "未选择相机"
                 : "正在打开相机...";
             if (string.IsNullOrWhiteSpace(deviceId))
             {
@@ -1034,7 +1094,17 @@ public partial class TasksPage : UserControl
                 _cameraPreview.Render(CameraPreviewImage, args.Frame, maxFps: 15);
                 CameraPreviewStatusText.Visibility = Visibility.Collapsed;
             });
-            await session.OpenAsync(new CameraOpenOptions { DesiredFps = 15 }, cancellationToken);
+            CameraParameterSet? hikParameters = null;
+            if (IsHikvisionInputSource(providerId))
+            {
+                try { hikParameters = BuildHikvisionParameters(); }
+                catch { /* 输入框正在编辑时，预览使用相机默认值；保存时再做严格校验。 */ }
+            }
+            await session.OpenAsync(
+                AppServices.Instance.ApplyCameraDefaults(
+                    descriptor,
+                    new CameraOpenOptions { DesiredFps = 15, Parameters = hikParameters }),
+                cancellationToken);
             if (session.State == CameraSessionState.Faulted)
             {
                 return;
@@ -1196,8 +1266,16 @@ public partial class TasksPage : UserControl
         RequestCameraPreviewRefresh();
         if (!string.Equals(providerId, "image-folder", StringComparison.OrdinalIgnoreCase))
         {
-            DevicePreviewText.Text = "当前输入源不是离线图片目录";
+            DevicePreviewText.Text = IsNetworkInputSource(providerId)
+                ? "请输入网络相机地址，例如 rtsp://用户名:密码@地址:端口/路径"
+                : "当前输入源不是离线图片目录";
             BrowseDeviceButton.IsEnabled = false;
+            if (IsNetworkInputSource(providerId)
+                && Uri.TryCreate(DeviceText.Text.Trim(), UriKind.Absolute, out var uri)
+                && uri.Scheme is "rtsp" or "rtsps" or "http" or "https")
+            {
+                DevicePreviewText.Text = "网络相机地址已填写，保存后将进行连接测试";
+            }
             return;
         }
         BrowseDeviceButton.IsEnabled = RolePolicy.CanEditRecipe;
@@ -1212,6 +1290,51 @@ public partial class TasksPage : UserControl
         var count = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
             .Count(file => extensions.Contains(Path.GetExtension(file)));
         DevicePreviewText.Text = $"目录有效：{count} 张图片（仅读取当前目录，不递归子目录）";
+    }
+
+    private CameraParameterSet? BuildHikvisionParameters()
+    {
+        if (!IsHikvisionInputSource(SelectedProviderId())) return null;
+        static int? OptionalInt(string text, string label)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value <= 0)
+                throw new InvalidOperationException($"{label}必须是正整数");
+            return value;
+        }
+        static double? OptionalDouble(string text, string label)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) || value <= 0)
+                throw new InvalidOperationException($"{label}必须是正数");
+            return value;
+        }
+        var triggerOn = string.Equals((HikTriggerModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), "on", StringComparison.OrdinalIgnoreCase);
+        return new CameraParameterSet
+        {
+            Width = OptionalInt(HikWidthText.Text, "宽度"),
+            Height = OptionalInt(HikHeightText.Text, "高度"),
+            FrameRate = OptionalDouble(HikFrameRateText.Text, "帧率"),
+            ExposureTimeUs = OptionalDouble(HikExposureText.Text, "曝光时间"),
+            GainDb = OptionalDouble(HikGainText.Text, "增益"),
+            TriggerMode = triggerOn,
+            TriggerSource = (HikTriggerSourceCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+        };
+    }
+
+    private void LoadHikvisionParameters(CameraParameterSet? parameters)
+    {
+        HikWidthText.Text = parameters?.Width?.ToString(CultureInfo.InvariantCulture) ?? "";
+        HikHeightText.Text = parameters?.Height?.ToString(CultureInfo.InvariantCulture) ?? "";
+        HikFrameRateText.Text = parameters?.FrameRate?.ToString("0.###", CultureInfo.InvariantCulture) ?? "";
+        HikExposureText.Text = parameters?.ExposureTimeUs?.ToString("0.###", CultureInfo.InvariantCulture) ?? "";
+        HikGainText.Text = parameters?.GainDb?.ToString("0.###", CultureInfo.InvariantCulture) ?? "";
+        HikTriggerModeCombo.SelectedItem = HikTriggerModeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), parameters?.TriggerMode == true ? "on" : "off", StringComparison.OrdinalIgnoreCase))
+            ?? HikTriggerModeCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        HikTriggerSourceCombo.SelectedItem = HikTriggerSourceCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), parameters?.TriggerSource ?? "Line0", StringComparison.OrdinalIgnoreCase))
+            ?? HikTriggerSourceCombo.Items.OfType<ComboBoxItem>().FirstOrDefault();
     }
 
     private bool IsYoloPlugin => string.Equals(

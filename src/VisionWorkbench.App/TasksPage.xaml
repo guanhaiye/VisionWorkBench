@@ -54,6 +54,7 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="已发布SOP：" VerticalAlignment="Center" />
                                 <ComboBox x:Name="SopCombo" Grid.Column="1" Margin="8,2,0,2"
@@ -62,14 +63,20 @@
                                 <TextBlock x:Name="SopBindingHintText" Grid.Row="1" Grid.Column="1"
                                            Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"
                                            Margin="8,4,0,2"
-                                           Text="请先在“数据与模型 → SOP流程制作与配置”中保存并发布SOP，再在这里选择。" />
+                                           Text="SOP 页面只维护流程和步骤模型；输入源、设备/路径及运行模式在本任务中配置。" />
+                                <TextBlock Grid.Row="2" Text="运行模式：" VerticalAlignment="Center" />
+                                <ComboBox x:Name="SopRunModeCombo" Grid.Row="2" Grid.Column="1" Margin="8,2,0,2">
+                                    <ComboBoxItem Content="严格按顺序" Tag="StrictOrder" IsSelected="True" />
+                                    <ComboBoxItem Content="允许跳步" Tag="AllowSkip" />
+                                    <ComboBoxItem Content="人工确认" Tag="ManualReview" />
+                                </ComboBox>
                             </Grid>
                         </GroupBox>
                         <TextBlock Text="说明" />
                         <TextBox x:Name="DescriptionText" Margin="0,2,0,8" />
                     </StackPanel>
                 </GroupBox>
-                <GroupBox Header="输入源（支持离线图片目录）">
+                <GroupBox Header="输入源（图片、视频、网络相机或 USB 相机）">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -82,10 +89,10 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Provider ID：" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="输入源：" VerticalAlignment="Center" />
                         <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ProviderCombo" Margin="0,2,0,6"
                                   DisplayMemberPath="DisplayName" SelectionChanged="ProviderCombo_SelectionChanged" />
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="图片目录：" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" x:Name="DevicePathLabel" Text="图片目录：" VerticalAlignment="Center" />
                         <TextBox Grid.Row="1" Grid.Column="1" x:Name="DeviceText" Margin="0,2,4,6"
                                  TextChanged="InputSourceTextChanged" />
                         <Button Grid.Row="1" Grid.Column="2" x:Name="BrowseDeviceButton"
@@ -104,6 +111,44 @@
                         </Border>
                         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="DevicePreviewText"
                                    Foreground="#666" Text="尚未选择图片目录" Margin="0,0,0,6" />
+                    </Grid>
+                </GroupBox>
+                <GroupBox x:Name="HikvisionCameraSettingsGroup" Header="海康相机参数（可选）" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="宽度" VerticalAlignment="Center" />
+                        <TextBox x:Name="HikWidthText" Grid.Column="1" Margin="6,2,14,4" />
+                        <TextBlock Grid.Column="2" Text="高度" VerticalAlignment="Center" />
+                        <TextBox x:Name="HikHeightText" Grid.Column="3" Margin="6,2,14,4" />
+                        <TextBlock Grid.Column="4" Text="帧率" VerticalAlignment="Center" />
+                        <TextBox x:Name="HikFrameRateText" Grid.Column="5" Margin="6,2,0,4" />
+                        <TextBlock Grid.Row="1" Text="曝光（μs）" VerticalAlignment="Center" />
+                        <TextBox x:Name="HikExposureText" Grid.Row="1" Grid.Column="1" Margin="6,2,14,4" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="增益（dB）" VerticalAlignment="Center" />
+                        <TextBox x:Name="HikGainText" Grid.Row="1" Grid.Column="3" Margin="6,2,14,4" />
+                        <TextBlock Grid.Row="1" Grid.Column="4" Text="触发模式" VerticalAlignment="Center" />
+                        <ComboBox x:Name="HikTriggerModeCombo" Grid.Row="1" Grid.Column="5" Margin="6,2,0,4">
+                            <ComboBoxItem Content="连续采集" Tag="off" IsSelected="True" />
+                            <ComboBoxItem Content="硬件/软件触发" Tag="on" />
+                        </ComboBox>
+                        <TextBlock Grid.Row="2" Text="触发源" VerticalAlignment="Center" />
+                        <ComboBox x:Name="HikTriggerSourceCombo" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Margin="6,2,14,2">
+                            <ComboBoxItem Content="线路 0" Tag="Line0" IsSelected="True" />
+                            <ComboBoxItem Content="软件触发" Tag="Software" />
+                        </ComboBox>
+                        <TextBlock Grid.Row="2" Grid.Column="4" Grid.ColumnSpan="2" Text="留空表示使用相机当前参数；具体上限由相机型号决定。" Foreground="#666" TextWrapping="Wrap" VerticalAlignment="Center" />
                     </Grid>
                 </GroupBox>
                 <GroupBox x:Name="AlgorithmGroup" Header="算法插件">

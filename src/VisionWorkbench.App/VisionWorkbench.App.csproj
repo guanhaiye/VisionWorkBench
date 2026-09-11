@@ -36,6 +36,7 @@
   <ItemGroup>
     <ProjectReference Include="..\VisionWorkbench.Application\VisionWorkbench.Application.csproj" />
     <ProjectReference Include="..\VisionWorkbench.Cameras.Files\VisionWorkbench.Cameras.Files.csproj" />
+    <ProjectReference Include="..\VisionWorkbench.Cameras.Hikvision\VisionWorkbench.Cameras.Hikvision.csproj" />
     <ProjectReference Include="..\VisionWorkbench.Cameras.Usb\VisionWorkbench.Cameras.Usb.csproj" />
   </ItemGroup>
 </Project>

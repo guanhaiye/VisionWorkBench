@@ -13,13 +13,14 @@ public sealed class TcpTaskExecutionService(AppServices services)
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken)
             ?? throw new InvalidOperationException($"任务不存在或配置无效: {task.Name}");
         var recipe = found.Recipe;
-        var options = new CameraOpenOptions { FrameIntervalMs = 50, Loop = false, MaxFrames = 1 };
         var descriptor = new CameraDescriptor
         {
             ProviderId = recipe.CameraProviderId,
             DeviceId = recipe.CameraDeviceId,
             DisplayName = recipe.CameraDeviceId,
         };
+        var options = services.ApplyCameraDefaults(descriptor,
+            new CameraOpenOptions { FrameIntervalMs = 50, Loop = false, MaxFrames = 1, Parameters = recipe.CameraParameters });
         var camera = await services.Cameras.OpenSessionAsync(descriptor, options, cancellationToken);
         var algorithm = await services.AlgorithmManager.CreateSessionAsync(recipe.PluginId, cancellationToken);
         var run = new DetectionRunService(services.Records, services.TempImages,

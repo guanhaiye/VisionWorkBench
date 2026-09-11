@@ -9,6 +9,7 @@ using VisionWorkbench.Application;
 using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Cameras.Files;
+using VisionWorkbench.Cameras.Hikvision;
 using VisionWorkbench.Cameras.Usb;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Infrastructure.Imaging;
@@ -64,6 +65,8 @@ public sealed class AppSettings
     public List<long> LiveTaskIds { get; set; } = [];
     /// <summary>实时检测页面按任务保存的运行时 ROI 覆盖设置。</summary>
     public Dictionary<long, NormalizedRect?> LiveRois { get; set; } = [];
+    /// <summary>按 Provider 与设备 ID 保存的工业相机默认参数。</summary>
+    public Dictionary<string, CameraParameterSet> CameraParameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private static string FindProjectRoot()
     {
@@ -277,6 +280,8 @@ public sealed class AppServices
         [
             new ImageFolderProvider(loggerFactory.CreateLogger<ImageFolderProvider>()),
             new VideoFileProvider(loggerFactory.CreateLogger<VideoFileProvider>()),
+            new NetworkCameraProvider(loggerFactory.CreateLogger<NetworkCameraProvider>()),
+            new HikvisionCameraProvider(loggerFactory.CreateLogger<HikvisionCameraProvider>()),
             new UsbCameraProvider(loggerFactory.CreateLogger<UsbCameraProvider>()),
         ],
             loggerFactory.CreateLogger<CameraRegistry>());
@@ -340,6 +345,52 @@ public sealed class AppServices
             try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch { }
         }
     }
+
+    /// <summary>读取设备管理中保存的相机默认参数。</summary>
+    public CameraParameterSet? GetCameraParameters(CameraDescriptor descriptor)
+    {
+        var key = BuildCameraSettingsKey(descriptor.ProviderId, descriptor.DeviceId);
+        return Settings.CameraParameters is not null && Settings.CameraParameters.TryGetValue(key, out var parameters)
+            ? parameters
+            : null;
+    }
+
+    /// <summary>保存设备管理中设置的相机默认参数。</summary>
+    public void SaveCameraParameters(CameraDescriptor descriptor, CameraParameterSet parameters)
+    {
+        Settings.CameraParameters ??= new Dictionary<string, CameraParameterSet>(StringComparer.OrdinalIgnoreCase);
+        Settings.CameraParameters[BuildCameraSettingsKey(descriptor.ProviderId, descriptor.DeviceId)] = parameters;
+        SaveUserSettings();
+    }
+
+    /// <summary>将设备管理保存的默认参数与调用方显式参数合并；调用方参数优先。</summary>
+    public CameraOpenOptions ApplyCameraDefaults(CameraDescriptor descriptor, CameraOpenOptions options)
+    {
+        var defaults = GetCameraParameters(descriptor);
+        if (defaults is null || !string.Equals(descriptor.ProviderId, "hikvision", StringComparison.OrdinalIgnoreCase))
+        {
+            return options;
+        }
+
+        var requested = options.Parameters;
+        var merged = new CameraParameterSet
+        {
+            Width = requested?.Width ?? defaults.Width,
+            Height = requested?.Height ?? defaults.Height,
+            FrameRate = requested?.FrameRate ?? defaults.FrameRate,
+            ExposureTimeUs = requested?.ExposureTimeUs ?? defaults.ExposureTimeUs,
+            GainDb = requested?.GainDb ?? defaults.GainDb,
+            TriggerMode = requested?.TriggerMode ?? defaults.TriggerMode,
+            TriggerSource = requested?.TriggerSource ?? defaults.TriggerSource,
+            PixelFormat = requested?.PixelFormat ?? defaults.PixelFormat,
+            AutoExposure = requested?.AutoExposure ?? defaults.AutoExposure,
+            AutoGain = requested?.AutoGain ?? defaults.AutoGain,
+        };
+        return options with { Parameters = merged };
+    }
+
+    private static string BuildCameraSettingsKey(string providerId, string deviceId) =>
+        $"{providerId.Trim().ToLowerInvariant()}::{deviceId.Trim()}";
 
     private void MigrateLegacyConfigFile(string fileName)
     {

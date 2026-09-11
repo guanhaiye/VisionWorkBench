@@ -6,6 +6,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <DockPanel Grid.Row="0" Margin="0,0,0,6">
@@ -21,7 +22,23 @@
                 <DataGridTextColumn Header="名称" Binding="{Binding DisplayName}" Width="260" />
             </DataGrid.Columns>
         </DataGrid>
-        <GroupBox Grid.Row="2" Header="测试预览（打开 5 秒后自动关闭）">
+        <GroupBox x:Name="HikvisionSettingsGroup" Grid.Row="2" Header="海康工业相机设置" Visibility="Collapsed" Margin="0,0,0,6">
+            <Grid Margin="8,4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="SelectedDeviceText" TextWrapping="Wrap" Foreground="#555" />
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="曝光时间（μs）" VerticalAlignment="Center" />
+                    <TextBox x:Name="ExposureText" Width="140" Margin="8,0,8,0" />
+                    <Button Content="设置曝光" Click="ApplyExposure_Click" />
+                    <Button Content="保存设置" Click="SaveExposure_Click" Margin="8,0,0,0" />
+                    <TextBlock x:Name="ExposureStatusText" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#555" />
+                </StackPanel>
+            </Grid>
+        </GroupBox>
+        <GroupBox Grid.Row="3" Header="测试预览（打开 5 秒后自动关闭）">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />

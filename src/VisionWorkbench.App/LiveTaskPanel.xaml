@@ -87,45 +87,123 @@
 
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
                 <StackPanel>
-                    <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed">
+                    <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed"
+                            Background="#FFFDF5">
                         <StackPanel>
-                            <DockPanel Margin="0,0,0,8">
-                                <TextBlock Text="SOP 工序进度" Style="{StaticResource CardTitle}" />
-                                <TextBlock x:Name="SopProgressText" DockPanel.Dock="Right"
-                                           FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" />
-                            </DockPanel>
-                            <TextBlock x:Name="SopCurrentStepText" Text="等待开始"
-                                       TextWrapping="Wrap" Margin="0,0,0,8" />
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <UniformGrid Columns="4" Margin="0,0,0,8">
+                                <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="0,0,3,0">
+                                    <StackPanel>
+                                        <TextBlock Text="当前步骤" Style="{StaticResource MetricCaption}" />
+                                        <TextBlock x:Name="SopMetricCurrentStep" Text="--" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="3,0">
+                                    <StackPanel>
+                                        <TextBlock Text="已完成" Style="{StaticResource MetricCaption}" />
+                                        <TextBlock x:Name="SopMetricCompleted" Text="0 / 0" FontSize="16"
+                                                   FontWeight="SemiBold" Margin="0,1,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="3,0">
+                                    <StackPanel>
+                                        <TextBlock Text="步骤耗时" Style="{StaticResource MetricCaption}" />
+                                        <TextBlock x:Name="SopMetricElapsed" Text="--" FontWeight="SemiBold"
+                                                   Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="3,0,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="异常" Style="{StaticResource MetricCaption}" />
+                                        <TextBlock x:Name="SopMetricExceptions" Text="0" FontSize="16"
+                                                   FontWeight="SemiBold" Foreground="#C65D16" Margin="0,1,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <Border Background="#FFF7E8" BorderBrush="#F2D6A2" BorderThickness="1"
+                                    CornerRadius="8" Padding="9" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="本轮外观质量检测" Style="{StaticResource CardTitle}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Width="28" Height="28" Fill="#E87524" Margin="0,0,8,0" />
+                                        <TextBlock x:Name="SopCurrentQualityText" Text="等待步骤确认"
+                                                   VerticalAlignment="Center" TextWrapping="Wrap" />
+                                        <Border x:Name="SopCurrentQualityBadge" Background="#E87524"
+                                                CornerRadius="5" Padding="7,3" Margin="8,0,0,0">
+                                            <TextBlock x:Name="SopCurrentQualityBadgeText" Text="等待"
+                                                       Foreground="White" FontSize="11" />
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="{DynamicResource SurfaceAltBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                                    BorderThickness="1" CornerRadius="8" Padding="8" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="上一轮外观质量检测" Style="{StaticResource CardTitle}" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0" Width="64" Height="48" Background="#E7DED5"
+                                                CornerRadius="4" HorizontalAlignment="Left">
+                                            <Image x:Name="SopPreviousImage" Stretch="Uniform" Visibility="Collapsed" />
+                                        </Border>
+                                        <TextBlock x:Name="SopPreviousResultText" Grid.Column="1" Text="暂无上一轮结果"
+                                                   VerticalAlignment="Center" TextWrapping="Wrap" Margin="4,0,0,0"
+                                                   Foreground="{DynamicResource MutedTextBrush}" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="{DynamicResource SurfaceAltBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                                    BorderThickness="1" CornerRadius="8" Padding="8" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,7">
+                                        <TextBlock Text="当前产品步骤" Style="{StaticResource CardTitle}" />
+                                    </DockPanel>
+                                    <ItemsControl x:Name="SopStepsItems">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,2">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="34" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="28" Height="28" CornerRadius="14"
+                                                            Background="{Binding Brush}" HorizontalAlignment="Left">
+                                                        <TextBlock Text="{Binding Indicator}" Foreground="White"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                   FontWeight="Bold" />
+                                                    </Border>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis" Margin="4,0,4,0" />
+                                                    <Border Grid.Column="2" Background="{Binding Brush}" CornerRadius="5"
+                                                            Padding="6,3" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding StatusText}" Foreground="White" FontSize="11" />
+                                                    </Border>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+
+                            <StackPanel Orientation="Horizontal">
                                 <Button x:Name="StartNextSopButton" Content="开始下一件" Click="StartNextSop_Click"
                                         IsEnabled="False" Padding="9,3" />
                                 <Button x:Name="ResetSopButton" Content="复位当前产品" Click="ResetSop_Click"
                                         IsEnabled="False" Padding="9,3" />
+                                <TextBlock x:Name="SopCurrentStepText" Text="等待开始" Visibility="Collapsed" />
                                 <TextBlock x:Name="SopCycleText" Text="" Foreground="{DynamicResource MutedTextBrush}"
                                            VerticalAlignment="Center" Margin="8,0,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                            <ItemsControl x:Name="SopStepsItems">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="0,2">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="30" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="{Binding Indicator}"
-                                                       Foreground="{Binding Brush}" FontWeight="Bold" />
-                                            <TextBlock Grid.Column="1" Text="{Binding Name}"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Grid.Column="2" Text="{Binding StatusText}"
-                                                       Foreground="{Binding Brush}" Margin="8,0,0,0" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
                         </StackPanel>
                     </Border>
-                    <Border Style="{StaticResource InfoCard}">
+                    <Border x:Name="DecisionCard" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="当前判定" Style="{StaticResource CardTitle}" />
                             <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="8" Margin="0,0,0,8">
@@ -137,7 +215,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource InfoCard}">
+                    <Border x:Name="ResultCard" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="检测结果" Style="{StaticResource CardTitle}" />
                             <Grid>
@@ -158,7 +236,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource InfoCard}">
+                    <Border x:Name="StatsCard" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="累计统计" Style="{StaticResource CardTitle}" />
                             <Grid>
@@ -185,7 +263,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource InfoCard}">
+                    <Border x:Name="LogCard" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="检测日志（最近 100 条）" Style="{StaticResource CardTitle}" />
                             <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="6" Padding="8">

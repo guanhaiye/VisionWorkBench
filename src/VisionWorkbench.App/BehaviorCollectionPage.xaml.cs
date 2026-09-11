@@ -228,11 +228,13 @@ public partial class BehaviorCollectionPage : UserControl
         if (CameraCombo.SelectedItem is not CameraDescriptor descriptor) return;
         try
         {
+            var options = AppServices.Instance.ApplyCameraDefaults(descriptor,
+                new CameraOpenOptions { DesiredFps = SelectedFps() });
             _session = await AppServices.Instance.Cameras.OpenSessionAsync(descriptor,
-                new CameraOpenOptions { DesiredFps = SelectedFps() }, CancellationToken.None);
+                options, CancellationToken.None);
             _session.FrameReceived += Session_FrameReceived;
             _session.Faulted += Session_Faulted;
-            await _session.OpenAsync(new CameraOpenOptions { DesiredFps = SelectedFps() }, CancellationToken.None);
+            await _session.OpenAsync(options, CancellationToken.None);
             await _session.StartAsync(CancellationToken.None);
             RecordButton.IsEnabled = true;
             PreviewHintText.Visibility = Visibility.Collapsed;
