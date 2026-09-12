@@ -473,7 +473,7 @@
             </Border>
         </Popup>
         <Popup x:Name="HelpMenuPopup" PlacementTarget="{Binding ElementName=HelpButton}" Placement="Bottom"
-               HorizontalOffset="-82" VerticalOffset="4" StaysOpen="True" AllowsTransparency="True">
+               HorizontalOffset="-82" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True">
             <Border Width="250" Background="{DynamicResource SurfaceBrush}"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                     CornerRadius="8" Padding="8">

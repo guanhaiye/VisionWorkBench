@@ -73,6 +73,7 @@ public partial class Shell : Window
         WindowState = WindowState.Normal;
         SourceInitialized += Shell_SourceInitialized;
         StateChanged += (_, _) => UpdateMaximizeButton();
+        Deactivated += Shell_Deactivated;
         _pages["welcome"] = () => new WelcomePage();
         _pages["live"] = () => new LivePage();
         _pages["tasks"] = () => new TasksPage();
@@ -716,6 +717,13 @@ public partial class Shell : Window
     {
         HelpButton_Click(sender, e);
         e.Handled = true;
+    }
+
+    private void Shell_Deactivated(object? sender, EventArgs e)
+    {
+        // Popup 使用独立窗口句柄；主窗口失去焦点时显式关闭，避免它浮在其他软件上方。
+        HelpMenuPopup.IsOpen = false;
+        UserMenuPopup.IsOpen = false;
     }
 
     private void TopmostButton_Click(object sender, RoutedEventArgs e)
