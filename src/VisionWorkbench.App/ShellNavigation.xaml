@@ -120,6 +120,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="PasswordRevealButton" TargetType="Button">
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="EyeChrome" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="EyeChrome" Property="Background" Value="{DynamicResource AccentSoftBrush}"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="EyeChrome" Property="Opacity" Value="0.72"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         </ResourceDictionary>
     </Window.Resources>
     <Grid>
@@ -360,7 +386,24 @@
                     <TextBlock Text="用户名" />
                     <TextBox x:Name="LoginNameText" Margin="0,5,0,10" />
                     <TextBlock Text="密码" />
-                    <PasswordBox x:Name="LoginPasswordBox" Margin="0,5,0,8" MinHeight="32" />
+                    <Grid Margin="0,5,0,8" MinHeight="32">
+                        <PasswordBox x:Name="LoginPasswordBox" Padding="9,6,40,6" />
+                        <TextBox x:Name="LoginPasswordTextBox" Padding="9,6,40,6" Visibility="Collapsed" />
+                        <Button x:Name="ToggleLoginPasswordButton" Style="{StaticResource PasswordRevealButton}"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                ToolTip="显示密码" Click="ToggleLoginPassword_Click">
+                            <Grid Width="18" Height="18">
+                                <Path x:Name="ShowPasswordIcon" Data="M 1,9 C 4,3 14,3 17,9 C 14,15 4,15 1,9 Z"
+                                      Fill="Transparent" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.5" />
+                                <Ellipse Width="4" Height="4" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Path x:Name="HidePasswordIcon" Data="M 2,2 L 16,16" Visibility="Collapsed"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            </Grid>
+                        </Button>
+                    </Grid>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                         <CheckBox x:Name="RememberPasswordCheckBox" Content="记住密码" Margin="2,4,18,4"
                                   Checked="RememberPasswordOption_Changed"

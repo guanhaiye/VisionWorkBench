@@ -350,9 +350,11 @@ public partial class Shell : Window
         LoginNameText.Text = string.IsNullOrWhiteSpace(settings.RememberedLoginUserName)
             ? settings.OperatorName
             : settings.RememberedLoginUserName;
-        LoginPasswordBox.Password = settings.RememberLoginPassword
+        var password = settings.RememberLoginPassword
             ? UnprotectLoginPassword(settings.RememberedLoginPassword) ?? ""
             : "";
+        LoginPasswordBox.Password = password;
+        LoginPasswordTextBox.Text = password;
         _updatingLoginOptions = true;
         RememberPasswordCheckBox.IsChecked = settings.RememberLoginPassword;
         AutoLoginCheckBox.IsChecked = settings.AutoLogin;
@@ -496,7 +498,7 @@ public partial class Shell : Window
     {
         var settings = AppServices.Instance.Settings;
         var name = AccountRules.NormalizeUserName(LoginNameText.Text);
-        var password = LoginPasswordBox.Password;
+        var password = GetLoginPassword();
         var authentication = await AppServices.Instance.Identity.AuthenticateAsync(name, password);
         var account = FindAccount(settings, name);
         if (authentication.Succeeded && account is not null)
@@ -509,6 +511,35 @@ public partial class Shell : Window
         }
 
         ThemedMessageBox.Show(authentication.Reason, "用户登录", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private string GetLoginPassword() => LoginPasswordTextBox.Visibility == Visibility.Visible
+        ? LoginPasswordTextBox.Text
+        : LoginPasswordBox.Password;
+
+    private void ToggleLoginPassword_Click(object sender, RoutedEventArgs e)
+    {
+        var showPassword = LoginPasswordTextBox.Visibility != Visibility.Visible;
+        if (showPassword)
+        {
+            LoginPasswordTextBox.Text = LoginPasswordBox.Password;
+            LoginPasswordBox.Visibility = Visibility.Collapsed;
+            LoginPasswordTextBox.Visibility = Visibility.Visible;
+            LoginPasswordTextBox.Focus();
+            LoginPasswordTextBox.CaretIndex = LoginPasswordTextBox.Text.Length;
+        }
+        else
+        {
+            LoginPasswordBox.Password = LoginPasswordTextBox.Text;
+            LoginPasswordTextBox.Visibility = Visibility.Collapsed;
+            LoginPasswordBox.Visibility = Visibility.Visible;
+            LoginPasswordBox.Focus();
+        }
+
+        ShowPasswordIcon.Visibility = showPassword ? Visibility.Collapsed : Visibility.Visible;
+        HidePasswordIcon.Visibility = showPassword ? Visibility.Visible : Visibility.Collapsed;
+        ToggleLoginPasswordButton.ToolTip = showPassword ? "隐藏密码" : "显示密码";
+        e.Handled = true;
     }
 
     private void AvatarPreview_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
