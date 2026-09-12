@@ -12,6 +12,52 @@
         <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="Padding" Value="8,6" />
         </Style>
+        <Style x:Key="DisplayOptionsExpanderStyle" TargetType="Expander">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Expander">
+                        <Border Background="{DynamicResource SurfaceBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="0,6,6,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ContentPresenter x:Name="ExpandSite"
+                                                  Grid.Column="0"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  Visibility="Collapsed" />
+                                <ToggleButton x:Name="HeaderSite"
+                                              Grid.Column="1"
+                                              Content="{TemplateBinding Header}"
+                                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                              Background="Transparent"
+                                              BorderThickness="0"
+                                              Padding="0"
+                                              Focusable="False">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <ContentPresenter Content="{TemplateBinding Content}"
+                                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                              HorizontalAlignment="Stretch"
+                                                              VerticalAlignment="Stretch" />
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsExpanded" Value="True">
+                                <Setter TargetName="ExpandSite" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid Margin="8">
@@ -137,8 +183,11 @@
                         <TextBox x:Name="AnnotationDatasetNameText" IsReadOnly="True" Margin="0,2,0,6" />
                         <TextBlock Text="图片目录（仅读取）" />
                         <TextBox x:Name="AnnotationSourceRootText" IsReadOnly="True" TextWrapping="Wrap" Margin="0,2,0,6" />
-                        <TextBlock Text="识别类型" />
-                        <TextBox x:Name="AnnotationKindText" IsReadOnly="True" Margin="0,2,0,6" />
+                        <TextBlock Text="数据集目录（图片副本）" />
+                        <TextBox x:Name="AnnotationDatasetRootText" IsReadOnly="True" TextWrapping="Wrap" Margin="0,2,0,6" />
+                        <TextBlock Text="类别" />
+                        <TextBox x:Name="AnnotationClassesText" IsReadOnly="True" Margin="0,2,0,6" />
+                        <TextBlock x:Name="AnnotationKindText" Text="标注类型：未选择" TextWrapping="Wrap" Margin="0,0,0,6" />
                         <TextBlock Text="标注说明" />
                         <TextBlock x:Name="AnnotationDescriptionText"
                                    Text="为当前图片填写识别文本，保存后用于训练。"
@@ -158,48 +207,33 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <WrapPanel Grid.Row="0" Margin="0,0,0,6">
-                    <TextBlock Text="识别文本：" VerticalAlignment="Center" />
-                    <TextBlock Text="当前图片内容" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
-                </WrapPanel>
+                <ScrollViewer Grid.Row="0" MaxHeight="92" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,6">
+                    <WrapPanel>
+                        <TextBlock Text="标注类别：" VerticalAlignment="Center" />
+                        <ComboBox Width="150" IsEnabled="False" Margin="8,0,0,0">
+                            <ComboBoxItem x:Name="AnnotationKindOption" Content="条码" IsSelected="True" />
+                        </ComboBox>
+                        <Button Content="智能标注" IsEnabled="False" ToolTip="条码识别将在测试流程中执行" Margin="8,0,0,0" />
+                        <TextBlock Text="缩放：100%" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                    </WrapPanel>
+                </ScrollViewer>
 
                 <Grid Grid.Row="1">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <local:ImageViewer Grid.Row="0" Background="#202020" BorderThickness="0" Margin="0,0,0,8">
+                    <local:ImageViewer Background="#202020" BorderThickness="0">
                         <Border Background="#202020" BorderBrush="#888" BorderThickness="1">
                             <Image x:Name="AnnotationPreview" Stretch="Uniform" />
                         </Border>
                     </local:ImageViewer>
-
-                    <StackPanel Grid.Row="1" MaxHeight="190">
-                        <TextBlock Text="识别文本" FontWeight="Bold" />
-                        <TextBlock Text="为当前图片填写字符内容，保存后用于训练。"
-                                   TextWrapping="Wrap"
-                                   Foreground="{DynamicResource MutedTextBrush}"
-                                   Margin="0,4,0,8" />
-                        <TextBox x:Name="AnnotationText"
-                                 AcceptsReturn="True"
-                                 TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 MinHeight="90" />
-                    </StackPanel>
-
-                    <Expander Grid.Row="0"
-                              HorizontalAlignment="Left"
+                    <Expander HorizontalAlignment="Left"
                               VerticalAlignment="Top"
                               ExpandDirection="Right"
+                              Style="{StaticResource DisplayOptionsExpanderStyle}"
                               Panel.ZIndex="20">
                         <Expander.Header>
-                            <Border Background="{DynamicResource SurfaceBrush}"
-                                    BorderBrush="{DynamicResource BorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="0,6,6,0"
-                                    Padding="5,10">
+                            <Border Background="Transparent" BorderThickness="0" Padding="5,10">
                                 <TextBlock Text="显示设置"
                                            FontWeight="SemiBold"
                                            TextWrapping="Wrap"
@@ -207,26 +241,38 @@
                                            Width="20" />
                             </Border>
                         </Expander.Header>
-                        <Border Background="{DynamicResource SurfaceBrush}"
-                                BorderBrush="{DynamicResource BorderBrush}"
-                                BorderThickness="1"
-                                Padding="10">
+                        <Border Background="Transparent" BorderThickness="0" Padding="10">
                             <StackPanel>
                                 <TextBlock Text="显示面板" FontWeight="SemiBold" Margin="0,0,0,8" />
-                                <CheckBox Content="识别文本" IsChecked="True" />
+                                <CheckBox Content="识别信息" IsChecked="True" />
                                 <CheckBox Content="图片预览" IsChecked="True" Margin="0,6,0,0" />
                             </StackPanel>
                         </Border>
                     </Expander>
                 </Grid>
 
-                <TextBlock x:Name="AnnotationStatusText"
-                           Grid.Row="2"
-                           Foreground="Green"
-                           TextWrapping="Wrap"
-                           Margin="0,6,0,0" />
+                <TextBlock Grid.Row="2" Text="当前图片识别" FontWeight="Bold" Margin="0,6,0,0" />
+                <Border Grid.Row="3"
+                        Background="{DynamicResource InputBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        Padding="8,5"
+                        Margin="0,4,0,0">
+                    <StackPanel>
+                        <TextBlock Text="识别文本" FontWeight="Bold" />
+                        <TextBox x:Name="AnnotationText"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 MinHeight="74" />
+                    </StackPanel>
+                </Border>
             </Grid>
         </Grid>
+
+        <Border Grid.Row="2" BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,8,0,0">
+            <TextBlock x:Name="AnnotationStatusText" Foreground="Green" TextWrapping="Wrap" />
+        </Border>
 
         <Grid x:Name="TrainingPanel" Grid.Row="1" Visibility="Collapsed">
             <StackPanel>
@@ -288,8 +334,5 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="2" Visibility="Collapsed">
-            <TextBlock Text="" />
-        </Border>
     </Grid>
 </UserControl>
