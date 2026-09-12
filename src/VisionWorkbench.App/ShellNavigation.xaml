@@ -329,12 +329,19 @@
                             HorizontalContentAlignment="Stretch"
                             VerticalContentAlignment="Stretch"/>
         </Border>
+        <TextBlock x:Name="GlobalLogText" Grid.Row="1" Grid.Column="1"
+                   Width="500" Margin="0,0,28,22"
+                   HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                   Panel.ZIndex="100" Foreground="Green"
+                   TextWrapping="Wrap" IsHitTestVisible="False" />
+        <!-- Legacy global log panel is intentionally disabled; the shared log keeps the original text-only appearance. -->
+        <!--
         <Border x:Name="GlobalLogPanel" Grid.Row="1" Grid.Column="1"
                 Width="420" MaxHeight="184" Margin="0,0,28,28"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
                 Panel.ZIndex="100" Padding="12,9"
                 Background="#E51B222D" BorderBrush="{DynamicResource BorderBrush}"
-                BorderThickness="1" CornerRadius="8">
+                BorderThickness="1" CornerRadius="8" Visibility="Collapsed">
             <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.24" Color="#000000"/></Border.Effect>
             <DockPanel LastChildFill="True">
                 <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
@@ -364,6 +371,7 @@
                 </ListBox>
             </DockPanel>
         </Border>
+        -->
         <Popup x:Name="UserMenuPopup" PlacementTarget="{Binding ElementName=UserMenuButton}" Placement="Right"
                HorizontalOffset="8" VerticalOffset="0" StaysOpen="False" AllowsTransparency="True">
             <Border x:Name="UserPopupContentBorder" Width="330" Background="{DynamicResource SurfaceBrush}"

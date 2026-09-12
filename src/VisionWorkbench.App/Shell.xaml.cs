@@ -1,6 +1,5 @@
 using System.IO;
 using System.Diagnostics;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,8 +14,6 @@ using Microsoft.Win32;
 
 namespace VisionWorkbench.App;
 
-public sealed record GlobalLogEntry(string Timestamp, string Message);
-
 public partial class Shell : Window
 {
     private readonly Dictionary<string, Func<object>> _pages = new();
@@ -29,7 +26,6 @@ public partial class Shell : Window
     private string? _currentAccountName;
     private bool _isSuperAdmin;
     private bool _updatingLoginOptions;
-    private readonly ObservableCollection<GlobalLogEntry> _globalLogEntries = [];
     private readonly HashSet<DependencyObject> _monitoredGlobalLogElements = [];
     private static readonly DependencyPropertyDescriptor? TextBlockTextDescriptor =
         DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
@@ -53,7 +49,6 @@ public partial class Shell : Window
     public Shell()
     {
         InitializeComponent();
-        GlobalLogList.ItemsSource = _globalLogEntries;
         PreferApplicationThemeResources();
         ThemeManager.SyncWindowResources(this);
         AddHandler(System.Windows.Input.Mouse.PreviewMouseWheelEvent,
@@ -217,6 +212,9 @@ public partial class Shell : Window
                 dataModelPage.SelectCategory(category);
             }
             MonitorGlobalLogElements(PageHost);
+            Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Loaded,
+                new Action(() => MonitorGlobalLogElements(PageHost)));
             return;
         }
 
@@ -236,6 +234,9 @@ public partial class Shell : Window
             ThemeManager.ApplyPageTextBrush(pageElement);
         }
         MonitorGlobalLogElements(PageHost);
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(() => MonitorGlobalLogElements(PageHost)));
         if (page is LivePage live)
         {
             live.OnShown();
@@ -544,6 +545,11 @@ public partial class Shell : Window
             if (element is TextBlock textBlock)
             {
                 TextBlockTextDescriptor?.AddValueChanged(textBlock, GlobalLogElement_ValueChanged);
+                PublishGlobalLog(textBlock.Text);
+                if (ShouldHideLocalStatus(frameworkElement))
+                {
+                    textBlock.Visibility = Visibility.Collapsed;
+                }
             }
             else if (element is TextBox textBox)
             {
@@ -583,24 +589,13 @@ public partial class Shell : Window
         }
 
         var normalized = string.Join(' ', message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (string.Equals(_globalLogEntries.LastOrDefault()?.Message, normalized, StringComparison.Ordinal))
+        if (string.Equals(GlobalLogText.Text, normalized, StringComparison.Ordinal))
         {
             return;
         }
 
-        _globalLogEntries.Add(new GlobalLogEntry(DateTime.Now.ToString("HH:mm:ss"), normalized));
-        while (_globalLogEntries.Count > 8)
-        {
-            _globalLogEntries.RemoveAt(0);
-        }
-
-        if (GlobalLogList.Items.Count > 0)
-        {
-            GlobalLogList.ScrollIntoView(GlobalLogList.Items[^1]);
-        }
+        GlobalLogText.Text = normalized;
     }
-
-    private void ClearGlobalLog_Click(object sender, RoutedEventArgs e) => _globalLogEntries.Clear();
 
     private static bool IsGlobalLogElement(FrameworkElement element)
     {
@@ -615,6 +610,33 @@ public partial class Shell : Window
         while (source is not null)
         {
             if (ReferenceEquals(source, ancestor))
+            {
+                return true;
+            }
+
+            source = source is Visual || source is System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(source)
+                : LogicalTreeHelper.GetParent(source);
+        }
+
+        return false;
+    }
+
+    private static bool ShouldHideLocalStatus(FrameworkElement element)
+    {
+        if (!string.Equals(element.Name, "StatusText", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !IsInsideLicensePage(element);
+    }
+
+    private static bool IsInsideLicensePage(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is LicensePage)
             {
                 return true;
             }
