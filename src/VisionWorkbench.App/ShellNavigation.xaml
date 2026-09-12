@@ -127,7 +127,7 @@
             <Setter Property="MinHeight" Value="0"/>
             <Setter Property="Margin" Value="0,0,4,0"/>
             <Setter Property="Padding" Value="4"/>
-            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Focusable" Value="False"/>
@@ -139,7 +139,7 @@
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="EyeChrome" Property="Background" Value="{DynamicResource AccentSoftBrush}"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="EyeChrome" Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/></Trigger>
                             <Trigger Property="IsPressed" Value="True"><Setter TargetName="EyeChrome" Property="Opacity" Value="0.72"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -392,15 +392,22 @@
                         <Button x:Name="ToggleLoginPasswordButton" Style="{StaticResource PasswordRevealButton}"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
                                 ToolTip="显示密码" Click="ToggleLoginPassword_Click">
-                            <Grid Width="18" Height="18">
-                                <Path x:Name="ShowPasswordIcon" Data="M 1,9 C 4,3 14,3 17,9 C 14,15 4,15 1,9 Z"
+                            <Grid Width="20" Height="18">
+                                <Path x:Name="ShowPasswordIcon" Data="M 1,9 C 4,3 16,3 19,9 C 16,15 4,15 1,9 Z"
                                       Fill="Transparent" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.5" />
-                                <Ellipse Width="4" Height="4" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.7" />
+                                <Ellipse Width="4.5" Height="4.5" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                <Path x:Name="HidePasswordIcon" Data="M 2,2 L 16,16" Visibility="Collapsed"
-                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                <Grid x:Name="HidePasswordIcon" Visibility="Collapsed">
+                                    <Path Data="M 1,9 C 4,3 16,3 19,9 C 16,15 4,15 1,9 Z"
+                                          Fill="Transparent" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                          StrokeThickness="1.7" />
+                                    <Ellipse Width="4.5" Height="4.5" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <Path Data="M 2,2 L 18,16"
+                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                          StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                </Grid>
                             </Grid>
                         </Button>
                     </Grid>
