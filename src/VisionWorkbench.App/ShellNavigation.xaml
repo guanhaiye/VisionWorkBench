@@ -350,7 +350,10 @@
                 <StackPanel>
                     <TextBlock Text="用户管理" FontSize="18" FontWeight="Bold"/>
                     <TextBlock Text="登录信息仅保存在当前电脑" Foreground="#64748B" FontSize="11" Margin="0,3,0,14"/>
-                    <TextBlock Text="姓名"/><TextBox x:Name="UserNameText" Margin="0,5,0,10"/>
+                    <TextBlock Text="姓名"/>
+                    <TextBox x:Name="UserNameText" Margin="0,5,0,3" TextChanged="RegistrationUserName_TextChanged"/>
+                    <TextBlock x:Name="RegistrationUserNameError" Foreground="{DynamicResource DangerBrush}" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed" />
                     <TextBlock Text="角色"/>
                     <ComboBox x:Name="UserRoleCombo" Margin="0,5,0,12">
                         <ComboBoxItem Content="操作员" Tag="operator"/>
@@ -371,9 +374,15 @@
                     <TextBlock Text="操作员可执行任务；工程师可编辑任务；专家可修改高级参数。" Foreground="#64748B" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
                     <StackPanel x:Name="RegistrationPasswordPanel" Margin="0,0,0,12">
                         <TextBlock Text="密码" />
-                        <PasswordBox x:Name="RegistrationPasswordBox" Margin="0,5,0,8" MinHeight="32" />
+                        <PasswordBox x:Name="RegistrationPasswordBox" Margin="0,5,0,3" MinHeight="32"
+                                     PasswordChanged="RegistrationPasswordBox_PasswordChanged" />
+                        <TextBlock x:Name="RegistrationPasswordError" Foreground="{DynamicResource DangerBrush}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed" />
                         <TextBlock Text="确认密码" />
-                        <PasswordBox x:Name="RegistrationConfirmPasswordBox" Margin="0,5,0,0" MinHeight="32" />
+                        <PasswordBox x:Name="RegistrationConfirmPasswordBox" Margin="0,5,0,3" MinHeight="32"
+                                     PasswordChanged="RegistrationConfirmPasswordBox_PasswordChanged" />
+                        <TextBlock x:Name="RegistrationConfirmPasswordError" Foreground="{DynamicResource DangerBrush}" FontSize="11"
+                                   TextWrapping="Wrap" Visibility="Collapsed" />
                     </StackPanel>
                     <StackPanel x:Name="UserActionsPanel" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="退出登录" Click="Logout_Click" Style="{StaticResource UserSecondaryButton}"/>

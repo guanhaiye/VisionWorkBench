@@ -662,35 +662,35 @@ public partial class Shell : Window
         var name = AccountRules.NormalizeUserName(UserNameText.Text);
         if (!AccountRules.ValidateUserName(name, out var usernameError))
         {
-            ThemedMessageBox.Show(usernameError, "用户注册", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowRegistrationError(RegistrationUserNameError, usernameError);
+            UserNameText.Focus();
             return;
         }
         if (string.IsNullOrWhiteSpace(name))
         {
-            ThemedMessageBox.Show("请输入姓名", "用户管理", MessageBoxButton.OK, MessageBoxImage.Information);
+            ShowRegistrationError(RegistrationUserNameError, "请输入姓名");
+            UserNameText.Focus();
             return;
         }
         var settings = AppServices.Instance.Settings;
         var password = RegistrationPasswordBox.Password;
         if (!AccountRules.ValidatePassword(password, out var passwordError))
         {
-            ThemedMessageBox.Show(passwordError, "用户注册", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (password.Length < 4)
-        {
-            ThemedMessageBox.Show("密码至少需要 4 位。", "用户注册", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowRegistrationError(RegistrationPasswordError, passwordError);
+            RegistrationPasswordBox.Focus();
             return;
         }
         if (!string.Equals(password, RegistrationConfirmPasswordBox.Password, StringComparison.Ordinal))
         {
-            ThemedMessageBox.Show("两次输入的密码不一致。", "用户注册", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowRegistrationError(RegistrationConfirmPasswordError, "两次输入的密码不一致。");
+            RegistrationConfirmPasswordBox.Focus();
             return;
         }
         if (settings.Accounts.Any(account =>
                 string.Equals(account.UserName, name, StringComparison.OrdinalIgnoreCase)))
         {
-            ThemedMessageBox.Show("用户名已存在，请更换用户名。", "用户注册", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowRegistrationError(RegistrationUserNameError, "用户名已存在，请更换用户名。");
+            UserNameText.Focus();
             return;
         }
 
@@ -722,6 +722,27 @@ public partial class Shell : Window
         RefreshUserHeader();
         UserMenuPopup.IsOpen = false;
     }
+
+    private static void ShowRegistrationError(TextBlock target, string message)
+    {
+        target.Text = message;
+        target.Visibility = Visibility.Visible;
+    }
+
+    private static void ClearRegistrationError(TextBlock target)
+    {
+        target.Text = "";
+        target.Visibility = Visibility.Collapsed;
+    }
+
+    private void RegistrationUserName_TextChanged(object sender, TextChangedEventArgs e)
+        => ClearRegistrationError(RegistrationUserNameError);
+
+    private void RegistrationPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+        => ClearRegistrationError(RegistrationPasswordError);
+
+    private void RegistrationConfirmPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+        => ClearRegistrationError(RegistrationConfirmPasswordError);
 
     private void Logout_Click(object sender, RoutedEventArgs e)
     {

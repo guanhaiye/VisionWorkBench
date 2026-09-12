@@ -51,7 +51,7 @@ public static class AccountRules
         password ??= "";
         if (password.Length < 10)
         {
-            message = "密码至少需要 8 位。";
+            message = "密码至少需要 10 位。";
             return false;
         }
         if (password.Any(char.IsWhiteSpace))
