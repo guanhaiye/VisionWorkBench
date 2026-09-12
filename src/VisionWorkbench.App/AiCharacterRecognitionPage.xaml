@@ -166,17 +166,17 @@
                 </WrapPanel>
 
                 <Grid Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="300" />
-                    </Grid.ColumnDefinitions>
-                    <local:ImageViewer Grid.Column="0" Background="#202020" BorderThickness="0" Margin="0,0,12,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <local:ImageViewer Grid.Row="0" Background="#202020" BorderThickness="0" Margin="0,0,0,8">
                         <Border Background="#202020" BorderBrush="#888" BorderThickness="1">
                             <Image x:Name="AnnotationPreview" Stretch="Uniform" />
                         </Border>
                     </local:ImageViewer>
 
-                    <StackPanel Grid.Column="1">
+                    <StackPanel Grid.Row="1" MaxHeight="190">
                         <TextBlock Text="识别文本" FontWeight="Bold" />
                         <TextBlock Text="为当前图片填写字符内容，保存后用于训练。"
                                    TextWrapping="Wrap"
@@ -186,10 +186,10 @@
                                  AcceptsReturn="True"
                                  TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto"
-                                 MinHeight="150" />
+                                 MinHeight="90" />
                     </StackPanel>
 
-                    <Expander Grid.Column="0"
+                    <Expander Grid.Row="0"
                               HorizontalAlignment="Left"
                               VerticalAlignment="Top"
                               ExpandDirection="Right"
