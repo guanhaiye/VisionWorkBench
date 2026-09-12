@@ -111,6 +111,9 @@ public partial class DatasetAnnotationPage : UserControl
         ExportDatasetButton.Content = platform == AnnotationPlatform.Detection
             ? "导出 YOLO 检测数据集"
             : "导出分割数据集";
+        YoloeButton.Visibility = platform == AnnotationPlatform.Detection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         Sam1Button.Visibility = IsSegmentationPlatform
             ? Visibility.Visible
             : Visibility.Collapsed;
