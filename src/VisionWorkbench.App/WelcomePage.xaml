@@ -18,7 +18,21 @@
                         <Border.Effect>
                             <DropShadowEffect Color="#2563EB" BlurRadius="30" ShadowDepth="7" Opacity="0.22"/>
                         </Border.Effect>
-                        <Image Source="/Assets/Branding/logo.png" Stretch="Uniform"/>
+                        <Image Source="/Assets/Branding/logo.png" Stretch="Uniform" RenderTransformOrigin="0.5,0.5">
+                            <Image.RenderTransform>
+                                <RotateTransform Angle="0" />
+                            </Image.RenderTransform>
+                            <Image.Triggers>
+                                <EventTrigger RoutedEvent="Loaded">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                             From="0" To="360" Duration="0:0:8" RepeatBehavior="Forever" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Image.Triggers>
+                        </Image>
                     </Border>
                     <TextBlock Text="VisionWorkbench" FontSize="38" FontWeight="Bold"
                                Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center" Margin="0,26,0,0"/>
