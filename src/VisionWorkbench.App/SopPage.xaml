@@ -3,6 +3,23 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <UserControl.Resources>
         <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+        <Style x:Key="SopDataGridCellStyle" TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="SopDataGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="SopDataGridTextBlockStyle" TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}">
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="SopDataGridTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
     </UserControl.Resources>
     <Grid Margin="12">
         <Grid.RowDefinitions>
@@ -82,16 +99,25 @@
                                 </StackPanel>
                                 <DataGrid x:Name="StepsGrid" AutoGenerateColumns="False" CanUserAddRows="False"
                                           DockPanel.Dock="Top" VerticalAlignment="Top" SelectionMode="Single"
-                                          MinHeight="0" MaxHeight="360">
+                                          MinHeight="0" MaxHeight="360"
+                                          CellStyle="{StaticResource SopDataGridCellStyle}"
+                                          ColumnHeaderStyle="{StaticResource SopDataGridHeaderStyle}">
                                     <DataGrid.Columns>
-                                        <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=LostFocus}" Width="55" />
-                                        <DataGridTextColumn Header="步骤编号" Binding="{Binding Code, UpdateSourceTrigger=LostFocus}" Width="105" />
-                                        <DataGridTextColumn Header="步骤名称" Binding="{Binding Name, UpdateSourceTrigger=LostFocus}" Width="*" MinWidth="120" />
+                                        <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=LostFocus}" Width="55"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTextColumn Header="步骤编号" Binding="{Binding Code, UpdateSourceTrigger=LostFocus}" Width="105"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTextColumn Header="步骤名称" Binding="{Binding Name, UpdateSourceTrigger=LostFocus}" Width="*" MinWidth="120"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                         <DataGridTemplateColumn Header="模型类型" Width="145">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
                                                     <ComboBox SelectedValue="{Binding ModelType, UpdateSourceTrigger=PropertyChanged}"
-                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0">
+                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0"
+                                                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                                         <ComboBoxItem Content="目标检测" Tag="目标检测" />
                                                         <ComboBoxItem Content="语义分割" Tag="语义分割" />
                                                         <ComboBoxItem Content="实例分割" Tag="实例分割" />
@@ -104,7 +130,8 @@
                                             </DataGridTemplateColumn.CellTemplate>
                                             <DataGridTemplateColumn.CellEditingTemplate>
                                                 <DataTemplate>
-                                                    <ComboBox SelectedValue="{Binding ModelType, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag">
+                                                    <ComboBox SelectedValue="{Binding ModelType, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag"
+                                                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                                         <ComboBoxItem Content="目标检测" Tag="目标检测" />
                                                         <ComboBoxItem Content="语义分割" Tag="语义分割" />
                                                         <ComboBoxItem Content="实例分割" Tag="实例分割" />
@@ -116,12 +143,15 @@
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellEditingTemplate>
                                         </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="模型ID" Binding="{Binding ModelId, UpdateSourceTrigger=LostFocus}" Width="170" />
+                                        <DataGridTextColumn Header="模型ID" Binding="{Binding ModelId, UpdateSourceTrigger=LostFocus}" Width="170"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                         <DataGridTemplateColumn Header="推理设备" Width="95">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
                                                     <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}"
-                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0">
+                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0"
+                                                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                                         <ComboBoxItem Content="CPU" Tag="CPU" />
                                                         <ComboBoxItem Content="CUDA" Tag="CUDA" />
                                                     </ComboBox>
@@ -129,18 +159,29 @@
                                             </DataGridTemplateColumn.CellTemplate>
                                             <DataGridTemplateColumn.CellEditingTemplate>
                                                 <DataTemplate>
-                                                    <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag">
+                                                    <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag"
+                                                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                                         <ComboBoxItem Content="CPU" Tag="CPU" />
                                                         <ComboBoxItem Content="CUDA" Tag="CUDA" />
                                                     </ComboBox>
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellEditingTemplate>
                                         </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="类别/匹配值" Binding="{Binding ClassId, UpdateSourceTrigger=LostFocus}" Width="140" />
-                                        <DataGridTextColumn Header="置信度" Binding="{Binding MinConfidence, UpdateSourceTrigger=LostFocus}" Width="75" />
-                                        <DataGridTextColumn Header="稳定帧" Binding="{Binding StableFrames, UpdateSourceTrigger=LostFocus}" Width="65" />
-                                        <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="65" />
-                                        <DataGridTextColumn Header="模型参数 JSON" Binding="{Binding SettingsJson, UpdateSourceTrigger=LostFocus}" Width="220" />
+                                        <DataGridTextColumn Header="类别/匹配值" Binding="{Binding ClassId, UpdateSourceTrigger=LostFocus}" Width="140"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTextColumn Header="置信度" Binding="{Binding MinConfidence, UpdateSourceTrigger=LostFocus}" Width="75"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTextColumn Header="稳定帧" Binding="{Binding StableFrames, UpdateSourceTrigger=LostFocus}" Width="65"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="65"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTextColumn Header="模型参数 JSON" Binding="{Binding SettingsJson, UpdateSourceTrigger=LostFocus}" Width="220"
+                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
+                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                     </DataGrid.Columns>
                                 </DataGrid>
                             <TextBlock Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。模型参数填写 JSON 对象，类别/匹配值用于生成对应 SOP 事件条件。"
