@@ -322,18 +322,26 @@
         </Border>
         <Border Grid.Row="1" Grid.Column="1" Margin="14" Background="{DynamicResource SurfaceBrush}" CornerRadius="10" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
             <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.10" Color="#334155"/></Border.Effect>
-            <ContentControl x:Name="PageHost"
-                            Margin="1"
-                            HorizontalAlignment="Stretch"
-                            VerticalAlignment="Stretch"
-                            HorizontalContentAlignment="Stretch"
-                            VerticalContentAlignment="Stretch"/>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <ContentControl x:Name="PageHost" Grid.Row="0"
+                                Margin="1"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"/>
+                <Border Grid.Row="1" Margin="1,8,1,1" Padding="4,5"
+                        MinHeight="28" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="0,1,0,0" HorizontalAlignment="Stretch">
+                    <TextBlock x:Name="GlobalLogText" HorizontalAlignment="Right"
+                               Foreground="Green" TextAlignment="Right"
+                               TextWrapping="Wrap" IsHitTestVisible="False" />
+                </Border>
+            </Grid>
         </Border>
-        <TextBlock x:Name="GlobalLogText" Grid.Row="1" Grid.Column="1"
-                   Width="500" Margin="0,0,14,10"
-                   HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                   Panel.ZIndex="100" Foreground="Green"
-                   TextAlignment="Right" TextWrapping="Wrap" IsHitTestVisible="False" />
         <!-- Legacy global log panel is intentionally disabled; the shared log keeps the original text-only appearance. -->
         <!--
         <Border x:Name="GlobalLogPanel" Grid.Row="1" Grid.Column="1"
