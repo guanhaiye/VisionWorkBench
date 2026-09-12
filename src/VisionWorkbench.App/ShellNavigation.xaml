@@ -328,6 +328,41 @@
                             HorizontalContentAlignment="Stretch"
                             VerticalContentAlignment="Stretch"/>
         </Border>
+        <Border x:Name="GlobalLogPanel" Grid.Row="1" Grid.Column="1"
+                Width="420" MaxHeight="184" Margin="0,0,28,28"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Panel.ZIndex="100" Padding="12,9"
+                Background="#E51B222D" BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="1" CornerRadius="8">
+            <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.24" Color="#000000"/></Border.Effect>
+            <DockPanel LastChildFill="True">
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+                    <TextBlock Text="运行日志" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}" />
+                    <Button Content="清空" Click="ClearGlobalLog_Click"
+                            HorizontalAlignment="Right" Padding="6,1" MinWidth="0"
+                            FontSize="10" Background="Transparent" BorderThickness="0"
+                            Foreground="{DynamicResource MutedTextBrush}" />
+                </Grid>
+                <ListBox x:Name="GlobalLogList" Background="Transparent" BorderThickness="0"
+                         MaxHeight="140" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="52" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Timestamp}" Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="10" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Text="{Binding Message}" Foreground="{DynamicResource TextBrush}"
+                                           FontSize="11" TextWrapping="Wrap" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
         <Popup x:Name="UserMenuPopup" PlacementTarget="{Binding ElementName=UserMenuButton}" Placement="Right"
                HorizontalOffset="8" VerticalOffset="0" StaysOpen="False" AllowsTransparency="True">
             <Border x:Name="UserPopupContentBorder" Width="330" Background="{DynamicResource SurfaceBrush}"

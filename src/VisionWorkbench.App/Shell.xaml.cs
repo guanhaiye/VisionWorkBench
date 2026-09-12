@@ -1,5 +1,7 @@
 using System.IO;
 using System.Diagnostics;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -13,6 +15,8 @@ using Microsoft.Win32;
 
 namespace VisionWorkbench.App;
 
+public sealed record GlobalLogEntry(string Timestamp, string Message);
+
 public partial class Shell : Window
 {
     private readonly Dictionary<string, Func<object>> _pages = new();
@@ -25,6 +29,12 @@ public partial class Shell : Window
     private string? _currentAccountName;
     private bool _isSuperAdmin;
     private bool _updatingLoginOptions;
+    private readonly ObservableCollection<GlobalLogEntry> _globalLogEntries = [];
+    private readonly HashSet<DependencyObject> _monitoredGlobalLogElements = [];
+    private static readonly DependencyPropertyDescriptor? TextBlockTextDescriptor =
+        DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
+    private static readonly DependencyPropertyDescriptor? TextBoxTextDescriptor =
+        DependencyPropertyDescriptor.FromProperty(TextBox.TextProperty, typeof(TextBox));
 
     private void BrandLogoImage_Loaded(object sender, RoutedEventArgs e)
     {
@@ -43,6 +53,7 @@ public partial class Shell : Window
     public Shell()
     {
         InitializeComponent();
+        GlobalLogList.ItemsSource = _globalLogEntries;
         PreferApplicationThemeResources();
         ThemeManager.SyncWindowResources(this);
         AddHandler(System.Windows.Input.Mouse.PreviewMouseWheelEvent,
@@ -204,6 +215,7 @@ public partial class Shell : Window
             {
                 dataModelPage.SelectCategory(category);
             }
+            MonitorGlobalLogElements(PageHost);
             return;
         }
 
@@ -222,6 +234,7 @@ public partial class Shell : Window
         {
             ThemeManager.ApplyPageTextBrush(pageElement);
         }
+        MonitorGlobalLogElements(PageHost);
         if (page is LivePage live)
         {
             live.OnShown();
@@ -511,6 +524,101 @@ public partial class Shell : Window
         }
 
         ThemedMessageBox.Show(authentication.Reason, "用户登录", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private void MonitorGlobalLogElements(DependencyObject root)
+    {
+        foreach (var element in EnumerateVisualTree(root))
+        {
+            if (element is not FrameworkElement frameworkElement || !IsGlobalLogElement(frameworkElement))
+            {
+                continue;
+            }
+
+            if (!_monitoredGlobalLogElements.Add(element))
+            {
+                continue;
+            }
+
+            if (element is TextBlock textBlock)
+            {
+                TextBlockTextDescriptor?.AddValueChanged(textBlock, GlobalLogElement_ValueChanged);
+            }
+            else if (element is TextBox textBox)
+            {
+                TextBoxTextDescriptor?.AddValueChanged(textBox, GlobalLogElement_ValueChanged);
+            }
+            else if (element is ListBox listBox)
+            {
+                listBox.ItemContainerGenerator.ItemsChanged += (_, _) =>
+                {
+                    if (listBox.Items.Count > 0 && listBox.Items[^1] is object item)
+                    {
+                        PublishGlobalLog(item.ToString());
+                    }
+                };
+            }
+        }
+    }
+
+    private void GlobalLogElement_ValueChanged(object? sender, EventArgs e)
+    {
+        if (sender is DependencyObject element)
+        {
+            PublishGlobalLog(element switch
+            {
+                TextBlock textBlock => textBlock.Text,
+                TextBox textBox => textBox.Text,
+                _ => null,
+            });
+        }
+    }
+
+    private void PublishGlobalLog(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var normalized = string.Join(' ', message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (string.Equals(_globalLogEntries.LastOrDefault()?.Message, normalized, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _globalLogEntries.Add(new GlobalLogEntry(DateTime.Now.ToString("HH:mm:ss"), normalized));
+        while (_globalLogEntries.Count > 8)
+        {
+            _globalLogEntries.RemoveAt(0);
+        }
+
+        if (GlobalLogList.Items.Count > 0)
+        {
+            GlobalLogList.ScrollIntoView(GlobalLogList.Items[^1]);
+        }
+    }
+
+    private void ClearGlobalLog_Click(object sender, RoutedEventArgs e) => _globalLogEntries.Clear();
+
+    private static bool IsGlobalLogElement(FrameworkElement element)
+    {
+        var name = element.Name;
+        return !string.IsNullOrWhiteSpace(name)
+            && (name.Contains("Status", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("Log", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<DependencyObject> EnumerateVisualTree(DependencyObject root)
+    {
+        yield return root;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            foreach (var child in EnumerateVisualTree(VisualTreeHelper.GetChild(root, index)))
+            {
+                yield return child;
+            }
+        }
     }
 
     private string GetLoginPassword() => LoginPasswordTextBox.Visibility == Visibility.Visible
