@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using Microsoft.Win32;
 using Microsoft.Extensions.Logging;
 using OpenCvSharp;
 using VisionWorkbench.Cameras.Abstractions;
@@ -10,6 +12,8 @@ public sealed class UsbCameraProvider(ILogger? logger = null) : ICameraProvider
 {
     public const string ProviderIdValue = "usb";
     private const int MaxProbeIndex = 7;
+    private const string VideoCaptureDeviceClassPath =
+        @"SYSTEM\CurrentControlSet\Control\DeviceClasses\{e5323777-f976-4f5b-9b55-b94699c46e44}";
 
     public string ProviderId => ProviderIdValue;
     public string DisplayName => "USB 相机";
@@ -17,6 +21,9 @@ public sealed class UsbCameraProvider(ILogger? logger = null) : ICameraProvider
     public Task<IReadOnlyList<CameraDescriptor>> DiscoverAsync(CancellationToken cancellationToken)
     {
         var found = new List<CameraDescriptor>();
+        var deviceCount = OperatingSystem.IsWindows()
+            ? TryGetVideoCaptureDeviceCount()
+            : null;
         for (var i = 0; i <= MaxProbeIndex; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -44,8 +51,34 @@ public sealed class UsbCameraProvider(ILogger? logger = null) : ICameraProvider
                 DisplayName = $"USB 相机 {i}",
             });
             logger?.LogDebug("发现 USB 相机: index={Index} {Mode}", i, mode);
+
+            // DirectShow/OpenCV 偶尔会为同一个物理设备暴露多个可打开的索引。
+            // Windows 的视频采集设备接口数量才是设备数量，达到该数量后停止发布别名。
+            if (deviceCount is > 0 && found.Count >= deviceCount.Value)
+            {
+                break;
+            }
         }
         return Task.FromResult<IReadOnlyList<CameraDescriptor>>(found);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static int? TryGetVideoCaptureDeviceCount()
+    {
+        try
+        {
+            using var deviceClass = Registry.LocalMachine.OpenSubKey(VideoCaptureDeviceClassPath);
+            var count = deviceClass?.GetSubKeyNames().Length ?? 0;
+            return count > 0 ? count : null;
+        }
+        catch (System.Security.SecurityException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     public Task<ICameraSession> CreateSessionAsync(
