@@ -167,7 +167,6 @@ public partial class SopPage : UserControl
         LoadDefinition(definition);
         _selectedDefinition = null;
         DefinitionList.SelectedItem = null;
-        DefinitionIdText.Text = "保存时生成";
         DefinitionNameText.Text = BuildCopyName(definition.Name);
         DefinitionCodeText.Text = BuildCopyCode();
         VersionText.Text = "1";
@@ -291,7 +290,6 @@ public partial class SopPage : UserControl
     private void LoadDefinition(SopDefinition definition)
     {
         EditorPanel.IsEnabled = true;
-        DefinitionIdText.Text = definition.Id;
         DefinitionNameText.Text = definition.Name;
         DefinitionCodeText.Text = definition.Code;
         ProductCodeText.Text = definition.ProductCode;
@@ -325,13 +323,11 @@ public partial class SopPage : UserControl
 
     private void ClearEditor()
     {
-        var stamp = DateTime.Now.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
         EditorPanel.IsEnabled = false;
-        DefinitionIdText.Text = "保存时生成";
-        DefinitionNameText.Text = $"新建SOP流程-{stamp}";
-        DefinitionCodeText.Text = $"SOP-{stamp}";
+        DefinitionNameText.Text = "";
+        DefinitionCodeText.Text = "";
         ProductCodeText.Text = "";
-        VersionText.Text = "1";
+        VersionText.Text = "";
         _steps.Clear();
     }
 

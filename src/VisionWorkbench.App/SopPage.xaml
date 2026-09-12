@@ -60,7 +60,6 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="流程名称" VerticalAlignment="Center" />
                                 <TextBox Grid.Row="0" Grid.Column="1" x:Name="DefinitionNameText" Margin="4,2,12,5" />
@@ -70,9 +69,6 @@
                                 <TextBox Grid.Row="1" Grid.Column="1" x:Name="ProductCodeText" Margin="4,2,12,5" />
                                 <TextBlock Grid.Row="1" Grid.Column="2" Text="版本" VerticalAlignment="Center" />
                                 <TextBox Grid.Row="1" Grid.Column="3" x:Name="VersionText" Margin="4,2,0,5" />
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="目录ID" VerticalAlignment="Center" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="DefinitionIdText" Foreground="{DynamicResource MutedTextBrush}"
-                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Grid>
                         </GroupBox>
 
