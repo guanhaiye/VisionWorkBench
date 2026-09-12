@@ -106,7 +106,7 @@ public static class AccountRules
 
     public static string RoleDisplayName(string? role) => role?.Trim().ToLowerInvariant() switch
     {
-        "superadmin" => "超级管理员",
+        "admin" or "superadmin" => "超级管理员",
         "expert" => "专家",
         "engineer" => "工程师",
         _ => "操作员",
