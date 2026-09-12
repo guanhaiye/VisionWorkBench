@@ -43,8 +43,6 @@ public partial class SystemMonitorPage : UserControl
         catch (Exception ex)
         {
             GpuDetailText.Text = $"读取监控数据失败：{ex.Message}";
-            DiskDetailText.Visibility = Visibility.Visible;
-            DiskDetailText.Text = "无法读取磁盘状态";
         }
         finally
         {
@@ -54,7 +52,6 @@ public partial class SystemMonitorPage : UserControl
 
     private void ApplySnapshot(SystemMonitorSnapshot snapshot)
     {
-        DiskDetailText.Visibility = Visibility.Visible;
         CpuValueText.Text = $"{snapshot.CpuUsage:0.0}%";
         CpuProgress.Value = snapshot.CpuUsage;
         CpuDetailText.Text = $"当前系统 CPU 使用率 · {DateTime.Now:HH:mm:ss} 更新";
@@ -78,9 +75,6 @@ public partial class SystemMonitorPage : UserControl
         DiskValueText.Text = diskTotal > 0 ? $"{diskPercent:0.0}%" : "--";
         DiskProgress.Value = diskPercent;
         DiskItemsControl.ItemsSource = snapshot.Disks;
-        DiskDetailText.Text = diskTotal > 0
-            ? $"全部磁盘 · 已使用 {ByteSizeFormatter.Format(diskUsed)} / 共 {ByteSizeFormatter.Format(diskTotal)}"
-            : "无法读取磁盘状态";
     }
 
     private static double Percent(ulong used, ulong total) =>
