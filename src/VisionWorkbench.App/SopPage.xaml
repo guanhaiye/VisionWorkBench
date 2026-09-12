@@ -51,7 +51,7 @@
 
             <Border Grid.Column="0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="8">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="SOP定义目录" FontWeight="SemiBold" Margin="4,2,4,8" />
+                    <TextBlock DockPanel.Dock="Top" Text="SOP目录" FontWeight="SemiBold" Margin="4,2,4,8" />
                     <ListBox x:Name="DefinitionList" DisplayMemberPath="DisplayName"
                              SelectionChanged="DefinitionList_SelectionChanged" />
                 </DockPanel>
