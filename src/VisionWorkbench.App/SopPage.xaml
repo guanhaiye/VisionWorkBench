@@ -159,27 +159,6 @@
                                         <DataGridTextColumn Header="模型ID" Binding="{Binding ModelId, UpdateSourceTrigger=LostFocus}" Width="170"
                                                             ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
-                                        <DataGridTemplateColumn Header="推理设备" Width="95">
-                                            <DataGridTemplateColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}"
-                                                              SelectedValuePath="Tag" Padding="4,0" BorderThickness="0"
-                                                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                                        <ComboBoxItem Content="CPU" Tag="CPU" />
-                                                        <ComboBoxItem Content="CUDA" Tag="CUDA" />
-                                                    </ComboBox>
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellTemplate>
-                                            <DataGridTemplateColumn.CellEditingTemplate>
-                                                <DataTemplate>
-                                                    <ComboBox SelectedValue="{Binding ExecutionProvider, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag"
-                                                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                                        <ComboBoxItem Content="CPU" Tag="CPU" />
-                                                        <ComboBoxItem Content="CUDA" Tag="CUDA" />
-                                                    </ComboBox>
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellEditingTemplate>
-                                        </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="类别/匹配值" Binding="{Binding ClassId, UpdateSourceTrigger=LostFocus}" Width="140"
                                                             ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
@@ -194,7 +173,7 @@
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                     </DataGrid.Columns>
                                 </DataGrid>
-                                <TextBlock Grid.Row="2" Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。模型参数填写 JSON 对象，类别/匹配值用于生成对应 SOP 事件条件。"
+                                <TextBlock Grid.Row="2" Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。类别/匹配值用于生成对应 SOP 事件条件。"
                                            Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,7,0,0" />
                             </Grid>
                         </GroupBox>
