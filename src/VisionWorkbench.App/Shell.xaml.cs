@@ -610,6 +610,23 @@ public partial class Shell : Window
                 || name.Contains("Log", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsVisualDescendantOf(DependencyObject? source, DependencyObject ancestor)
+    {
+        while (source is not null)
+        {
+            if (ReferenceEquals(source, ancestor))
+            {
+                return true;
+            }
+
+            source = source is Visual || source is System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(source)
+                : LogicalTreeHelper.GetParent(source);
+        }
+
+        return false;
+    }
+
     private static IEnumerable<DependencyObject> EnumerateVisualTree(DependencyObject root)
     {
         yield return root;
@@ -710,7 +727,9 @@ public partial class Shell : Window
 
     private void HelpButton_Click(object sender, RoutedEventArgs e)
     {
-        HelpMenuPopup.IsOpen = true;
+        HelpMenuPopup.Visibility = HelpMenuPopup.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void HelpButton_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -719,10 +738,20 @@ public partial class Shell : Window
         e.Handled = true;
     }
 
+    private void Shell_PreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        if (HelpMenuPopup.Visibility == Visibility.Visible
+            && !IsVisualDescendantOf(source, HelpMenuPopup)
+            && !IsVisualDescendantOf(source, HelpButton))
+        {
+            HelpMenuPopup.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void Shell_Deactivated(object? sender, EventArgs e)
     {
-        // Popup 使用独立窗口句柄；主窗口失去焦点时显式关闭，避免它浮在其他软件上方。
-        HelpMenuPopup.IsOpen = false;
+        HelpMenuPopup.Visibility = Visibility.Collapsed;
         UserMenuPopup.IsOpen = false;
     }
 
@@ -751,7 +780,7 @@ public partial class Shell : Window
 
     private void PythonScriptRules_Click(object sender, RoutedEventArgs e)
     {
-        HelpMenuPopup.IsOpen = false;
+        HelpMenuPopup.Visibility = Visibility.Collapsed;
         var dialog = new PythonScriptRulesDialog { Owner = this };
         dialog.ShowDialog();
     }

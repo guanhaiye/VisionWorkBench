@@ -5,7 +5,8 @@
         xmlns:media="clr-namespace:System.Windows.Media;assembly=PresentationCore"
         Title="VisionWorkbench &#x2014; AI &#x89C6;&#x89C9;&#x5DE5;&#x4F5C;&#x53F0;" Width="1360" Height="860"
         MinWidth="1100" MinHeight="700" WindowStartupLocation="CenterScreen"
-        WindowStyle="None" Background="{DynamicResource WindowBrush}" Topmost="False">
+        WindowStyle="None" Background="{DynamicResource WindowBrush}" Topmost="False"
+        PreviewMouseDown="Shell_PreviewMouseDown">
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="46" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
@@ -472,23 +473,24 @@
                 </StackPanel>
             </Border>
         </Popup>
-        <Popup x:Name="HelpMenuPopup" PlacementTarget="{Binding ElementName=HelpButton}" Placement="Bottom"
-               HorizontalOffset="-82" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True">
-            <Border Width="250" Background="{DynamicResource SurfaceBrush}"
-                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
-                    CornerRadius="8" Padding="8">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.22" Color="#000000" />
-                </Border.Effect>
-                <StackPanel>
+        <Border x:Name="HelpMenuPopup" Grid.Row="0" Grid.Column="1"
+                Width="250" Margin="0,50,8,0"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Panel.ZIndex="200" Visibility="Collapsed"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                CornerRadius="8" Padding="8">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.22" Color="#000000" />
+            </Border.Effect>
+            <StackPanel>
                     <TextBlock Text="&#x5E2E;&#x52A9;&#x4E2D;&#x5FC3;" Margin="10,5,10,7"
                                FontSize="15" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextBrush}" />
                     <Button Content="Python&#x811A;&#x672C;&#x7F16;&#x5199;&#x89C4;&#x5219;"
                             HorizontalContentAlignment="Left" Padding="12,9"
                             Click="PythonScriptRules_Click" />
-                </StackPanel>
-            </Border>
-        </Popup>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>
