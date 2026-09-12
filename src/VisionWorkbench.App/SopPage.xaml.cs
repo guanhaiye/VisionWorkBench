@@ -21,8 +21,28 @@ public partial class SopPage : UserControl
 
     private sealed class StepEditorRow : INotifyPropertyChanged
     {
-        public string Order { get; set; } = "1";
-        public string Code { get; set; } = "STEP-01";
+        private string _order = "1";
+        private string _code = "STEP-01";
+        public string Order
+        {
+            get => _order;
+            set
+            {
+                if (string.Equals(_order, value, StringComparison.Ordinal)) return;
+                _order = value;
+                OnPropertyChanged();
+            }
+        }
+        public string Code
+        {
+            get => _code;
+            set
+            {
+                if (string.Equals(_code, value, StringComparison.Ordinal)) return;
+                _code = value;
+                OnPropertyChanged();
+            }
+        }
         public string Name { get; set; } = "新步骤";
         private string _modelType = "目标检测";
         public string ModelType
@@ -276,14 +296,32 @@ public partial class SopPage : UserControl
 
     private void RemoveStep_Click(object sender, RoutedEventArgs e)
     {
+        var selectedIndex = StepsGrid.SelectedIndex;
         if (StepsGrid.SelectedItem is StepEditorRow row)
         {
             _steps.Remove(row);
-            return;
         }
-        if (_steps.Count > 0)
+        else if (_steps.Count > 0)
         {
             _steps.RemoveAt(_steps.Count - 1);
+            selectedIndex = _steps.Count;
+        }
+
+        RenumberStepRows();
+        if (_steps.Count > 0)
+        {
+            StepsGrid.SelectedIndex = Math.Clamp(selectedIndex, 0, _steps.Count - 1);
+            StepsGrid.ScrollIntoView(StepsGrid.SelectedItem);
+        }
+    }
+
+    private void RenumberStepRows()
+    {
+        for (var index = 0; index < _steps.Count; index++)
+        {
+            var number = index + 1;
+            _steps[index].Order = number.ToString(CultureInfo.InvariantCulture);
+            _steps[index].Code = $"STEP-{number:00}";
         }
     }
 
