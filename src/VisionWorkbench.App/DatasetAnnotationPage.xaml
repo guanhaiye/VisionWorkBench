@@ -198,7 +198,7 @@
                     </Expander.Style>
                     <Expander.Header>
                         <Border Background="Transparent" BorderThickness="0" Padding="5,10">
-                            <TextBlock Text="面板" FontWeight="SemiBold" TextWrapping="Wrap"
+                            <TextBlock Text="显示设置" FontWeight="SemiBold" TextWrapping="Wrap"
                                        TextAlignment="Center" Width="20" />
                         </Border>
                     </Expander.Header>
