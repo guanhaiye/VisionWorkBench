@@ -156,9 +156,6 @@
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellEditingTemplate>
                                         </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="模型ID" Binding="{Binding ModelId, UpdateSourceTrigger=LostFocus}" Width="170"
-                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
-                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                         <DataGridTextColumn Header="类别/匹配值" Binding="{Binding ClassId, UpdateSourceTrigger=LostFocus}" Width="140"
                                                             ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
@@ -171,9 +168,56 @@
                                         <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="65"
                                                             ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
+                                        <DataGridTemplateColumn Header="模型路径" Width="340" MinWidth="260">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Text="{Binding ModelPath}"
+                                                                 IsReadOnly="True"
+                                                                 ToolTip="{Binding ModelPath}"
+                                                                 Padding="4,0"
+                                                                 VerticalContentAlignment="Center"
+                                                                 BorderThickness="0" />
+                                                        <Button Grid.Column="1"
+                                                                Content="选择"
+                                                                Tag="{Binding}"
+                                                                Click="ChooseModelPath_Click"
+                                                                Padding="8,2"
+                                                                MinHeight="28"
+                                                                Margin="4,0,0,0" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                <DataTemplate>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Text="{Binding ModelPath, UpdateSourceTrigger=LostFocus}"
+                                                                 IsReadOnly="True"
+                                                                 ToolTip="{Binding ModelPath}"
+                                                                 Padding="4,0"
+                                                                 VerticalContentAlignment="Center" />
+                                                        <Button Grid.Column="1"
+                                                                Content="选择"
+                                                                Tag="{Binding}"
+                                                                Click="ChooseModelPath_Click"
+                                                                Padding="8,2"
+                                                                MinHeight="28"
+                                                                Margin="4,0,0,0" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                        </DataGridTemplateColumn>
                                     </DataGrid.Columns>
                                 </DataGrid>
-                                <TextBlock Grid.Row="2" Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。类别/匹配值用于生成对应 SOP 事件条件。"
+                                <TextBlock Grid.Row="2" Text="模型类型用于确定步骤模型，模型路径用于选择实际模型文件；算法运行时会校验模型类型是否匹配。类别/匹配值用于生成对应 SOP 事件条件。"
                                            Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,7,0,0" />
                             </Grid>
                         </GroupBox>

@@ -103,6 +103,8 @@ public sealed record SopExecutionProfile
 /// </summary>
 public sealed record SopStepExecution
 {
+    /// <summary>步骤实际使用的模型文件路径；为空时由运行时按插件默认模型处理。</summary>
+    public string ModelPath { get; init; } = "";
     public string ModelId { get; init; } = "";
     public string ModelVersion { get; init; } = "";
     public string PluginId { get; init; } = "";

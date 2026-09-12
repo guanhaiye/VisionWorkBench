@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Win32;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Application;
 using VisionWorkbench.Domain;
@@ -23,6 +26,7 @@ public partial class SopPage : UserControl
     {
         private string _order = "1";
         private string _code = "STEP-01";
+        private string _modelPath = "";
         public string Order
         {
             get => _order;
@@ -40,6 +44,16 @@ public partial class SopPage : UserControl
             {
                 if (string.Equals(_code, value, StringComparison.Ordinal)) return;
                 _code = value;
+                OnPropertyChanged();
+            }
+        }
+        public string ModelPath
+        {
+            get => _modelPath;
+            set
+            {
+                if (string.Equals(_modelPath, value, StringComparison.Ordinal)) return;
+                _modelPath = value;
                 OnPropertyChanged();
             }
         }
@@ -315,6 +329,29 @@ public partial class SopPage : UserControl
         }
     }
 
+    private void ChooseModelPath_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not StepEditorRow row) return;
+        var dialog = new OpenFileDialog
+        {
+            Title = $"选择{row.ModelType}模型",
+            Filter = "模型文件|*.pt;*.pth;*.onnx;*.engine;*.bin;*.xml|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        var selectedPath = Path.GetFullPath(dialog.FileName);
+        if (!ValidateModelPath(selectedPath, row.ModelType, out var validationMessage))
+        {
+            ThemedMessageBox.Show(validationMessage, "模型类型不匹配", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        row.ModelPath = selectedPath;
+        StatusText.Text = $"已选择模型：{Path.GetFileName(selectedPath)}";
+    }
+
     private void RenumberStepRows()
     {
         for (var index = 0; index < _steps.Count; index++)
@@ -343,6 +380,9 @@ public partial class SopPage : UserControl
                 Code = step.Code,
                 Name = step.Name,
                 ModelType = GetTaskTypeDisplay(execution.TaskType.ToString()),
+                ModelPath = string.IsNullOrWhiteSpace(execution.ModelPath)
+                    ? ReadModelPath(execution.SettingsJson)
+                    : execution.ModelPath,
                 ModelId = execution.ModelId,
                 ModelVersion = execution.ModelVersion,
                 PluginId = execution.PluginId,
@@ -377,6 +417,7 @@ public partial class SopPage : UserControl
         }
         return new SopStepExecution
         {
+            ModelPath = ReadModelPath(profile.SettingsJson),
             ModelId = $"legacy-{step.Code}",
             PluginId = profile.PluginId,
             TaskType = profile.TaskType,
@@ -436,6 +477,19 @@ public partial class SopPage : UserControl
             {
                 throw new InvalidOperationException($"步骤“{row.Name}”的模型参数不是合法 JSON：{ex.Message}");
             }
+            if (!string.IsNullOrWhiteSpace(row.ModelPath))
+            {
+                var modelPath = Path.GetFullPath(row.ModelPath.Trim());
+                if (!File.Exists(modelPath))
+                {
+                    throw new InvalidOperationException($"步骤“{row.Name}”选择的模型文件不存在：{modelPath}");
+                }
+                if (!ValidateModelPath(modelPath, row.ModelType, out var modelMessage))
+                {
+                    throw new InvalidOperationException($"步骤“{row.Name}”的模型路径无效：{modelMessage}");
+                }
+                settingsJson = ApplyModelPath(settingsJson, modelPath);
+            }
             if (!double.TryParse(row.MinConfidence.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var confidence)
                 || confidence is < 0 or > 1)
             {
@@ -463,6 +517,7 @@ public partial class SopPage : UserControl
                 MinimumStableFrames = stableFrames,
                 Execution = new SopStepExecution
                 {
+                    ModelPath = row.ModelPath.Trim(),
                     ModelId = string.IsNullOrWhiteSpace(row.ModelId) ? $"{code}-model-{order:00}" : row.ModelId.Trim(),
                     ModelVersion = row.ModelVersion.Trim(),
                     PluginId = ResolveAutomaticPluginId(taskType),
@@ -562,6 +617,140 @@ public partial class SopPage : UserControl
     {
         StepsGrid.CommitEdit(DataGridEditingUnit.Cell, true);
         StepsGrid.CommitEdit(DataGridEditingUnit.Row, true);
+    }
+
+    private static string ReadModelPath(string? settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson)) return "";
+        try
+        {
+            using var document = JsonDocument.Parse(settingsJson);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("modelPath", out var modelPath)
+                && modelPath.ValueKind == JsonValueKind.String)
+            {
+                return modelPath.GetString()?.Trim() ?? "";
+            }
+        }
+        catch (JsonException)
+        {
+            // BuildDefinition 会对设置 JSON 给出具体的格式错误提示。
+        }
+        return "";
+    }
+
+    private static string ApplyModelPath(string settingsJson, string modelPath)
+    {
+        var settings = JsonNode.Parse(settingsJson) as JsonObject ?? [];
+        settings["modelPath"] = modelPath;
+        return settings.ToJsonString();
+    }
+
+    private static bool ValidateModelPath(string modelPath, string modelType, out string message)
+    {
+        message = "";
+        if (!File.Exists(modelPath))
+        {
+            message = $"模型文件不存在：{modelPath}";
+            return false;
+        }
+        if (!TryParseTaskType(modelType, out var expectedType))
+        {
+            message = $"无法识别步骤模型类型：{modelType}。";
+            return false;
+        }
+        if (!TryInferModelType(modelPath, out var actualType, out var evidence))
+        {
+            message = "无法从模型目录或文件名判断模型类型，请选择带有 model-node.json 的训练模型，或使用包含类型名称的模型路径。";
+            return false;
+        }
+        if (actualType.Normalize() != expectedType.Normalize())
+        {
+            message = $"当前步骤类型为“{GetTaskTypeDisplay(expectedType.ToString())}”，但所选模型被识别为“{GetTaskTypeDisplay(actualType.ToString())}”（依据：{evidence}）。";
+            return false;
+        }
+        return true;
+    }
+
+    private static bool TryInferModelType(string modelPath, out InspectionTaskType type, out string evidence)
+    {
+        type = (InspectionTaskType)(-1);
+        evidence = "";
+        var file = new FileInfo(modelPath);
+        for (var directory = file.Directory; directory is not null; directory = directory.Parent)
+        {
+            var metadataPath = Path.Combine(directory.FullName, "model-node.json");
+            if (File.Exists(metadataPath))
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
+                    var root = document.RootElement;
+                    var taskTypeText = root.TryGetProperty("TaskType", out var taskType)
+                        ? taskType.GetString()
+                        : root.TryGetProperty("taskType", out var camelTaskType) ? camelTaskType.GetString() : null;
+                    if (TryParseTaskType(taskTypeText, out type) || TryInferTypeFromText(taskTypeText, out type))
+                    {
+                        evidence = "model-node.json";
+                        return true;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // 继续使用路径特征判断。
+                }
+            }
+
+            var argsPath = Path.Combine(directory.FullName, "args.yaml");
+            if (File.Exists(argsPath) && TryInferTypeFromText(File.ReadAllText(argsPath), out type))
+            {
+                evidence = "args.yaml";
+                return true;
+            }
+        }
+
+        if (TryInferTypeFromText(modelPath, out type))
+        {
+            evidence = "模型路径";
+            return true;
+        }
+        return false;
+    }
+
+    private static bool TryInferTypeFromText(string? value, out InspectionTaskType type)
+    {
+        type = (InspectionTaskType)(-1);
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var text = value.ToLowerInvariant().Replace('_', '-').Replace('\\', '/');
+        if (text.Contains("qrcode") || text.Contains("qr-code") || text.Contains("二维码"))
+        {
+            type = InspectionTaskType.QrCode;
+        }
+        else if (text.Contains("barcode") || text.Contains("bar-code") || text.Contains("条码"))
+        {
+            type = InspectionTaskType.Barcode;
+        }
+        else if (text.Contains("ocr") || text.Contains("character") || text.Contains("ai-text") || text.Contains("字符"))
+        {
+            type = InspectionTaskType.AiText;
+        }
+        else if (text.Contains("behavior") || text.Contains("pose") || text.Contains("行为") || text.Contains("姿态"))
+        {
+            type = InspectionTaskType.BehaviorRecognition;
+        }
+        else if (text.Contains("semantic") || text.Contains("语义"))
+        {
+            type = InspectionTaskType.SemanticSegmentation;
+        }
+        else if (text.Contains("instance") || text.Contains("segment") || text.Contains("实例分割"))
+        {
+            type = InspectionTaskType.InstanceSegmentation;
+        }
+        else if (text.Contains("detection") || text.Contains("detect") || text.Contains("yolo") || text.Contains("目标检测"))
+        {
+            type = InspectionTaskType.Detection;
+        }
+        return Enum.IsDefined(type);
     }
 
     private static string GetTaskTypeDisplay(string value)
