@@ -45,7 +45,8 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal">
-                    <Button Content="测试选中设备" Click="Test_Click" />
+                    <Button x:Name="TestButton" Content="测试选中设备" Click="Test_Click" />
+                    <Button x:Name="CameraToggleButton" Content="开启相机" Click="CameraToggle_Click" Margin="8,0,0,0" />
                     <TextBlock x:Name="TestStatusText" VerticalAlignment="Center" Margin="12,0,0,0" />
                 </StackPanel>
                 <local:ImageViewer Grid.Row="1" Background="#111" Margin="0,6,0,0">

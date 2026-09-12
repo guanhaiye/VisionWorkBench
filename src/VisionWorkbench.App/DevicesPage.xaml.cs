@@ -10,12 +10,17 @@ public partial class DevicesPage : UserControl
 {
     private readonly PreviewRenderer _preview = new();
     private ICameraSession? _testSession;
+    private CancellationTokenSource? _testCancellation;
+    private ICameraSession? _cameraSession;
+    private bool _testInProgress;
+    private bool _cameraOperationInProgress;
     private bool _loaded;
 
     public DevicesPage()
     {
         InitializeComponent();
         Loaded += DevicesPage_Loaded;
+        Unloaded += DevicesPage_Unloaded;
     }
 
     private async void DevicesPage_Loaded(object sender, RoutedEventArgs e)
@@ -26,6 +31,12 @@ public partial class DevicesPage : UserControl
     }
 
     private async void Scan_Click(object sender, RoutedEventArgs e) => await ScanAsync();
+
+    private async void DevicesPage_Unloaded(object sender, RoutedEventArgs e)
+    {
+        _testCancellation?.Cancel();
+        await StopCameraAsync();
+    }
 
     private async Task ScanAsync()
     {
@@ -128,40 +139,166 @@ public partial class DevicesPage : UserControl
             ThemedMessageBox.Show("先扫描并选择设备", "提示");
             return;
         }
-        if (_testSession is not null)
+        if (_testInProgress)
         {
-            return; // 上一个测试还在进行
+            return;
         }
+        if (_cameraSession is not null || _cameraOperationInProgress)
+        {
+            TestStatusText.Text = "请先关闭持续开启的相机";
+            return;
+        }
+
+        _testInProgress = true;
+        TestButton.IsEnabled = false;
+        _testCancellation = new CancellationTokenSource();
+        var cancellationToken = _testCancellation.Token;
         TestStatusText.Text = $"打开 {descriptor.DisplayName}…";
+        ICameraSession? session = null;
         try
         {
-            var session = await AppServices.Instance.Cameras.OpenSessionAsync(
+            session = await AppServices.Instance.Cameras.OpenSessionAsync(
                 descriptor,
                 AppServices.Instance.ApplyCameraDefaults(descriptor, new CameraOpenOptions()),
-                CancellationToken.None);
-            var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            session.Faulted += (s, args) =>
+                cancellationToken);
+            var options = AppServices.Instance.ApplyCameraDefaults(descriptor, new CameraOpenOptions());
+            session.Faulted += (_, args) => Dispatcher.BeginInvoke(() => TestStatusText.Text = $"故障: {args.Fault.Message}");
+            await session.OpenAsync(options, cancellationToken);
+            if (session.State == CameraSessionState.Faulted)
             {
-                Dispatcher.BeginInvoke(() => TestStatusText.Text = $"故障: {args.Fault.Message}");
-                opened.TrySetResult();
-            };
-            await session.OpenAsync(
-                AppServices.Instance.ApplyCameraDefaults(descriptor, new CameraOpenOptions()),
-                CancellationToken.None);
+                throw new InvalidOperationException("相机打开失败，请检查设备是否被其他程序占用");
+            }
             session.FrameReceived += (s, args) => Dispatcher.BeginInvoke(() =>
                 _preview.Render(TestPreviewImage, args.Frame));
-            await session.StartAsync(CancellationToken.None);
+            await session.StartAsync(cancellationToken);
             _testSession = session;
-            TestStatusText.Text = "预览中（5 秒后自动关闭）…";
-            await Task.Delay(TimeSpan.FromSeconds(5));
-            await session.DisposeAsync();
-            _testSession = null;
+            for (var remaining = 5; remaining > 0; remaining--)
+            {
+                TestButton.Content = $"测试选中设备（{remaining}）";
+                TestStatusText.Text = $"预览中，{remaining} 秒后自动关闭…";
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
             TestStatusText.Text = "测试完成";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            TestStatusText.Text = "测试预览已关闭";
         }
         catch (Exception ex)
         {
             TestStatusText.Text = $"测试失败: {ex.Message}";
-            _testSession = null;
+        }
+        finally
+        {
+            if (ReferenceEquals(_testSession, session))
+            {
+                _testSession = null;
+            }
+            if (session is not null)
+            {
+                await session.DisposeAsync();
+            }
+            _testCancellation?.Dispose();
+            _testCancellation = null;
+            _testInProgress = false;
+            TestButton.Content = "测试选中设备";
+            TestButton.IsEnabled = true;
         }
     }
+
+    private async void CameraToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cameraSession is not null)
+        {
+            await StopCameraAsync();
+            return;
+        }
+        await StartCameraAsync();
+    }
+
+    private async Task StartCameraAsync()
+    {
+        if (_cameraOperationInProgress || _testInProgress)
+        {
+            TestStatusText.Text = _testInProgress ? "请先等待测试预览结束" : "相机操作进行中";
+            return;
+        }
+        if (DevicesGrid.SelectedItem is not CameraDescriptor descriptor)
+        {
+            ThemedMessageBox.Show("先扫描并选择设备", "提示");
+            return;
+        }
+
+        _cameraOperationInProgress = true;
+        CameraToggleButton.IsEnabled = false;
+        ICameraSession? session = null;
+        try
+        {
+            TestStatusText.Text = $"正在开启 {descriptor.DisplayName}…";
+            var options = AppServices.Instance.ApplyCameraDefaults(descriptor, new CameraOpenOptions());
+            session = await AppServices.Instance.Cameras.OpenSessionAsync(descriptor, options, CancellationToken.None);
+            var activeSession = session;
+            session.Faulted += (_, args) => Dispatcher.BeginInvoke(async () =>
+            {
+                if (ReferenceEquals(_cameraSession, activeSession))
+                {
+                    TestStatusText.Text = $"相机故障：{args.Fault.Message}";
+                    await StopCameraAsync();
+                }
+            });
+            await session.OpenAsync(options, CancellationToken.None);
+            if (session.State == CameraSessionState.Faulted)
+            {
+                throw new InvalidOperationException("相机打开失败，请检查设备是否被其他程序占用");
+            }
+            session.FrameReceived += (_, args) => Dispatcher.BeginInvoke(() =>
+                _preview.Render(TestPreviewImage, args.Frame));
+            await session.StartAsync(CancellationToken.None);
+            _cameraSession = session;
+            session = null;
+            CameraToggleButton.Content = "关闭相机";
+            TestStatusText.Text = "相机已开启，正在持续预览";
+        }
+        catch (Exception ex)
+        {
+            TestStatusText.Text = $"开启相机失败：{ex.Message}";
+        }
+        finally
+        {
+            if (session is not null)
+            {
+                await session.DisposeAsync();
+            }
+            _cameraOperationInProgress = false;
+            CameraToggleButton.IsEnabled = true;
+        }
+    }
+
+    private async Task StopCameraAsync()
+    {
+        if (_cameraOperationInProgress && _cameraSession is null)
+        {
+            return;
+        }
+
+        var session = _cameraSession;
+        _cameraSession = null;
+        CameraToggleButton.Content = "开启相机";
+        if (session is null)
+        {
+            return;
+        }
+
+        CameraToggleButton.IsEnabled = false;
+        try
+        {
+            await session.DisposeAsync();
+            TestStatusText.Text = "相机已关闭";
+        }
+        finally
+        {
+            CameraToggleButton.IsEnabled = true;
+        }
+    }
+
 }
