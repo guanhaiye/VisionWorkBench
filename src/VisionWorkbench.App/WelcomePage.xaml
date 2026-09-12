@@ -38,7 +38,7 @@
                                Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center" Margin="0,26,0,0"/>
                     <TextBlock Text="AI 视觉工作台" FontSize="20" FontWeight="SemiBold"
                                Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" Margin="0,7,0,0"/>
-                    <TextBlock Text="面向工业视觉场景的一体化工作平台，覆盖数据标注、模型训练、实时检测、行为识别与 TCP/IP 任务通讯。"
+                    <TextBlock Text="面向工业视觉场景的一体化工作平台。"
                                FontSize="14" LineHeight="25" TextAlignment="Center" TextWrapping="Wrap"
                                Foreground="{DynamicResource MutedTextBrush}" Margin="0,22,0,0"/>
                     <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0">
