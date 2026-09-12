@@ -624,7 +624,7 @@ public partial class Shell : Window
 
     private static bool ShouldHideLocalStatus(FrameworkElement element)
     {
-        if (!string.Equals(element.Name, "StatusText", StringComparison.OrdinalIgnoreCase))
+        if (!element.Name.Contains("Status", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

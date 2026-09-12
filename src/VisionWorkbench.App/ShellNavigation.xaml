@@ -330,10 +330,10 @@
                             VerticalContentAlignment="Stretch"/>
         </Border>
         <TextBlock x:Name="GlobalLogText" Grid.Row="1" Grid.Column="1"
-                   Width="500" Margin="0,0,28,22"
+                   Width="500" Margin="0,0,14,10"
                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
                    Panel.ZIndex="100" Foreground="Green"
-                   TextWrapping="Wrap" IsHitTestVisible="False" />
+                   TextAlignment="Right" TextWrapping="Wrap" IsHitTestVisible="False" />
         <!-- Legacy global log panel is intentionally disabled; the shared log keeps the original text-only appearance. -->
         <!--
         <Border x:Name="GlobalLogPanel" Grid.Row="1" Grid.Column="1"
