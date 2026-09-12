@@ -58,15 +58,21 @@
             </Border>
 
             <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="12">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel x:Name="EditorPanel" IsEnabled="False">
-                        <DockPanel Margin="0,0,0,10">
+                <Grid x:Name="EditorPanel" IsEnabled="False">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                        <DockPanel Grid.Row="0" Margin="0,0,0,10">
                             <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Foreground="{DynamicResource MutedTextBrush}"
                                        VerticalAlignment="Center" TextWrapping="Wrap" />
                             <TextBlock Text="SOP定义" FontSize="18" FontWeight="SemiBold" />
                         </DockPanel>
 
-                        <GroupBox Header="基本信息" Margin="0,0,0,10">
+                        <GroupBox Grid.Row="1" Header="基本信息" Margin="0,0,0,10">
                             <Grid Margin="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="100" />
@@ -89,17 +95,24 @@
                             </Grid>
                         </GroupBox>
 
-                        <GroupBox Header="工序步骤" Margin="0,0,0,10">
-                            <DockPanel Margin="8">
-                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,7">
+                        <GroupBox Grid.Row="2" Header="工序步骤" Margin="0,0,0,10">
+                            <Grid Margin="8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,7">
                                     <Button Content="新增步骤" Click="AddStep_Click" />
                                     <Button Content="删除步骤" Click="RemoveStep_Click" />
                                     <TextBlock Text="每个工序对应一个模型；按步骤顺序组合目标检测、OCR、条码、二维码、行为识别等模型。"
                                                Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
                                 </StackPanel>
-                                <DataGrid x:Name="StepsGrid" AutoGenerateColumns="False" CanUserAddRows="False"
-                                          DockPanel.Dock="Top" VerticalAlignment="Top" SelectionMode="Single"
-                                          MinHeight="0" MaxHeight="360"
+                                <DataGrid x:Name="StepsGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False"
+                                          VerticalAlignment="Stretch" SelectionMode="Single"
+                                          MinHeight="0"
+                                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                           CellStyle="{StaticResource SopDataGridCellStyle}"
                                           ColumnHeaderStyle="{StaticResource SopDataGridHeaderStyle}">
                                     <DataGrid.Columns>
@@ -184,17 +197,16 @@
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                     </DataGrid.Columns>
                                 </DataGrid>
-                            <TextBlock Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。模型参数填写 JSON 对象，类别/匹配值用于生成对应 SOP 事件条件。"
-                                           DockPanel.Dock="Top" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,7,0,0" />
-                            </DockPanel>
+                                <TextBlock Grid.Row="2" Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。模型参数填写 JSON 对象，类别/匹配值用于生成对应 SOP 事件条件。"
+                                           Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,7,0,0" />
+                            </Grid>
                         </GroupBox>
 
-                        <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Padding="10">
+                        <Border Grid.Row="3" Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Padding="10">
                             <TextBlock Text="使用方式：在这里配置 SOP 流程、步骤和每步模型。保存并发布后，请到任务配置选择输入源、设备/路径、运行模式并绑定本 SOP；保存任务后，实时检测中即可选择该任务。"
                                        TextWrapping="Wrap" />
                         </Border>
-                    </StackPanel>
-                </ScrollViewer>
+                </Grid>
             </Border>
         </Grid>
     </Grid>
