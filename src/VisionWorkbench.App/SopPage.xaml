@@ -192,9 +192,6 @@
                                         <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="65"
                                                             ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                             EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
-                                        <DataGridTextColumn Header="模型参数 JSON" Binding="{Binding SettingsJson, UpdateSourceTrigger=LostFocus}" Width="220"
-                                                            ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
-                                                            EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                                     </DataGrid.Columns>
                                 </DataGrid>
                                 <TextBlock Grid.Row="2" Text="模型类型和模型 ID 用于确定步骤模型；算法运行时由系统根据模型类型自动选择。模型参数填写 JSON 对象，类别/匹配值用于生成对应 SOP 事件条件。"
