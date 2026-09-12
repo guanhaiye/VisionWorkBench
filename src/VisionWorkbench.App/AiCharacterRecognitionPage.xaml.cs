@@ -68,6 +68,7 @@ public partial class AiCharacterRecognitionPage : UserControl
             AiRecognitionKind.QrCode => "PaddleOCR-VL-1.6 + QR解析",
             _ => "SOTA · 复杂文档/字符识别",
         };
+        AnnotationKindText.Text = KindLabel;
         SaveAnnotationButton.Content = "保存数据集";
         AnnotationDescriptionText.Text = $"为当前图片填写{label}内容，保存后用于训练。";
         TrainingTitleText.Text = $"{label}识别训练";
@@ -104,6 +105,11 @@ public partial class AiCharacterRecognitionPage : UserControl
     private void LoadAnnotationFolder(string folder)
     {
         _annotationRoot = Path.GetFullPath(folder);
+        AnnotationDatasetList.Items.Clear();
+        AnnotationDatasetList.Items.Add(new DirectoryInfo(_annotationRoot).Name);
+        AnnotationDatasetList.SelectedIndex = 0;
+        AnnotationDatasetNameText.Text = new DirectoryInfo(_annotationRoot).Name;
+        AnnotationSourceRootText.Text = _annotationRoot;
         AnnotationRootText.Text = _annotationRoot;
         _selectedAnnotationImage = null;
         AnnotationPreview.Source = null;
@@ -113,6 +119,7 @@ public partial class AiCharacterRecognitionPage : UserControl
             .Select(path => new OcrImageItem(path))
             .ToList();
         AnnotationImageList.ItemsSource = images;
+        AnnotationImageListEmptyText.Visibility = images.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         AnnotationImageList.SelectedIndex = images.Count > 0 ? 0 : -1;
         AnnotationStatusText.Text = $"已加载 {images.Count} 张图片，已标注 {_annotations.Count} 张。";
     }
