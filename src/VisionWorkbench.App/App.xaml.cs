@@ -73,6 +73,7 @@ public partial class App : System.Windows.Application
             if (environmentCheck)
             {
                 var exitCode = await EnvironmentCheckService.RunAsync();
+                Environment.Exit(exitCode);
                 Shutdown(exitCode);
                 return;
             }
