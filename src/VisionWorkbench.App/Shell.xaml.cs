@@ -11,6 +11,7 @@ using System.Windows.Interop;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32;
+using VisionWorkbench.Domain;
 
 namespace VisionWorkbench.App;
 
@@ -73,6 +74,13 @@ public partial class Shell : Window
         _pages["live"] = () => new LivePage();
         _pages["tasks"] = () => new TasksPage();
         _pages["sop"] = () => new SopPage();
+        _pages["sop-recording"] = () => new SopRecordingPage(new SopDefinition
+        {
+            Id = "standalone-video-capture",
+            Code = "VIDEO-CAPTURE",
+            Name = "未绑定SOP的视频采集",
+            Version = 1,
+        });
         _pages["detection-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.Detection);
         _pages["segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.Segmentation);
         _pages["semantic-segmentation-annotation"] = () => new DatasetAnnotationPage(AnnotationPlatform.SemanticSegmentation);
@@ -242,6 +250,9 @@ public partial class Shell : Window
             live.OnShown();
         }
     }
+
+    internal void NavigateToSopRecordingPage() => ShowPage("sop-recording");
+    internal void NavigateToSopPage() => ShowPage("sop");
 
     private static bool IsLicenseExemptPage(string key) =>
         key is "welcome" or "license" or "settings" or "logs" or "monitor";

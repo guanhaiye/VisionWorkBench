@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
+using OpenCvSharp;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Application;
 using VisionWorkbench.Domain;
@@ -80,10 +81,22 @@ public partial class SopPage : UserControl
         public string MinConfidence { get; set; } = "0.60";
         public string StableFrames { get; set; } = "3";
         public string TimeoutSeconds { get; set; } = "30";
+        public string RecordingSeconds { get; set; } = "5";
 
         public event PropertyChangedEventHandler? PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    private sealed class SopVideoRecord
+    {
+        public string Id { get; set; } = "";
+        public string DefinitionId { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string RelativeVideoPath { get; set; } = "";
+        public DateTimeOffset StartedAt { get; set; }
+        public double DurationSeconds { get; set; }
+        public int FrameCount { get; set; }
     }
 
     private readonly ObservableCollection<StepEditorRow> _steps = [];
@@ -91,12 +104,35 @@ public partial class SopPage : UserControl
     private SopDefinition? _selectedDefinition;
     private bool _loading;
     private IReadOnlySet<string> _availablePluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private readonly ObservableCollection<SopVideoRecord> _videoRecords = [];
+    private readonly object _captureLock = new();
+    private readonly PreviewRenderer _capturePreview = new();
+    private ICameraSession? _captureSession;
+    private VideoWriter? _captureWriter;
+    private string? _captureVideoPath;
+    private string? _captureFramesDirectory;
+    private string? _captureRecordId;
+    private int _captureFrameCount;
+    private bool _captureRecording;
+    private CancellationTokenSource? _captureScheduleCancellation;
+    private int _captureGeneration;
 
     public SopPage()
     {
         InitializeComponent();
         StepsGrid.ItemsSource = _steps;
-        Loaded += async (_, _) => await LoadAsync();
+    }
+
+    private async void Page_Loaded(object sender, RoutedEventArgs e)
+    {
+        await LoadAsync();
+        await RefreshCaptureCamerasAsync();
+    }
+
+    private async void Page_Unloaded(object sender, RoutedEventArgs e)
+    {
+        await StopCaptureAsync(saveRecord: true);
+        await StopCaptureCameraAsync();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadAsync(_selectedDefinition?.Id);
@@ -207,6 +243,12 @@ public partial class SopPage : UserControl
         EditorPanel.IsEnabled = true;
         DefinitionNameText.Focus();
         StatusText.Text = "已复制为新 SOP 草稿；修改完成后点击“保存”即可生成独立流程。";
+    }
+
+    private void Recording_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.Window.GetWindow(this) is Shell shell)
+            shell.NavigateToSopRecordingPage();
     }
 
     private string BuildCopyName(string sourceName)
@@ -329,6 +371,372 @@ public partial class SopPage : UserControl
         }
     }
 
+    private string CaptureIndexPath => Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "sop-video-recordings.json");
+
+    private string CaptureRootDirectory => Path.Combine(
+        AppServices.Instance.Settings.DataDirectory,
+        "sop-recordings",
+        SafeFileName(_selectedDefinition?.Code ?? "draft"));
+
+    private async Task RefreshCaptureCamerasAsync()
+    {
+        try
+        {
+            var previous = CaptureCameraCombo.SelectedItem as CameraDescriptor;
+            var cameras = await AppServices.Instance.Cameras.DiscoverAllAsync(CancellationToken.None);
+            CaptureCameraCombo.ItemsSource = cameras;
+            CaptureCameraCombo.SelectedItem = cameras.FirstOrDefault(item =>
+                previous is not null
+                && string.Equals(item.ProviderId, previous.ProviderId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.DeviceId, previous.DeviceId, StringComparison.OrdinalIgnoreCase))
+                ?? cameras.FirstOrDefault();
+            if (cameras.Count == 0)
+            {
+                CaptureVideoStatusText.Text = "未发现可用相机";
+            }
+        }
+        catch (Exception ex)
+        {
+            CaptureVideoStatusText.Text = $"相机扫描失败：{ex.Message}";
+        }
+    }
+
+    private async Task LoadVideoRecordsAsync(string definitionId)
+    {
+        List<SopVideoRecord> records = [];
+        try
+        {
+            if (File.Exists(CaptureIndexPath))
+            {
+                var json = await File.ReadAllTextAsync(CaptureIndexPath);
+                records = JsonSerializer.Deserialize<List<SopVideoRecord>>(json) ?? [];
+            }
+        }
+        catch (Exception ex)
+        {
+            CaptureVideoStatusText.Text = $"录像列表加载失败：{ex.Message}";
+        }
+
+        _videoRecords.Clear();
+        foreach (var record in records
+                     .Where(item => string.Equals(item.DefinitionId, definitionId, StringComparison.Ordinal))
+                     .OrderByDescending(item => item.StartedAt))
+        {
+            _videoRecords.Add(record);
+        }
+        CaptureVideoList.ItemsSource = _videoRecords;
+        CaptureVideoStatusText.Text = _videoRecords.Count == 0
+            ? "暂无已录制视频"
+            : $"已有 {_videoRecords.Count} 个视频，选择后可以检查";
+    }
+
+    private bool TryGetCaptureSchedule(out List<(string Name, double Seconds)> schedule, out string message)
+    {
+        schedule = [];
+        message = "";
+        foreach (var row in _steps)
+        {
+            if (!double.TryParse(row.RecordingSeconds.Trim(), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out var seconds) || seconds <= 0)
+            {
+                message = $"步骤“{row.Name}”的录制时长必须大于 0 秒。";
+                return false;
+            }
+            schedule.Add((row.Name.Trim(), seconds));
+        }
+        if (schedule.Count == 0)
+        {
+            message = "请先新增至少一个步骤。";
+            return false;
+        }
+        return true;
+    }
+
+    private async void RefreshCaptureCameras_Click(object sender, RoutedEventArgs e)
+        => await RefreshCaptureCamerasAsync();
+
+    private async void CaptureButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_captureRecording || _captureScheduleCancellation is not null)
+        {
+            await StopCaptureAsync(saveRecord: true);
+            return;
+        }
+        if (_selectedDefinition is null)
+        {
+            ThemedMessageBox.Show("请先选择或新建一个 SOP。", "视频录制", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!TryGetCaptureSchedule(out var schedule, out var scheduleMessage))
+        {
+            ThemedMessageBox.Show(scheduleMessage, "视频录制", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (CaptureCameraCombo.SelectedItem is not CameraDescriptor)
+        {
+            ThemedMessageBox.Show("请先选择相机。", "视频录制", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            await StartCaptureCameraAsync();
+            if (_captureSession is null) return;
+
+            Directory.CreateDirectory(CaptureRootDirectory);
+            _captureRecordId = $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
+            _captureVideoPath = Path.Combine(CaptureRootDirectory, $"{_captureRecordId}.avi");
+            _captureFramesDirectory = Path.Combine(CaptureRootDirectory, _captureRecordId);
+            _captureFrameCount = 0;
+            _captureWriter = null;
+            var generation = Interlocked.Increment(ref _captureGeneration);
+            _captureScheduleCancellation = new CancellationTokenSource();
+            CaptureButton.Content = "停止录制";
+            CapturePreviewHintText.Visibility = Visibility.Collapsed;
+            CaptureStepPromptText.Text = "准备开始";
+            CaptureCountdownText.Text = "";
+            _ = RunCaptureScheduleAsync(schedule, generation, _captureScheduleCancellation.Token);
+        }
+        catch (Exception ex)
+        {
+            CaptureButton.Content = "开始录制";
+            CaptureVideoStatusText.Text = $"录制启动失败：{ex.Message}";
+            await StopCaptureCameraAsync();
+        }
+    }
+
+    private async Task StartCaptureCameraAsync()
+    {
+        if (_captureSession is not null) return;
+        if (CaptureCameraCombo.SelectedItem is not CameraDescriptor descriptor)
+            throw new InvalidOperationException("未选择相机");
+
+        var options = AppServices.Instance.ApplyCameraDefaults(descriptor,
+            new CameraOpenOptions { DesiredFps = 10 });
+        var session = await AppServices.Instance.Cameras.OpenSessionAsync(
+            descriptor, options, CancellationToken.None);
+        try
+        {
+            session.FrameReceived += CaptureSession_FrameReceived;
+            session.Faulted += CaptureSession_Faulted;
+            await session.OpenAsync(options, CancellationToken.None);
+            if (session.State == CameraSessionState.Faulted)
+                throw new InvalidOperationException("相机打开失败，请检查设备是否被其他程序占用。");
+            await session.StartAsync(CancellationToken.None);
+            _captureSession = session;
+            session = null!;
+        }
+        finally
+        {
+            if (session is not null) await session.DisposeAsync();
+        }
+    }
+
+    private void CaptureSession_Faulted(object? sender, CameraFaultedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            CaptureVideoStatusText.Text = $"相机故障：{e.Fault.Message}";
+            if (_captureRecording) _ = StopCaptureAsync(saveRecord: true);
+        });
+    }
+
+    private void CaptureSession_FrameReceived(object? sender, VideoFrameReceivedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() =>
+            _capturePreview.Render(CapturePreviewImage, e.Frame, maxFps: 15, force: true)));
+
+        lock (_captureLock)
+        {
+            if (!_captureRecording || _captureVideoPath is null || _captureFramesDirectory is null) return;
+            try
+            {
+                if (_captureWriter is null)
+                {
+                    Directory.CreateDirectory(_captureFramesDirectory);
+                    _captureWriter = TryCreateCaptureWriter(_captureVideoPath, 10,
+                        new OpenCvSharp.Size(e.Frame.Width, e.Frame.Height));
+                    if (_captureWriter is null || !_captureWriter.IsOpened())
+                        throw new InvalidOperationException("无法创建录像文件，请检查磁盘空间和视频编码器。");
+                }
+                using var mat = Mat.FromPixelData(e.Frame.Height, e.Frame.Width,
+                    MatType.CV_8UC3, e.Frame.Pixels, e.Frame.Stride);
+                _captureWriter.Write(mat);
+                Cv2.ImWrite(Path.Combine(_captureFramesDirectory,
+                    $"frame_{_captureFrameCount:000000}.jpg"), mat);
+                _captureFrameCount++;
+            }
+            catch (Exception ex)
+            {
+                _captureRecording = false;
+                Dispatcher.BeginInvoke(() => CaptureVideoStatusText.Text = $"录像保存失败：{ex.Message}");
+            }
+        }
+    }
+
+    private async Task RunCaptureScheduleAsync(List<(string Name, double Seconds)> schedule,
+        int generation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var preparationSeconds = 3;
+            if (int.TryParse(CapturePreparationSecondsText.Text.Trim(), out var configuredPreparation))
+                preparationSeconds = Math.Clamp(configuredPreparation, 0, 30);
+            for (var remaining = preparationSeconds; remaining > 0; remaining--)
+            {
+                SetCapturePrompt("准备开始，请保持画面稳定", $"{remaining} 秒后开始");
+                await Task.Delay(1000, cancellationToken);
+            }
+
+            lock (_captureLock) _captureRecording = true;
+            var startedAt = DateTimeOffset.Now;
+            SetCapturePrompt($"请执行：{schedule[0].Name}", "录制中");
+            for (var index = 0; index < schedule.Count; index++)
+            {
+                var step = schedule[index];
+                var end = DateTimeOffset.UtcNow.AddSeconds(step.Seconds);
+                while (DateTimeOffset.UtcNow < end)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var remaining = Math.Max(0, (end - DateTimeOffset.UtcNow).TotalSeconds);
+                    SetCapturePrompt($"请执行：{step.Name}", $"本步骤剩余 {remaining:0.0} 秒");
+                    await Task.Delay(200, cancellationToken);
+                }
+            }
+            SetCapturePrompt("录制完成", "正在保存视频…");
+            if (generation == Volatile.Read(ref _captureGeneration))
+                await Dispatcher.InvokeAsync(() => StopCaptureAsync(saveRecord: true));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void SetCapturePrompt(string prompt, string countdown)
+        => Dispatcher.BeginInvoke(() =>
+        {
+            CaptureStepPromptText.Text = prompt;
+            CaptureCountdownText.Text = countdown;
+        });
+
+    private async Task StopCaptureAsync(bool saveRecord)
+    {
+        _captureScheduleCancellation?.Cancel();
+        _captureScheduleCancellation?.Dispose();
+        _captureScheduleCancellation = null;
+        SopVideoRecord? record = null;
+        lock (_captureLock)
+        {
+            _captureRecording = false;
+            _captureWriter?.Release();
+            _captureWriter?.Dispose();
+            _captureWriter = null;
+            if (saveRecord && _selectedDefinition is not null && _captureRecordId is not null
+                && _captureVideoPath is not null && _captureFrameCount >= 2
+                && File.Exists(_captureVideoPath))
+            {
+                var relativePath = Path.GetRelativePath(AppServices.Instance.Settings.DataDirectory,
+                    _captureVideoPath);
+                record = new SopVideoRecord
+                {
+                    Id = _captureRecordId,
+                    DefinitionId = _selectedDefinition.Id,
+                    DisplayName = $"{_captureRecordId}（{_captureFrameCount}帧）",
+                    RelativeVideoPath = relativePath,
+                    StartedAt = DateTimeOffset.Now,
+                    DurationSeconds = _captureFrameCount / 10d,
+                    FrameCount = _captureFrameCount,
+                };
+            }
+        }
+
+        _captureRecordId = null;
+        _captureVideoPath = null;
+        _captureFramesDirectory = null;
+        CaptureButton.Content = "开始录制";
+        CaptureCountdownText.Text = "";
+        if (record is not null)
+        {
+            var allRecords = new List<SopVideoRecord>();
+            if (File.Exists(CaptureIndexPath))
+            {
+                try
+                {
+                    allRecords = JsonSerializer.Deserialize<List<SopVideoRecord>>(
+                        await File.ReadAllTextAsync(CaptureIndexPath)) ?? [];
+                }
+                catch { }
+            }
+            allRecords.RemoveAll(item => string.Equals(item.Id, record.Id, StringComparison.Ordinal));
+            allRecords.Add(record);
+            Directory.CreateDirectory(Path.GetDirectoryName(CaptureIndexPath)!);
+            await File.WriteAllTextAsync(CaptureIndexPath,
+                JsonSerializer.Serialize(allRecords, new JsonSerializerOptions { WriteIndented = true }));
+            _videoRecords.Insert(0, record);
+            CaptureVideoList.ItemsSource = _videoRecords;
+            CaptureVideoStatusText.Text = $"已保存：{record.DisplayName}";
+        }
+        else if (saveRecord)
+        {
+            CaptureVideoStatusText.Text = "录像已停止，未生成有效视频";
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task StopCaptureCameraAsync()
+    {
+        var session = _captureSession;
+        _captureSession = null;
+        if (session is null) return;
+        session.FrameReceived -= CaptureSession_FrameReceived;
+        session.Faulted -= CaptureSession_Faulted;
+        try { await session.StopAsync(CancellationToken.None); } catch { }
+        try { await session.DisposeAsync(); } catch { }
+    }
+
+    private void CaptureVideoList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        CaptureVideoPlayer.Stop();
+        CaptureVideoPlayer.Close();
+        if (CaptureVideoList.SelectedItem is not SopVideoRecord record) return;
+        var path = Path.Combine(AppServices.Instance.Settings.DataDirectory, record.RelativeVideoPath);
+        if (!File.Exists(path))
+        {
+            CaptureVideoStatusText.Text = "视频文件不存在，可能已被移动或删除";
+            return;
+        }
+        CaptureVideoPlayer.Source = new Uri(path);
+        CaptureVideoStatusText.Text = $"{record.DisplayName}，时长约 {record.DurationSeconds:0.0} 秒";
+    }
+
+    private void CaptureVideoPlay_Click(object sender, RoutedEventArgs e) => CaptureVideoPlayer.Play();
+    private void CaptureVideoPause_Click(object sender, RoutedEventArgs e) => CaptureVideoPlayer.Pause();
+    private void CaptureVideoStop_Click(object sender, RoutedEventArgs e) => CaptureVideoPlayer.Stop();
+
+    private static VideoWriter? TryCreateCaptureWriter(string path, double fps, OpenCvSharp.Size size)
+    {
+        foreach (var codec in new[] { FourCC.MJPG, FourCC.XVID, FourCC.MP4V, FourCC.DIVX })
+        {
+            VideoWriter? candidate = null;
+            try
+            {
+                candidate = new VideoWriter(path, codec, fps, size);
+                if (candidate.IsOpened()) return candidate;
+            }
+            catch { }
+            candidate?.Dispose();
+            if (File.Exists(path)) File.Delete(path);
+        }
+        return null;
+    }
+
+    private static string SafeFileName(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var clean = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
+        return string.IsNullOrWhiteSpace(clean) ? "sop" : clean;
+    }
+
     private void ChooseModelPath_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.Tag is not StepEditorRow row) return;
@@ -392,8 +800,10 @@ public partial class SopPage : UserControl
                 MinConfidence = (condition?.MinConfidence ?? 0.6).ToString("0.##", CultureInfo.InvariantCulture),
                 StableFrames = step.MinimumStableFrames.ToString(CultureInfo.InvariantCulture),
                 TimeoutSeconds = step.TimeoutSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                RecordingSeconds = step.RecordingDurationSeconds.ToString("0.##", CultureInfo.InvariantCulture),
             });
         }
+        _ = LoadVideoRecordsAsync(definition.Id);
         StatusText.Text = definition.Status == SopDefinitionStatus.Published
             ? "已发布版本只读保护：如需修改，请点击“新建SOP”制作新版本。"
             : $"当前编辑：{definition.Name} v{definition.Version}";
@@ -407,6 +817,10 @@ public partial class SopPage : UserControl
         ProductCodeText.Text = "";
         VersionText.Text = "";
         _steps.Clear();
+        _videoRecords.Clear();
+        CaptureVideoList.ItemsSource = _videoRecords;
+        CaptureVideoPlayer.Stop();
+        CaptureVideoPlayer.Close();
     }
 
     private static SopStepExecution LegacyStepExecution(SopExecutionProfile? profile, SopStep step)
@@ -504,6 +918,11 @@ public partial class SopPage : UserControl
                 throw new InvalidOperationException($"步骤“{row.Name}”的超时秒数必须是非负数。");
             }
 
+            if (!double.TryParse(row.RecordingSeconds.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var recordingSeconds) || recordingSeconds <= 0)
+            {
+                throw new InvalidOperationException($"步骤“{row.Name}”的录制时长必须大于 0 秒。");
+            }
+
             var stepId = $"{code}-step-{order:00}";
             parsedSteps.Add(new SopStep
             {
@@ -514,6 +933,7 @@ public partial class SopPage : UserControl
                 Required = true,
                 EnforceOrder = true,
                 TimeoutSeconds = timeout,
+                RecordingDurationSeconds = recordingSeconds,
                 MinimumStableFrames = stableFrames,
                 Execution = new SopStepExecution
                 {

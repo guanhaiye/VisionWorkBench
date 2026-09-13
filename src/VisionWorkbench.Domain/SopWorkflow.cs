@@ -173,6 +173,8 @@ public sealed record SopStep
     public bool Required { get; init; } = true;
     public bool EnforceOrder { get; init; } = true;
     public double TimeoutSeconds { get; init; } = 30;
+    /// <summary>制作 SOP 参考视频时，本步骤展示提示并录制的时长（秒）。</summary>
+    public double RecordingDurationSeconds { get; init; } = 5;
     public int MinimumStableFrames { get; init; } = 3;
     /// <summary>本工序使用的模型。为空时回退到旧版 SOP 顶层 Execution 配置。</summary>
     public SopStepExecution? Execution { get; init; }
