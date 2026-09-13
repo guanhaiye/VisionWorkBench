@@ -19,10 +19,20 @@ public partial class SopRecordingPage : UserControl
 {
     private sealed class RecordingStepRow : INotifyPropertyChanged
     {
+        private int _order;
         private string _name = "";
         private string _durationText = "5";
 
-        public int Order { get; set; }
+        public int Order
+        {
+            get => _order;
+            set
+            {
+                if (_order == value) return;
+                _order = value;
+                OnPropertyChanged();
+            }
+        }
         public string Name
         {
             get => _name;
@@ -63,16 +73,68 @@ public partial class SopRecordingPage : UserControl
         public double DurationSeconds { get; set; } = 5;
     }
 
+    private enum ManualStepCommand
+    {
+        Start,
+        RedoPrevious,
+    }
+
     private sealed class SopVideoRecord
     {
         public string Id { get; set; } = "";
         public string DefinitionId { get; set; } = "";
         public string DisplayName { get; set; } = "";
+        public string StorageRootPath { get; set; } = "";
         public string RelativeVideoPath { get; set; } = "";
         public DateTimeOffset StartedAt { get; set; }
         public double DurationSeconds { get; set; }
         public int FrameCount { get; set; }
     }
+
+    private sealed class RecordingManifest
+    {
+        public int Version { get; set; } = 1;
+        public string Id { get; set; } = "";
+        public string DefinitionId { get; set; } = "";
+        public string DefinitionCode { get; set; } = "";
+        public string DefinitionName { get; set; } = "";
+        public DateTimeOffset StartedAt { get; set; }
+        public string StorageRootPath { get; set; } = "";
+        public int FrameRate { get; set; } = 10;
+        public int FrameCount { get; set; }
+        public double DurationSeconds { get; set; }
+        public bool ManualMode { get; set; }
+        public bool Completed { get; set; }
+        public string MasterVideoPath { get; set; } = "";
+        public string SourceFramesPath { get; set; } = "";
+        public List<RecordingManifestStep> Steps { get; set; } = [];
+    }
+
+    private sealed class RecordingManifestStep
+    {
+        public int Order { get; set; }
+        public string Name { get; set; } = "";
+        public double PlannedDurationSeconds { get; set; }
+        public int StartFrame { get; set; }
+        public int EndFrame { get; set; }
+        public int FrameCount { get; set; }
+        public double ActualDurationSeconds { get; set; }
+        public bool Completed { get; set; }
+        public string VideoPath { get; set; } = "";
+        public string FramesPath { get; set; } = "";
+    }
+
+    private sealed record RecordingCaptureInfo(
+        string Id,
+        string StorageRootPath,
+        string VideoPath,
+        string FramesDirectory,
+        DateTimeOffset StartedAt,
+        int FrameCount,
+        IReadOnlyList<int> StepFrameStarts,
+        IReadOnlyList<RecordingPlanStep> Steps,
+        bool ManualMode,
+        bool Completed);
 
     private readonly SopDefinition _definition;
     private readonly ObservableCollection<RecordingStepRow> _steps = [];
@@ -88,17 +150,29 @@ public partial class SopRecordingPage : UserControl
     private DateTimeOffset? _recordStartedAt;
     private int _frameCount;
     private bool _recording;
+    private bool _recordingCompleted;
     private bool _videoIsPlaying;
     private SopVideoRecord? _previewedVideoRecord;
     private bool _toggleSelectedVideoOnClick;
+    private bool _cameraOperationInProgress;
     private CancellationTokenSource? _scheduleCancellation;
     private int _generation;
     private bool _manualMode;
-    private TaskCompletionSource<bool>? _manualStepStartSignal;
+    private List<RecordingPlanStep> _activeRecordingSteps = [];
+    private readonly List<int> _stepFrameStarts = [];
+    private int _currentStepIndex = -1;
+    private string? _stepReplayPath;
+    private TaskCompletionSource<ManualStepCommand>? _manualStepStartSignal;
+    private DispatcherTimer? _stepDragHoldTimer;
+    private System.Windows.Point _stepDragStartPoint;
+    private RecordingStepRow? _pendingStepDrag;
+    private RecordingStepRow? _draggedStep;
+    private bool _stepDragging;
 
     private string PlanIndexPath => Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "sop-recording-plans.json");
     private string VideoIndexPath => Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "sop-video-recordings.json");
-    private string VideoDirectory => Path.Combine(AppServices.Instance.Settings.DataDirectory, "sop-recordings", SafeFileName(_definition.Code));
+    private string RecordingRootDirectory => Path.GetFullPath(AppServices.Instance.Settings.SopRecordingDirectory);
+    private string VideoDirectory => Path.Combine(RecordingRootDirectory, SafeFileName(_definition.Code));
 
     public SopRecordingPage(SopDefinition definition)
     {
@@ -125,6 +199,7 @@ public partial class SopRecordingPage : UserControl
 
     private async void Control_Unloaded(object? sender, RoutedEventArgs e)
     {
+        CancelStepDrag();
         _videoProgressTimer.Stop();
         await StopRecordingAsync(saveRecord: true);
         await StopCameraAsync();
@@ -157,6 +232,29 @@ public partial class SopRecordingPage : UserControl
         _ = SavePlanAsync();
     }
 
+    private void MoveStepUp_Click(object sender, RoutedEventArgs e) => MoveSelectedStep(-1);
+
+    private void MoveStepDown_Click(object sender, RoutedEventArgs e) => MoveSelectedStep(1);
+
+    private void MoveSelectedStep(int offset)
+    {
+        if (_scheduleCancellation is not null
+            || StepGrid.SelectedItem is not RecordingStepRow selected)
+        {
+            return;
+        }
+
+        var currentIndex = _steps.IndexOf(selected);
+        var targetIndex = currentIndex + offset;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= _steps.Count) return;
+
+        _steps.Move(currentIndex, targetIndex);
+        RenumberSteps();
+        StepGrid.SelectedItem = selected;
+        StepGrid.ScrollIntoView(selected);
+        _ = SavePlanAsync();
+    }
+
     private void AddStepRow(string name, double durationSeconds)
     {
         var row = new RecordingStepRow
@@ -179,6 +277,92 @@ public partial class SopRecordingPage : UserControl
     {
         for (var index = 0; index < _steps.Count; index++)
             _steps[index].Order = index + 1;
+    }
+
+    private void StepGrid_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var row = ItemsControl.ContainerFromElement(
+            StepGrid, e.OriginalSource as DependencyObject) as DataGridRow;
+        if (row?.Item is not RecordingStepRow step) return;
+
+        CancelStepDrag();
+        _pendingStepDrag = step;
+        _stepDragStartPoint = e.GetPosition(StepGrid);
+        _stepDragHoldTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _stepDragHoldTimer.Tick += StepDragHoldTimer_Tick;
+        _stepDragHoldTimer.Start();
+    }
+
+    private void StepDragHoldTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_pendingStepDrag is null
+            || System.Windows.Input.Mouse.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+        {
+            CancelStepDrag();
+            return;
+        }
+
+        _stepDragHoldTimer?.Stop();
+        _draggedStep = _pendingStepDrag;
+        _stepDragging = true;
+        StepGrid.SelectedItem = _draggedStep;
+        StepGrid.CaptureMouse();
+        System.Windows.Input.Mouse.OverrideCursor = System.Windows.Input.Cursors.SizeNS;
+    }
+
+    private void StepGrid_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_stepDragging || _draggedStep is null) return;
+
+        var point = e.GetPosition(StepGrid);
+        if (Math.Abs(point.Y - _stepDragStartPoint.Y) < 3) return;
+
+        var hit = StepGrid.InputHitTest(point) as DependencyObject;
+        var targetRow = ItemsControl.ContainerFromElement(StepGrid, hit) as DataGridRow;
+        if (targetRow?.Item is not RecordingStepRow targetStep
+            || ReferenceEquals(targetStep, _draggedStep))
+        {
+            return;
+        }
+
+        var sourceIndex = _steps.IndexOf(_draggedStep);
+        var targetIndex = _steps.IndexOf(targetStep);
+        if (sourceIndex < 0 || targetIndex < 0 || sourceIndex == targetIndex) return;
+
+        _steps.Move(sourceIndex, targetIndex);
+        RenumberSteps();
+        StepGrid.SelectedItem = _draggedStep;
+        _stepDragStartPoint = point;
+        e.Handled = true;
+    }
+
+    private void StepGrid_PreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var wasDragging = _stepDragging;
+        CancelStepDrag();
+        if (!wasDragging) return;
+
+        RenumberSteps();
+        UpdateTotalDuration();
+        _ = SavePlanAsync();
+        e.Handled = true;
+    }
+
+    private void CancelStepDrag()
+    {
+        if (_stepDragHoldTimer is not null)
+        {
+            _stepDragHoldTimer.Stop();
+            _stepDragHoldTimer.Tick -= StepDragHoldTimer_Tick;
+            _stepDragHoldTimer = null;
+        }
+
+        if (_stepDragging)
+            StepGrid.ReleaseMouseCapture();
+        System.Windows.Input.Mouse.OverrideCursor = null;
+        _pendingStepDrag = null;
+        _draggedStep = null;
+        _stepDragging = false;
     }
 
     private void UpdateTotalDuration()
@@ -222,6 +406,62 @@ public partial class SopRecordingPage : UserControl
 
     private async void RefreshCamera_Click(object sender, RoutedEventArgs e) => await RefreshCamerasAsync();
 
+    private async void PreviewCamera_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cameraOperationInProgress || _scheduleCancellation is not null || _recording)
+        {
+            return;
+        }
+
+        _cameraOperationInProgress = true;
+        UpdateCameraPreviewUi();
+        try
+        {
+            if (_cameraSession is null)
+            {
+                if (_previewedVideoRecord is not null)
+                {
+                    RestoreMainPreview();
+                }
+
+                await StartCameraAsync();
+                PreviewHintText.Visibility = Visibility.Collapsed;
+                RecordStatusText.Text = CameraCombo.SelectedItem is CameraDescriptor descriptor
+                    ? $"预览中：{descriptor.DisplayName}"
+                    : "相机预览中";
+            }
+            else
+            {
+                await StopCameraAsync();
+                PreviewImage.Source = null;
+                PreviewHintText.Visibility = Visibility.Visible;
+                RecordStatusText.Text = "相机已停止，可点击“预览相机”重新打开";
+            }
+        }
+        catch (Exception ex)
+        {
+            await StopCameraAsync();
+            PreviewImage.Source = null;
+            PreviewHintText.Visibility = Visibility.Visible;
+            RecordStatusText.Text = $"相机预览失败：{ex.Message}";
+        }
+        finally
+        {
+            _cameraOperationInProgress = false;
+            UpdateCameraPreviewUi();
+        }
+    }
+
+    private void UpdateCameraPreviewUi()
+    {
+        if (PreviewCameraButton is null) return;
+
+        PreviewCameraButton.Content = _cameraSession is null ? "预览相机" : "停止相机";
+        PreviewCameraButton.IsEnabled = !_cameraOperationInProgress
+            && _scheduleCancellation is null
+            && !_recording;
+    }
+
     private void RecordModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_scheduleCancellation is not null) return;
@@ -235,12 +475,50 @@ public partial class SopRecordingPage : UserControl
         ManualStepButton.Visibility = manual ? Visibility.Visible : Visibility.Collapsed;
         ManualStepButton.IsEnabled = false;
         ManualStepButton.Content = "开始当前步骤";
+        PreviousStepButton.Visibility = manual ? Visibility.Visible : Visibility.Collapsed;
+        PreviousStepButton.IsEnabled = false;
+        ReplayPreviousStepButton.Visibility = manual ? Visibility.Visible : Visibility.Collapsed;
+        ReplayPreviousStepButton.IsEnabled = false;
     }
 
     private void ManualStepButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_stepReplayPath is not null) RestoreMainPreview();
         ManualStepButton.IsEnabled = false;
-        _manualStepStartSignal?.TrySetResult(true);
+        PreviousStepButton.IsEnabled = false;
+        ReplayPreviousStepButton.IsEnabled = false;
+        _manualStepStartSignal?.TrySetResult(ManualStepCommand.Start);
+    }
+
+    private void PreviousStepButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentStepIndex <= 0 || _manualStepStartSignal is null)
+        {
+            return;
+        }
+
+        if (_stepReplayPath is not null) RestoreMainPreview();
+        ManualStepButton.IsEnabled = false;
+        PreviousStepButton.IsEnabled = false;
+        ReplayPreviousStepButton.IsEnabled = false;
+        _manualStepStartSignal.TrySetResult(ManualStepCommand.RedoPrevious);
+    }
+
+    private async void ReplayPreviousStepButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentStepIndex <= 0 || _manualStepStartSignal is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await PlayPreviousStepAsync(_currentStepIndex - 1);
+        }
+        catch (Exception ex)
+        {
+            RecordStatusText.Text = $"上一步回放失败：{ex.Message}";
+        }
     }
 
     private bool TryGetSchedule(out List<(string Name, double Seconds)> schedule, out string message)
@@ -299,17 +577,27 @@ public partial class SopRecordingPage : UserControl
             _recordStartedAt = null;
             _frameCount = 0;
             _writer = null;
+            _recordingCompleted = false;
             _scheduleCancellation = new CancellationTokenSource();
             var generation = Interlocked.Increment(ref _generation);
             _manualMode = RecordModeCombo.SelectedIndex == 1;
+            _activeRecordingSteps = schedule
+                .Select(item => new RecordingPlanStep
+                {
+                    Name = item.Name,
+                    DurationSeconds = item.Seconds,
+                })
+                .ToList();
             RecordModeCombo.IsEnabled = false;
             RecordToggleButton.Content = "停止录制";
+            UpdateCameraPreviewUi();
             StepGrid.IsEnabled = false;
             VideoPlayer.Stop();
             VideoPlayer.Close();
             VideoPlayer.Source = null;
             VideoPlayer.Visibility = Visibility.Collapsed;
             VideoPlaybackControls.Visibility = Visibility.Collapsed;
+            PreviewImage.Visibility = Visibility.Visible;
             _previewedVideoRecord = null;
             PreviewHintText.Visibility = Visibility.Collapsed;
             StepPromptText.Text = "准备开始";
@@ -389,21 +677,195 @@ public partial class SopRecordingPage : UserControl
         }
     }
 
+    private Task TruncateRecordingToStepAsync(int stepIndex, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_videoPath is null || _framesDirectory is null || stepIndex < 0
+            || stepIndex >= _stepFrameStarts.Count)
+        {
+            return Task.CompletedTask;
+        }
+
+        lock (_captureLock)
+        {
+            var targetFrameCount = Math.Max(0, _stepFrameStarts[stepIndex]);
+            _recording = false;
+            _writer?.Release();
+            _writer?.Dispose();
+            _writer = null;
+
+            var framePaths = Directory.Exists(_framesDirectory)
+                ? Directory.GetFiles(_framesDirectory, "frame_*.jpg")
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+                : [];
+            targetFrameCount = Math.Min(targetFrameCount, framePaths.Length);
+
+            if (File.Exists(_videoPath))
+            {
+                File.Delete(_videoPath);
+            }
+
+            if (targetFrameCount > 0)
+            {
+                using var first = Cv2.ImRead(framePaths[0], ImreadModes.Color);
+                if (first.Empty())
+                {
+                    throw new InvalidOperationException("无法读取上一步录制的画面");
+                }
+
+                _writer = CreateWriter(_videoPath, 10,
+                    new OpenCvSharp.Size(first.Width, first.Height));
+                if (_writer is null || !_writer.IsOpened())
+                {
+                    _writer?.Dispose();
+                    _writer = null;
+                    throw new InvalidOperationException("无法重建视频文件");
+                }
+
+                try
+                {
+                    foreach (var path in framePaths.Take(targetFrameCount))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        using var frame = Cv2.ImRead(path, ImreadModes.Color);
+                        if (!frame.Empty()) _writer.Write(frame);
+                    }
+                }
+                catch
+                {
+                    _writer.Release();
+                    _writer.Dispose();
+                    _writer = null;
+                    throw;
+                }
+            }
+
+            foreach (var path in framePaths.Skip(targetFrameCount))
+            {
+                try { File.Delete(path); } catch { }
+            }
+            _frameCount = targetFrameCount;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task PlayPreviousStepAsync(int stepIndex)
+    {
+        if (_stepReplayPath is not null)
+        {
+            RestoreMainPreview();
+            return;
+        }
+
+        var replayPath = await Task.Run(() => BuildStepReplayVideo(stepIndex));
+        _stepReplayPath = replayPath;
+        VideoPlayer.Stop();
+        VideoPlayer.Close();
+        VideoPlayer.Source = null;
+        _videoProgressTimer.Stop();
+        ResetVideoProgress();
+        VideoPlayer.Source = new Uri(replayPath);
+        VideoPlayer.Visibility = Visibility.Visible;
+        VideoPlaybackControls.Visibility = Visibility.Visible;
+        PreviewImage.Visibility = Visibility.Collapsed;
+        PreviewHintText.Visibility = Visibility.Collapsed;
+        StepPromptText.Text = "正在回放上一步录制";
+        RecordStatusText.Text = "回放结束后可点击“开始当前步骤”继续录制";
+    }
+
+    private string BuildStepReplayVideo(int stepIndex)
+    {
+        if (_videoPath is null || _framesDirectory is null || stepIndex < 0
+            || stepIndex + 1 >= _stepFrameStarts.Count)
+        {
+            throw new InvalidOperationException("上一步还没有可回放的画面");
+        }
+
+        lock (_captureLock)
+        {
+            var start = Math.Max(0, _stepFrameStarts[stepIndex]);
+            var end = Math.Max(start, _stepFrameStarts[stepIndex + 1]);
+            var framePaths = Directory.Exists(_framesDirectory)
+                ? Directory.GetFiles(_framesDirectory, "frame_*.jpg")
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .Skip(start)
+                    .Take(end - start)
+                    .ToArray()
+                : [];
+            if (framePaths.Length == 0)
+            {
+                throw new InvalidOperationException("上一步还没有录制到有效画面");
+            }
+
+            Directory.CreateDirectory(VideoDirectory);
+            var replayPath = Path.Combine(VideoDirectory, $".step-replay-{Guid.NewGuid():N}.avi");
+            using var first = Cv2.ImRead(framePaths[0], ImreadModes.Color);
+            if (first.Empty())
+            {
+                throw new InvalidOperationException("无法读取上一步录制的画面");
+            }
+
+            var writer = CreateWriter(replayPath, 10,
+                new OpenCvSharp.Size(first.Width, first.Height));
+            if (writer is null || !writer.IsOpened())
+            {
+                writer?.Dispose();
+                throw new InvalidOperationException("无法生成上一步回放视频");
+            }
+
+            try
+            {
+                foreach (var path in framePaths)
+                {
+                    using var frame = Cv2.ImRead(path, ImreadModes.Color);
+                    if (!frame.Empty()) writer.Write(frame);
+                }
+            }
+            finally
+            {
+                writer.Release();
+                writer.Dispose();
+            }
+
+            return replayPath;
+        }
+    }
+
+    private void DeleteStepReplayFile()
+    {
+        var replayPath = _stepReplayPath;
+        _stepReplayPath = null;
+        if (replayPath is null) return;
+        try { if (File.Exists(replayPath)) File.Delete(replayPath); } catch { }
+    }
+
     private async Task RunScheduleAsync(List<(string Name, double Seconds)> schedule,
         int generation, CancellationToken cancellationToken)
     {
         try
         {
+            _stepFrameStarts.Clear();
+            _currentStepIndex = -1;
             for (var index = 0; index < schedule.Count; index++)
             {
+                _currentStepIndex = index;
                 var step = schedule[index];
-                lock (_captureLock) _recording = false;
+                lock (_captureLock)
+                {
+                    _recording = false;
+                    if (_stepFrameStarts.Count == index)
+                        _stepFrameStarts.Add(_frameCount);
+                    else if (_stepFrameStarts.Count > index)
+                        _stepFrameStarts[index] = _frameCount;
+                }
                 await PrepareStepAsync(step.Name, index, schedule.Count, cancellationToken);
                 HidePreparationOverlay();
 
                 if (_manualMode)
                 {
-                    _manualStepStartSignal = new TaskCompletionSource<bool>(
+                    _manualStepStartSignal = new TaskCompletionSource<ManualStepCommand>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     await Dispatcher.InvokeAsync(() =>
                     {
@@ -411,9 +873,20 @@ public partial class SopRecordingPage : UserControl
                         SetCountdownPlainText($"第 {index + 1}/{schedule.Count} 步 · 等待开始");
                         ManualStepButton.Content = $"开始第 {index + 1} 步录制";
                         ManualStepButton.IsEnabled = true;
+                        PreviousStepButton.Visibility = Visibility.Visible;
+                        PreviousStepButton.IsEnabled = index > 0;
+                        ReplayPreviousStepButton.Visibility = Visibility.Visible;
+                        ReplayPreviousStepButton.IsEnabled = index > 0;
                     });
-                    await _manualStepStartSignal.Task.WaitAsync(cancellationToken);
+                    var command = await _manualStepStartSignal.Task.WaitAsync(cancellationToken);
                     _manualStepStartSignal = null;
+                    if (command == ManualStepCommand.RedoPrevious)
+                    {
+                        await TruncateRecordingToStepAsync(index - 1, cancellationToken);
+                        _stepFrameStarts.RemoveRange(index - 1, _stepFrameStarts.Count - (index - 1));
+                        index -= 2;
+                        continue;
+                    }
                 }
 
                 lock (_captureLock)
@@ -435,10 +908,24 @@ public partial class SopRecordingPage : UserControl
 
             SetPrompt("录制完成", "正在保存视频…");
             if (generation == Volatile.Read(ref _generation))
+            {
+                _recordingCompleted = true;
                 await Dispatcher.InvokeAsync(() => StopRecordingAsync(saveRecord: true));
+            }
         }
         catch (OperationCanceledException)
         {
+        }
+        finally
+        {
+            _currentStepIndex = -1;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                PreviousStepButton.Visibility = Visibility.Collapsed;
+                PreviousStepButton.IsEnabled = false;
+                ReplayPreviousStepButton.Visibility = Visibility.Collapsed;
+                ReplayPreviousStepButton.IsEnabled = false;
+            });
         }
     }
 
@@ -538,12 +1025,14 @@ public partial class SopRecordingPage : UserControl
 
     private async Task StopRecordingAsync(bool saveRecord)
     {
+        if (_stepReplayPath is not null) RestoreMainPreview();
         _scheduleCancellation?.Cancel();
         _scheduleCancellation?.Dispose();
         _scheduleCancellation = null;
         _manualStepStartSignal?.TrySetCanceled();
         _manualStepStartSignal = null;
         SopVideoRecord? record = null;
+        RecordingCaptureInfo? capture = null;
 
         lock (_captureLock)
         {
@@ -552,19 +1041,54 @@ public partial class SopRecordingPage : UserControl
             _writer?.Dispose();
             _writer = null;
             if (saveRecord && _recordId is not null && _videoPath is not null
+                && _framesDirectory is not null
                 && _frameCount >= 2 && File.Exists(_videoPath))
             {
-                var relativePath = Path.GetRelativePath(AppServices.Instance.Settings.DataDirectory, _videoPath);
+                var startedAt = _recordStartedAt ?? DateTimeOffset.Now;
+                var storageRootPath = RecordingRootDirectory;
+                var relativePath = Path.GetRelativePath(storageRootPath, _videoPath);
                 record = new SopVideoRecord
                 {
                     Id = _recordId,
                     DefinitionId = _definition.Id,
-                    DisplayName = $"{_recordStartedAt:yyyy-MM-dd HH:mm:ss} · {_frameCount} 帧",
+                    DisplayName = $"{startedAt:yyyy-MM-dd HH:mm:ss} · {_frameCount} 帧",
+                    StorageRootPath = storageRootPath,
                     RelativeVideoPath = relativePath,
-                    StartedAt = _recordStartedAt ?? DateTimeOffset.Now,
+                    StartedAt = startedAt,
                     DurationSeconds = _frameCount / 10d,
                     FrameCount = _frameCount,
                 };
+                capture = new RecordingCaptureInfo(
+                    _recordId,
+                    storageRootPath,
+                    _videoPath,
+                    _framesDirectory,
+                    startedAt,
+                    _frameCount,
+                    _stepFrameStarts.ToArray(),
+                    _activeRecordingSteps
+                        .Select(step => new RecordingPlanStep
+                        {
+                            Name = step.Name,
+                            DurationSeconds = step.DurationSeconds,
+                        })
+                        .ToArray(),
+                    _manualMode,
+                    _recordingCompleted);
+            }
+        }
+
+        string? artifactError = null;
+        if (capture is not null)
+        {
+            try
+            {
+                await BuildRecordingArtifactsAsync(capture);
+            }
+            catch (Exception ex)
+            {
+                // The master video remains valid even if a derived step clip cannot be created.
+                artifactError = ex.Message;
             }
         }
 
@@ -572,11 +1096,15 @@ public partial class SopRecordingPage : UserControl
         _videoPath = null;
         _framesDirectory = null;
         _recordStartedAt = null;
+        _activeRecordingSteps = [];
+        _stepFrameStarts.Clear();
+        _recordingCompleted = false;
         PreparationOverlay.Visibility = Visibility.Collapsed;
         RecordToggleButton.Content = "开始录制";
         StepGrid.IsEnabled = true;
         RecordModeCombo.IsEnabled = true;
         ApplyRecordingModeUi();
+        UpdateCameraPreviewUi();
         SetCountdownPlainText(string.Empty);
 
         if (record is not null)
@@ -588,7 +1116,9 @@ public partial class SopRecordingPage : UserControl
             await File.WriteAllTextAsync(VideoIndexPath,
                 JsonSerializer.Serialize(allRecords, new JsonSerializerOptions { WriteIndented = true }));
             _videos.Insert(0, record);
-            VideoStatusText.Text = $"已保存：{record.DisplayName}";
+            VideoStatusText.Text = artifactError is null
+                ? $"已保存：{record.DisplayName}（已生成步骤数据）"
+                : $"已保存：{record.DisplayName}（步骤数据生成失败：{artifactError}）";
             StepPromptText.Text = "录制完成，可再次录制";
         }
         else if (saveRecord)
@@ -598,10 +1128,176 @@ public partial class SopRecordingPage : UserControl
         }
     }
 
+    private Task BuildRecordingArtifactsAsync(RecordingCaptureInfo capture)
+        => Task.Run(() => BuildRecordingArtifacts(capture));
+
+    private void BuildRecordingArtifacts(RecordingCaptureInfo capture)
+    {
+        var storageRootPath = capture.StorageRootPath;
+        var sourceFramePaths = Directory.Exists(capture.FramesDirectory)
+            ? Directory.GetFiles(capture.FramesDirectory, "frame_*.jpg")
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : [];
+        var frameCount = Math.Min(capture.FrameCount, sourceFramePaths.Length);
+        var stepsRoot = Path.Combine(capture.FramesDirectory, "steps");
+        Directory.CreateDirectory(stepsRoot);
+
+        var manifest = new RecordingManifest
+        {
+            Id = capture.Id,
+            DefinitionId = _definition.Id,
+            DefinitionCode = _definition.Code,
+            DefinitionName = _definition.Name,
+            StartedAt = capture.StartedAt,
+            StorageRootPath = storageRootPath,
+            FrameRate = 10,
+            FrameCount = frameCount,
+            DurationSeconds = frameCount / 10d,
+            ManualMode = capture.ManualMode,
+            MasterVideoPath = ToStorageRelativePath(capture.VideoPath, storageRootPath),
+            SourceFramesPath = ToStorageRelativePath(capture.FramesDirectory, storageRootPath),
+        };
+
+        var starts = capture.StepFrameStarts;
+        for (var index = 0; index < capture.Steps.Count; index++)
+        {
+            var step = capture.Steps[index];
+            var startFrame = ClampFrame(index < starts.Count ? starts[index] : frameCount, frameCount);
+            var endFrame = ClampFrame(index + 1 < starts.Count ? starts[index + 1] : frameCount, frameCount);
+            if (endFrame < startFrame) endFrame = startFrame;
+
+            var stepDirectory = Path.Combine(stepsRoot,
+                $"{index + 1:00}_{SafeFileName(step.Name)}");
+            var stepFramesDirectory = Path.Combine(stepDirectory, "frames");
+            var stepVideoPath = Path.Combine(stepDirectory, "clip.avi");
+            Directory.CreateDirectory(stepFramesDirectory);
+
+            var writtenFrames = WriteStepArtifacts(
+                sourceFramePaths,
+                startFrame,
+                endFrame,
+                stepFramesDirectory,
+                stepVideoPath);
+
+            manifest.Steps.Add(new RecordingManifestStep
+            {
+                Order = index + 1,
+                Name = step.Name,
+                PlannedDurationSeconds = step.DurationSeconds,
+                StartFrame = startFrame,
+                EndFrame = startFrame + writtenFrames,
+                FrameCount = writtenFrames,
+                ActualDurationSeconds = writtenFrames / 10d,
+                Completed = capture.Completed || index < starts.Count - 1,
+                VideoPath = writtenFrames > 0
+                    ? ToStorageRelativePath(stepVideoPath, storageRootPath)
+                    : "",
+                FramesPath = writtenFrames > 0
+                    ? ToStorageRelativePath(stepFramesDirectory, storageRootPath)
+                    : "",
+            });
+        }
+
+        manifest.Completed = capture.Completed;
+        var manifestPath = Path.Combine(capture.FramesDirectory, "manifest.json");
+        var options = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        };
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, options));
+    }
+
+    private static int WriteStepArtifacts(
+        IReadOnlyList<string> sourceFramePaths,
+        int startFrame,
+        int endFrame,
+        string stepFramesDirectory,
+        string stepVideoPath)
+    {
+        if (endFrame <= startFrame) return 0;
+
+        var firstFrame = default(Mat);
+        try
+        {
+            for (var index = startFrame; index < endFrame; index++)
+            {
+                var candidate = Cv2.ImRead(sourceFramePaths[index], ImreadModes.Color);
+                if (!candidate.Empty())
+                {
+                    firstFrame = candidate;
+                    break;
+                }
+                candidate.Dispose();
+            }
+
+            if (firstFrame is null || firstFrame.Empty()) return 0;
+            using (firstFrame)
+            {
+                var writer = CreateWriter(stepVideoPath, 10,
+                    new OpenCvSharp.Size(firstFrame.Width, firstFrame.Height));
+                if (writer is null || !writer.IsOpened())
+                {
+                    writer?.Dispose();
+                    throw new InvalidOperationException($"无法创建步骤视频：{Path.GetFileName(stepVideoPath)}");
+                }
+
+                var writtenFrames = 0;
+                try
+                {
+                    for (var index = startFrame; index < endFrame; index++)
+                    {
+                        var sourcePath = sourceFramePaths[index];
+                        var frame = Cv2.ImRead(sourcePath, ImreadModes.Color);
+                        if (frame.Empty())
+                        {
+                            frame.Dispose();
+                            continue;
+                        }
+
+                        using (frame)
+                        {
+                            writer.Write(frame);
+                            File.Copy(sourcePath,
+                                Path.Combine(stepFramesDirectory, $"frame_{writtenFrames:000000}.jpg"),
+                                overwrite: true);
+                            writtenFrames++;
+                        }
+                    }
+                }
+                finally
+                {
+                    writer.Release();
+                    writer.Dispose();
+                }
+
+                if (writtenFrames == 0 && File.Exists(stepVideoPath))
+                    File.Delete(stepVideoPath);
+                return writtenFrames;
+            }
+        }
+        catch
+        {
+            if (File.Exists(stepVideoPath))
+            {
+                try { File.Delete(stepVideoPath); } catch { }
+            }
+            throw;
+        }
+    }
+
+    private static int ClampFrame(int value, int frameCount)
+        => Math.Clamp(value, 0, Math.Max(0, frameCount));
+
+    private static string ToStorageRelativePath(string path, string storageRootPath)
+        => Path.GetRelativePath(storageRootPath, path).Replace('\\', '/');
+
     private async Task StopCameraAsync()
     {
         var session = _cameraSession;
         _cameraSession = null;
+        UpdateCameraPreviewUi();
         if (session is null) return;
         session.FrameReceived -= Camera_FrameReceived;
         session.Faulted -= Camera_Faulted;
@@ -690,7 +1386,7 @@ public partial class SopRecordingPage : UserControl
 
     private void ShowVideoRecord(SopVideoRecord record)
     {
-        var path = Path.Combine(AppServices.Instance.Settings.DataDirectory, record.RelativeVideoPath);
+        var path = ResolveVideoPath(record);
         if (!File.Exists(path))
         {
             StepPromptText.Text = "视频文件不存在";
@@ -701,6 +1397,7 @@ public partial class SopRecordingPage : UserControl
         VideoPlayer.Source = new Uri(path);
         VideoPlayer.Visibility = Visibility.Visible;
         VideoPlaybackControls.Visibility = Visibility.Visible;
+        PreviewImage.Visibility = Visibility.Collapsed;
         PreviewHintText.Visibility = Visibility.Collapsed;
         _previewedVideoRecord = record;
         StepPromptText.Text = $"正在查看视频：{record.DisplayName}";
@@ -730,6 +1427,7 @@ public partial class SopRecordingPage : UserControl
 
     private void RestoreMainPreview()
     {
+        DeleteStepReplayFile();
         VideoPlayer.Stop();
         VideoPlayer.Close();
         VideoPlayer.Source = null;
@@ -737,6 +1435,7 @@ public partial class SopRecordingPage : UserControl
         ResetVideoProgress();
         VideoPlayer.Visibility = Visibility.Collapsed;
         VideoPlaybackControls.Visibility = Visibility.Collapsed;
+        PreviewImage.Visibility = Visibility.Visible;
         _previewedVideoRecord = null;
         PreviewHintText.Visibility = _cameraSession is null ? Visibility.Visible : Visibility.Collapsed;
         StepPromptText.Text = _steps.Count == 0 ? "请在左侧添加录制步骤" : "请选择相机后点击“开始录制”";
@@ -839,7 +1538,7 @@ public partial class SopRecordingPage : UserControl
     {
         if (VideoList.SelectedItem is not SopVideoRecord record) return;
 
-        var path = Path.Combine(AppServices.Instance.Settings.DataDirectory, record.RelativeVideoPath);
+        var path = ResolveVideoPath(record);
         if (!File.Exists(path))
         {
             VideoStatusText.Text = "视频文件不存在，可能已被移动或删除";
@@ -858,7 +1557,7 @@ public partial class SopRecordingPage : UserControl
     {
         if (VideoList.SelectedItem is not SopVideoRecord record) return;
 
-        var result = MessageBox.Show(
+        var result = ThemedMessageBox.Show(System.Windows.Window.GetWindow(this),
             $"确定删除视频“{record.DisplayName}”吗？\n视频文件和对应记录都会被删除。",
             "确认删除视频", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
@@ -870,7 +1569,7 @@ public partial class SopRecordingPage : UserControl
     {
         if (_videos.Count == 0) return;
 
-        var result = MessageBox.Show(
+        var result = ThemedMessageBox.Show(System.Windows.Window.GetWindow(this),
             $"确定清空当前页面的 {_videos.Count} 个视频吗？\n视频文件和对应记录都会被删除。",
             "确认清空视频", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
@@ -885,6 +1584,7 @@ public partial class SopRecordingPage : UserControl
         VideoPlayer.Source = null;
         VideoPlayer.Visibility = Visibility.Collapsed;
         VideoPlaybackControls.Visibility = Visibility.Collapsed;
+        PreviewImage.Visibility = Visibility.Visible;
         PreviewHintText.Visibility = Visibility.Visible;
 
         var failed = new List<SopVideoRecord>();
@@ -911,7 +1611,7 @@ public partial class SopRecordingPage : UserControl
 
         if (failed.Count > 0)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(System.Windows.Window.GetWindow(this),
                 $"有 {failed.Count} 个视频无法删除，可能正在被其他程序使用。",
                 "删除失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
@@ -926,19 +1626,28 @@ public partial class SopRecordingPage : UserControl
 
     private static void DeleteVideoFiles(SopVideoRecord record)
     {
-        var dataDirectory = Path.GetFullPath(AppServices.Instance.Settings.DataDirectory)
+        var storageRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(record.StorageRootPath)
+                ? AppServices.Instance.Settings.DataDirectory
+                : record.StorageRootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             + Path.DirectorySeparatorChar;
-        var videoPath = Path.GetFullPath(Path.Combine(
-            AppServices.Instance.Settings.DataDirectory, record.RelativeVideoPath));
-        if (!videoPath.StartsWith(dataDirectory, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("视频路径不在数据目录内。");
+        var videoPath = ResolveVideoPath(record);
+        if (!videoPath.StartsWith(storageRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("视频路径不在采集数据目录内。");
 
         if (File.Exists(videoPath)) File.Delete(videoPath);
 
         var framesDirectory = Path.Combine(
             Path.GetDirectoryName(videoPath)!, Path.GetFileNameWithoutExtension(videoPath));
         if (Directory.Exists(framesDirectory)) Directory.Delete(framesDirectory, recursive: true);
+    }
+
+    private static string ResolveVideoPath(SopVideoRecord record)
+    {
+        var root = string.IsNullOrWhiteSpace(record.StorageRootPath)
+            ? AppServices.Instance.Settings.DataDirectory
+            : record.StorageRootPath;
+        return Path.GetFullPath(Path.Combine(root, record.RelativeVideoPath));
     }
 
     private void VideoPlayPause_Click(object sender, RoutedEventArgs e)

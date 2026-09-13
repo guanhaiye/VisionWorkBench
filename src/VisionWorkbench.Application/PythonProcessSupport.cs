@@ -13,7 +13,11 @@ internal static class PythonProcessSupport
         }
 
         return environmentRoots
-            .Select(root => Path.Combine(root, ".venv", "Scripts", "python.exe"))
+            .SelectMany(root => new[]
+            {
+                Path.Combine(root, "runtime", "python", "python.exe"),
+                Path.Combine(root, ".venv", "Scripts", "python.exe"),
+            })
             .FirstOrDefault(File.Exists) ?? "python";
     }
 

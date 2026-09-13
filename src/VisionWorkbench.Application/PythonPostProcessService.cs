@@ -220,6 +220,7 @@ public sealed class PythonPostProcessService
         var candidates = roots
             .SelectMany(root => new[]
             {
+                Path.Combine(root.FullName, "runtime", "python", "python.exe"),
                 Path.Combine(root.FullName, "workers", ".venv", "Scripts", "python.exe"),
                 Path.Combine(root.FullName, ".venv", "Scripts", "python.exe"),
             })

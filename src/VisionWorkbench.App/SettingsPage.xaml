@@ -4,21 +4,35 @@
     <UserControl.Resources>
         <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
     </UserControl.Resources>
-    <ScrollViewer>
+    <ScrollViewer x:Name="SettingsScrollViewer"
+                  PreviewMouseWheel="SettingsScrollViewer_PreviewMouseWheel">
         <StackPanel Margin="12" MaxWidth="720" HorizontalAlignment="Left">
             <TextBlock Text="系统设置" FontSize="18" FontWeight="Bold" Margin="0,0,0,12" />
 
             <GroupBox Header="数据目录（APP-003：支持中文与空格路径；重启后生效）">
                 <StackPanel>
-                    <TextBox x:Name="DataDirText" Margin="0,4,0,4" />
+                    <TextBox x:Name="DataDirText" Margin="0,4,0,4" LostFocus="AutoSaveTextBox_LostFocus" />
                     <TextBlock Text="数据库、证据图、日志、临时图都保存在此目录下。" Foreground="#888" FontSize="11" />
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="SOP 采集数据目录（自动保存）" Margin="0,8,0,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBox x:Name="SopRecordingDirText" Margin="0,4,8,4" MinWidth="420"
+                                 LostFocus="AutoSaveTextBox_LostFocus" />
+                        <Button Content="选择目录" Click="BrowseSopRecordingDirectory_Click" Margin="0,4,0,4" />
+                    </StackPanel>
+                    <TextBlock Text="录制视频、原始帧、分步骤视频和 manifest.json 将保存到此目录；修改后新录制立即使用。"
+                               Foreground="#888" FontSize="11" TextWrapping="Wrap" />
                 </StackPanel>
             </GroupBox>
 
             <GroupBox Header="日志保存等级">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="保存等级：" VerticalAlignment="Center" Margin="0,0,10,0" />
-                    <ComboBox x:Name="LogPersistenceLevelCombo" Width="220" HorizontalContentAlignment="Center">
+                    <ComboBox x:Name="LogPersistenceLevelCombo" Width="220" HorizontalContentAlignment="Center"
+                              SelectionChanged="AutoSaveSelectionChanged">
                         <ComboBoxItem Content="所有" Tag="All" />
                         <ComboBoxItem Content="严重以上" Tag="CriticalAndAbove" />
                         <ComboBoxItem Content="一般以上" Tag="InformationAndAbove" />
@@ -33,7 +47,8 @@
             <GroupBox Header="标注数据集目录">
                 <StackPanel>
                     <StackPanel Orientation="Horizontal">
-                        <TextBox x:Name="DatasetDirText" Margin="0,4,8,4" MinWidth="420" />
+                        <TextBox x:Name="DatasetDirText" Margin="0,4,8,4" MinWidth="420"
+                                 LostFocus="AutoSaveTextBox_LostFocus" />
                         <Button Content="选择目录" Click="BrowseDatasetDirectory_Click" Margin="0,4,0,4" />
                     </StackPanel>
                     <TextBlock Text="标注平台读取原始图片后，会复制到此目录下的新数据集目录，不会修改原始图片目录。默认：E:\。"
@@ -41,7 +56,7 @@
                 </StackPanel>
             </GroupBox>
 
-            <GroupBox Header="Python 解释器（开发态；打包态用插件内嵌 runtime）">
+            <GroupBox Header="Python 解释器（开发态；打包态用插件内嵌 runtime）" Visibility="Collapsed">
                 <StackPanel>
                     <TextBox x:Name="PythonText" Margin="0,4,0,4" />
                     <TextBlock Text="留空 = 自动探测 workers/.venv/Scripts/python.exe；写入 PYTHONIOENCODING=utf-8 启动 Worker。"
@@ -49,11 +64,11 @@
                 </StackPanel>
             </GroupBox>
 
-            <GroupBox Header="插件根目录（重启后生效）">
+            <GroupBox Header="插件根目录（重启后生效）" Visibility="Collapsed">
                 <TextBox x:Name="PluginsRootText2" Margin="0,4,0,4" />
             </GroupBox>
 
-            <GroupBox Header="执行后端（CPU 保底，文档 §19）">
+            <GroupBox Header="执行后端（CPU 保底，文档 §19）" Visibility="Collapsed">
                 <ComboBox x:Name="BackendCombo" Width="200" HorizontalAlignment="Left">
                     <ComboBoxItem Content="cpu" IsSelected="True" />
                     <ComboBoxItem Content="cuda" />
@@ -64,6 +79,7 @@
             <GroupBox Header="检测数据记录">
                 <StackPanel>
                     <CheckBox x:Name="EnableHistoryCheck" Content="开启历史记录" IsChecked="True"
+                              Checked="AutoSaveSetting_Changed" Unchecked="AutoSaveSetting_Changed"
                               Margin="0,4,0,2" />
                     <TextBlock Text="关闭后不再在历史记录页面显示新产生的检测记录。"
                                Foreground="#888" FontSize="11" TextWrapping="Wrap" />
@@ -73,7 +89,7 @@
             <GroupBox Header="界面主题（立即生效）">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="右侧页面颜色风格：" Margin="0,0,10,0"/>
-                    <ComboBox x:Name="ThemeCombo" Width="180">
+                    <ComboBox x:Name="ThemeCombo" Width="180" SelectionChanged="AutoSaveSelectionChanged">
                         <ComboBoxItem Content="日间模式" Tag="light"/>
                         <ComboBoxItem Content="夜间模式" Tag="dark"/>
                     </ComboBox>
@@ -83,7 +99,8 @@
             <GroupBox Header="全局字体大小（保存后立即生效）">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="界面缩放比例：" Margin="0,0,10,0" VerticalAlignment="Center"/>
-                    <ComboBox x:Name="UiScaleCombo" Width="200" HorizontalContentAlignment="Center">
+                    <ComboBox x:Name="UiScaleCombo" Width="200" HorizontalContentAlignment="Center"
+                              SelectionChanged="AutoSaveSelectionChanged">
                         <ComboBoxItem Content="较小（80%）" Tag="0.8"/>
                         <ComboBoxItem Content="小（90%）" Tag="0.9"/>
                         <ComboBoxItem Content="标准（100%）" Tag="1.0"/>
@@ -99,16 +116,19 @@
             <GroupBox Header="参数自动备份">
                 <StackPanel Margin="0,4,0,2">
                     <CheckBox x:Name="AutomaticBackupCheck" Content="启用自动备份"
+                              Checked="AutoSaveSetting_Changed" Unchecked="AutoSaveSetting_Changed"
                               Margin="0,0,0,8" />
                     <WrapPanel Margin="0,0,0,6" VerticalAlignment="Top">
                         <TextBlock Text="备份频率：" VerticalAlignment="Center" />
-                        <ComboBox x:Name="AutomaticBackupIntervalCombo" Width="130" Height="36" Margin="0,0,16,0">
+                        <ComboBox x:Name="AutomaticBackupIntervalCombo" Width="130" Height="36" Margin="0,0,16,0"
+                                  SelectionChanged="AutoSaveSelectionChanged">
                             <ComboBoxItem Content="每天" Tag="1440" />
                             <ComboBoxItem Content="每周" Tag="10080" />
                             <ComboBoxItem Content="每月" Tag="43200" />
                         </ComboBox>
                         <TextBlock Text="保留版本：" VerticalAlignment="Center" />
-                        <ComboBox x:Name="AutomaticBackupRetentionCombo" Width="100" Height="36">
+                        <ComboBox x:Name="AutomaticBackupRetentionCombo" Width="100" Height="36"
+                                  SelectionChanged="AutoSaveSelectionChanged">
                             <ComboBoxItem Content="5 个" Tag="5" />
                             <ComboBoxItem Content="10 个" Tag="10" />
                             <ComboBoxItem Content="30 个" Tag="30" />
@@ -119,7 +139,7 @@
                     <TextBlock x:Name="BackupScheduleText" Margin="0,2,0,10"
                                MinHeight="34" VerticalAlignment="Top"
                                Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
-                    <TextBlock Text="备份设置会随页面底部的“保存设置”统一保存。"
+                    <TextBlock Text="备份设置会在修改后自动保存。"
                                Margin="0,0,0,6" VerticalAlignment="Top"
                                Foreground="{DynamicResource MutedTextBrush}" />
                     <WrapPanel Margin="0,0,0,8" VerticalAlignment="Top">
@@ -143,8 +163,9 @@
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="角色：" VerticalAlignment="Center" />
                     <ComboBox x:Name="RoleCombo" Width="140" IsEnabled="False" ToolTip="请在用户管理中维护角色">
+                        <ComboBoxItem Content="超级管理员" Tag="admin" />
                         <ComboBoxItem Content="操作员" Tag="operator" />
-                        <ComboBoxItem Content="工程师" Tag="engineer" IsSelected="True" />
+                        <ComboBoxItem Content="工程师" Tag="engineer" />
                         <ComboBoxItem Content="专家" Tag="expert" />
                     </ComboBox>
                     <TextBlock Text="操作者姓名：" VerticalAlignment="Center" Margin="24,0,8,0" />
@@ -161,10 +182,8 @@
                 </StackPanel>
             </GroupBox>
 
-            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                <Button Content="保存设置" Click="Save_Click" MinWidth="110" />
-                <TextBlock x:Name="SaveHintText" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="Green" />
-            </StackPanel>
+            <TextBlock x:Name="SaveHintText" Text="设置修改后自动保存。"
+                       Margin="0,12,0,0" Foreground="{DynamicResource MutedTextBrush}" />
 
             <GroupBox Header="数据库与诊断" Margin="0,12,0,0">
                 <StackPanel>

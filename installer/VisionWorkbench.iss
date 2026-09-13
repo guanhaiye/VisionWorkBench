@@ -1,5 +1,7 @@
 #define MyAppName "VisionWorkbench"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.0"
+#endif
 #define MyAppPublisher "VisionWorkbench"
 #define MyAppExeName "VisionWorkbench.exe"
 
@@ -10,17 +12,21 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\VisionWorkbench
 DefaultGroupName=VisionWorkbench
-OutputDir=..\artifacts\installer
-OutputBaseFilename=VisionWorkbench-{#MyAppVersion}-win-x64
+OutputBaseFilename=VisionWorkbench-Setup-x64
+ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=admin
 Compression=lzma2
 SolidCompression=yes
 Uninstallable=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=..\assets\branding\visionworkbench-app.ico
+WizardStyle=modern
+DisableProgramGroupPage=yes
+UninstallDisplayName=VisionWorkbench
 
 [Files]
-Source: "..\artifacts\commercial\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\artifacts\installer-staging\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{commonappdata}\VisionWorkbench"; Permissions: users-modify
@@ -33,7 +39,8 @@ Name: "{group}\VisionWorkbench"; Filename: "{app}\{#MyAppExeName}"
 Name: "{commondesktop}\VisionWorkbench"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch VisionWorkbench"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--environment-check"; Description: "Run environment check"; Flags: waituntilterminated postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch VisionWorkbench"; Flags: nowait postinstall unchecked

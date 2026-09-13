@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.Win32;
 using VisionWorkbench.Infrastructure.Logging;
 
@@ -12,6 +14,7 @@ namespace VisionWorkbench.App;
 public partial class SettingsPage : UserControl
 {
     private sealed record BackupVersionView(string Path, string DisplayText);
+    private bool _isLoading;
 
     public SettingsPage()
     {
@@ -19,56 +22,128 @@ public partial class SettingsPage : UserControl
         Loaded += (_, _) => Load();
     }
 
-    private void Load()
+    private void SettingsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        var s = AppServices.Instance.Settings;
-        DataDirText.Text = s.DataDirectory;
-        DatasetDirText.Text = string.IsNullOrWhiteSpace(s.DatasetDirectory) ? @"E:\" : s.DatasetDirectory;
-        PythonText.Text = s.PythonExecutable ?? "";
-        PluginsRootText2.Text = s.PluginsRoot ?? "";
-        foreach (var item in BackendCombo.Items.OfType<ComboBoxItem>()
-                     .Where(i => (string)i.Content == s.ExecutionProvider))
+        if (sender is not ScrollViewer outerScrollViewer)
         {
-            BackendCombo.SelectedItem = item;
+            return;
         }
-        foreach (var item in RoleCombo.Items.OfType<ComboBoxItem>()
-                     .Where(i => (string?)i.Tag == s.CurrentRole))
+
+        // Nested controls such as the backup-version list can consume the wheel
+        // event even after they reach an edge. Continue scrolling the settings
+        // page in that case instead of making the pointer feel stuck.
+        var innerScrollViewer = FindNearestScrollViewer(e.OriginalSource as DependencyObject);
+        if (innerScrollViewer is not null && !ReferenceEquals(innerScrollViewer, outerScrollViewer))
         {
-            RoleCombo.SelectedItem = item;
+            var canScrollInner = e.Delta > 0
+                ? innerScrollViewer.VerticalOffset > 0
+                : innerScrollViewer.VerticalOffset < innerScrollViewer.ScrollableHeight;
+            if (canScrollInner)
+            {
+                return;
+            }
         }
-        OperatorNameText.Text = s.OperatorName;
-        EnableHistoryCheck.IsChecked = s.EnableHistory;
-        LogPersistenceLevelCombo.SelectedItem = LogPersistenceLevelCombo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.LogPersistenceLevel.ToString(), StringComparison.Ordinal));
-        if (LogPersistenceLevelCombo.SelectedItem is null) LogPersistenceLevelCombo.SelectedIndex = 0;
-        ThemeCombo.SelectedItem = ThemeCombo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.ThemeMode, StringComparison.OrdinalIgnoreCase));
-        if (ThemeCombo.SelectedItem is null) ThemeCombo.SelectedIndex = 0;
-        UiScaleCombo.SelectedItem = UiScaleCombo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => double.TryParse(item.Tag?.ToString(), NumberStyles.Float,
-                CultureInfo.InvariantCulture, out var scale) && Math.Abs(scale - s.UiScale) < 0.001);
-        if (UiScaleCombo.SelectedItem is null) UiScaleCombo.SelectedIndex = 2;
-        AutomaticBackupCheck.IsChecked = s.AutomaticBackupEnabled;
-        AutomaticBackupIntervalCombo.SelectedItem = AutomaticBackupIntervalCombo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.AutomaticBackupIntervalMinutes.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
-        if (AutomaticBackupIntervalCombo.SelectedItem is null)
-        {
-            AutomaticBackupIntervalCombo.SelectedIndex = 0;
-            s.AutomaticBackupIntervalMinutes = 1440;
-        }
-        AutomaticBackupRetentionCombo.SelectedItem = AutomaticBackupRetentionCombo.Items.OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.AutomaticBackupRetentionCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
-        if (AutomaticBackupRetentionCombo.SelectedItem is null) AutomaticBackupRetentionCombo.SelectedIndex = 2;
-        UpdateBackupScheduleText();
-        RefreshBackupVersions();
-        var license = AppServices.Instance.License.Current;
-        LicenseStatusText.Text = $"状态：{license.State}；{license.Message}\n许可证路径：{AppServices.Instance.License.LicensePath}";
+
+        var targetOffset = outerScrollViewer.VerticalOffset - e.Delta;
+        outerScrollViewer.ScrollToVerticalOffset(
+            Math.Clamp(targetOffset, 0, outerScrollViewer.ScrollableHeight));
+        e.Handled = true;
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e)
+    private static ScrollViewer? FindNearestScrollViewer(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is ScrollViewer scrollViewer)
+            {
+                return scrollViewer;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return null;
+    }
+
+    private void Load()
+    {
+        _isLoading = true;
+        try
+        {
+            var s = AppServices.Instance.Settings;
+            DataDirText.Text = s.DataDirectory;
+            SopRecordingDirText.Text = s.SopRecordingDirectory;
+            DatasetDirText.Text = string.IsNullOrWhiteSpace(s.DatasetDirectory) ? @"E:\" : s.DatasetDirectory;
+            PythonText.Text = s.PythonExecutable ?? "";
+            PluginsRootText2.Text = s.PluginsRoot ?? "";
+            foreach (var item in BackendCombo.Items.OfType<ComboBoxItem>()
+                         .Where(i => (string)i.Content == s.ExecutionProvider))
+            {
+                BackendCombo.SelectedItem = item;
+            }
+            var currentRole = s.CurrentRole?.Trim().ToLowerInvariant();
+            RoleCombo.SelectedItem = RoleCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item =>
+                {
+                    var itemRole = item.Tag?.ToString();
+                    return string.Equals(itemRole, currentRole, StringComparison.OrdinalIgnoreCase)
+                        || (itemRole == "admin" && currentRole == "superadmin");
+                });
+            OperatorNameText.Text = s.OperatorName;
+            EnableHistoryCheck.IsChecked = s.EnableHistory;
+            LogPersistenceLevelCombo.SelectedItem = LogPersistenceLevelCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.LogPersistenceLevel.ToString(), StringComparison.Ordinal));
+            if (LogPersistenceLevelCombo.SelectedItem is null) LogPersistenceLevelCombo.SelectedIndex = 0;
+            ThemeCombo.SelectedItem = ThemeCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.ThemeMode, StringComparison.OrdinalIgnoreCase));
+            if (ThemeCombo.SelectedItem is null) ThemeCombo.SelectedIndex = 0;
+            UiScaleCombo.SelectedItem = UiScaleCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => double.TryParse(item.Tag?.ToString(), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out var scale) && Math.Abs(scale - s.UiScale) < 0.001);
+            if (UiScaleCombo.SelectedItem is null) UiScaleCombo.SelectedIndex = 2;
+            AutomaticBackupCheck.IsChecked = s.AutomaticBackupEnabled;
+            AutomaticBackupIntervalCombo.SelectedItem = AutomaticBackupIntervalCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.AutomaticBackupIntervalMinutes.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
+            if (AutomaticBackupIntervalCombo.SelectedItem is null)
+            {
+                AutomaticBackupIntervalCombo.SelectedIndex = 0;
+                s.AutomaticBackupIntervalMinutes = 1440;
+            }
+            AutomaticBackupRetentionCombo.SelectedItem = AutomaticBackupRetentionCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), s.AutomaticBackupRetentionCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
+            if (AutomaticBackupRetentionCombo.SelectedItem is null) AutomaticBackupRetentionCombo.SelectedIndex = 2;
+            UpdateBackupScheduleText();
+            RefreshBackupVersions();
+            var license = AppServices.Instance.License.Current;
+            LicenseStatusText.Text = $"状态：{license.State}；{license.Message}\n许可证路径：{AppServices.Instance.License.LicensePath}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void AutoSaveTextBox_LostFocus(object sender, RoutedEventArgs e) => AutoSaveSettings();
+
+    private void AutoSaveSetting_Changed(object sender, RoutedEventArgs e) => AutoSaveSettings();
+
+    private void AutoSaveSelectionChanged(object sender, SelectionChangedEventArgs e) => AutoSaveSettings();
+
+    private void AutoSaveSettings()
+    {
+        if (_isLoading || !IsLoaded)
+        {
+            return;
+        }
+
+        SaveSettings();
+    }
+
+    private void SaveSettings()
     {
         var s = AppServices.Instance.Settings;
         var newDataDir = DataDirText.Text.Trim();
+        var newSopRecordingDir = SopRecordingDirText.Text.Trim();
         var newDatasetDir = DatasetDirText.Text.Trim();
         if (string.IsNullOrWhiteSpace(newDataDir))
         {
@@ -80,10 +155,17 @@ public partial class SettingsPage : UserControl
             ThemedMessageBox.Show("标注数据集目录不能为空", "校验失败");
             return;
         }
+        if (string.IsNullOrWhiteSpace(newSopRecordingDir))
+        {
+            ThemedMessageBox.Show("SOP 采集数据目录不能为空", "校验失败");
+            return;
+        }
         try
         {
             Path.GetFullPath(newDataDir);
+            newSopRecordingDir = Path.GetFullPath(newSopRecordingDir);
             Path.GetFullPath(newDatasetDir);
+            Directory.CreateDirectory(newSopRecordingDir);
         }
         catch (Exception)
         {
@@ -91,7 +173,10 @@ public partial class SettingsPage : UserControl
             return;
         }
         var dataDirChanged = !string.Equals(newDataDir, s.DataDirectory, StringComparison.OrdinalIgnoreCase);
+        var sopRecordingDirChanged = !string.Equals(
+            newSopRecordingDir, s.SopRecordingDirectory, StringComparison.OrdinalIgnoreCase);
         s.DataDirectory = newDataDir;
+        s.SopRecordingDirectory = newSopRecordingDir;
         s.DatasetDirectory = Path.GetFullPath(newDatasetDir);
         s.PythonExecutable = string.IsNullOrWhiteSpace(PythonText.Text.Trim()) ? null : PythonText.Text.Trim();
         s.PluginsRoot = string.IsNullOrWhiteSpace(PluginsRootText2.Text.Trim()) ? null : PluginsRootText2.Text.Trim();
@@ -112,7 +197,11 @@ public partial class SettingsPage : UserControl
         AppServices.Instance.SaveUserSettings();
         ThemeManager.Apply(s.ThemeMode);
         ThemeManager.ApplyUiScale(s.UiScale);
-        SaveHintText.Text = dataDirChanged ? "已保存（数据目录改动重启后生效）" : "已保存";
+        SaveHintText.Text = dataDirChanged
+            ? "已保存（数据目录改动重启后生效）"
+            : sopRecordingDirChanged
+                ? "已保存（SOP 采集目录已更新，新录制立即使用）"
+                : "已保存";
     }
 
     private bool ReadAutomaticBackupSettings()
@@ -256,6 +345,26 @@ public partial class SettingsPage : UserControl
         if (dialog.ShowDialog(Window.GetWindow(this)) == true)
         {
             DatasetDirText.Text = dialog.FolderName;
+            AutoSaveSettings();
+        }
+    }
+
+    private void BrowseSopRecordingDirectory_Click(object sender, RoutedEventArgs e)
+    {
+        var initialDirectory = Directory.Exists(SopRecordingDirText.Text)
+            ? SopRecordingDirText.Text
+            : AppServices.Instance.Settings.SopRecordingDirectory;
+        var dialog = new OpenFolderDialog
+        {
+            Title = "选择 SOP 采集数据目录",
+            InitialDirectory = Directory.Exists(initialDirectory)
+                ? initialDirectory
+                : AppServices.Instance.Settings.DataDirectory,
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true)
+        {
+            SopRecordingDirText.Text = dialog.FolderName;
+            AutoSaveSettings();
         }
     }
 

@@ -614,6 +614,7 @@ public partial class TasksPage : UserControl
 
         var pluginPythonCandidates = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "runtime", "python", "python.exe"),
             Path.Combine(yoloPlugin.Directory, ".venv", "Scripts", "python.exe"),
             Path.Combine(yoloPlugin.Directory, "..", "atu5", ".venv", "Scripts", "python.exe"),
             Path.Combine(yoloPlugin.Directory, "..", ".venv", "Scripts", "python.exe"),

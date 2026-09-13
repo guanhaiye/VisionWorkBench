@@ -20,6 +20,31 @@
         <Style x:Key="SopDataGridTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="TextAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="TextChrome" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="5" SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Margin="{TemplateBinding Padding}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="TextChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="TextChrome" Property="Background" Value="{DynamicResource DisabledBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="VideoIconButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
@@ -67,8 +92,16 @@
                     <ComboBoxItem Content="手动模式" />
                 </ComboBox>
                 <TextBlock Text="相机" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <ComboBox x:Name="CameraCombo" DisplayMemberPath="DisplayName" Width="220" />
+                <ComboBox x:Name="CameraCombo" Width="220">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
                 <Button Content="刷新相机" Click="RefreshCamera_Click" Margin="6,2,0,2" Padding="12,5" />
+                <Button x:Name="PreviewCameraButton" Content="预览相机" Click="PreviewCamera_Click"
+                        Margin="6,2,0,2" Padding="12,5" />
                 <TextBlock Text="准备倒计时（秒）" VerticalAlignment="Center" Margin="18,0,6,0" />
                 <TextBox x:Name="PreparationSecondsText" Text="3" Width="55" />
                 <Button x:Name="RecordToggleButton" Content="开始录制" Click="RecordToggleButton_Click"
@@ -78,13 +111,14 @@
                     Margin="0,2,12,2" Padding="16,5" Style="{StaticResource SecondaryButton}" />
             <StackPanel>
                 <TextBlock Text="SOP视频录制" FontSize="24" FontWeight="SemiBold" />
-                <TextBlock x:Name="SopNameText" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0" />
+                <TextBlock x:Name="SopNameText" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0"
+                           Visibility="Collapsed" />
             </StackPanel>
         </DockPanel>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="370" />
+                <ColumnDefinition Width="440" MinWidth="400" />
                 <ColumnDefinition Width="12" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
@@ -95,16 +129,24 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="添加步骤" Click="AddStep_Click" Padding="12,5" />
-                        <Button Content="删除步骤" Click="RemoveStep_Click" Margin="6,2,0,2" Padding="12,5" />
-                        <TextBlock x:Name="TotalDurationText" VerticalAlignment="Center" Margin="14,0,0,0"
-                                   Foreground="{DynamicResource MutedTextBrush}" />
+                        <Button Content="添加步骤" Click="AddStep_Click" Width="90" MinWidth="0" Padding="4,5" />
+                        <Button Content="删除步骤" Click="RemoveStep_Click" Width="90" MinWidth="0"
+                                Margin="4,2,0,2" Padding="4,5" />
+                        <Button x:Name="MoveStepUpButton" Content="上移" Click="MoveStepUp_Click"
+                                Width="64" MinWidth="0" Margin="4,2,0,2" Padding="4,5" />
+                        <Button x:Name="MoveStepDownButton" Content="下移" Click="MoveStepDown_Click"
+                                Width="64" MinWidth="0" Margin="4,2,0,2" Padding="4,5" />
                     </StackPanel>
                     <DataGrid x:Name="StepGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False"
                               SelectionMode="Single" MinHeight="260"
+                              ToolTip="长按步骤行约 0.3 秒后上下拖动，可调整步骤顺序"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              PreviewMouseLeftButtonDown="StepGrid_PreviewMouseLeftButtonDown"
+                              PreviewMouseMove="StepGrid_PreviewMouseMove"
+                              PreviewMouseLeftButtonUp="StepGrid_PreviewMouseLeftButtonUp"
                               CellStyle="{StaticResource SopDataGridCellStyle}"
                               ColumnHeaderStyle="{StaticResource SopDataGridHeaderStyle}">
                         <DataGrid.Columns>
@@ -113,12 +155,14 @@
                             <DataGridTextColumn Header="动作步骤" Binding="{Binding Name, UpdateSourceTrigger=LostFocus}" Width="*"
                                                 ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                 EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
-                            <DataGridTextColumn Header="持续时间（秒）" Binding="{Binding DurationText, UpdateSourceTrigger=LostFocus}" Width="115"
+                            <DataGridTextColumn Header="持续时间（秒）" Binding="{Binding DurationText, UpdateSourceTrigger=LostFocus}" Width="170" MinWidth="170"
                                                 ElementStyle="{StaticResource SopDataGridTextBlockStyle}"
                                                 EditingElementStyle="{StaticResource SopDataGridTextBoxStyle}" />
                         </DataGrid.Columns>
                     </DataGrid>
-                    <TextBlock Grid.Row="2" Text="录制时会按列表顺序提示动作，持续时间结束后自动进入下一步。"
+                    <TextBlock x:Name="TotalDurationText" Grid.Row="2" Margin="0,8,0,0"
+                               Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Grid.Row="3" Text="录制时会按列表顺序提示动作，持续时间结束后自动进入下一步。"
                                Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,8,0,0" />
                 </Grid>
             </GroupBox>
@@ -146,15 +190,24 @@
                         <TextBlock x:Name="VideoStatusText" Text="" Foreground="{DynamicResource MutedTextBrush}"
                                    Margin="0,6,0,0" TextWrapping="Wrap"
                                    HorizontalAlignment="Center" TextAlignment="Center" />
-                        <Button x:Name="ManualStepButton" Content="开始当前步骤" Click="ManualStepButton_Click"
-                                Visibility="Collapsed" HorizontalAlignment="Center" Margin="0,8,0,0" Padding="18,6" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                            <Button x:Name="ManualStepButton" Content="开始当前步骤" Click="ManualStepButton_Click"
+                                    Visibility="Collapsed" Margin="0" Padding="18,6" />
+                            <Button x:Name="PreviousStepButton" Content="上一步重新录制" Click="PreviousStepButton_Click"
+                                    Visibility="Collapsed" IsEnabled="False" Margin="8,0,0,0" Padding="18,6" />
+                            <Button x:Name="ReplayPreviousStepButton" Content="回放上一步" Click="ReplayPreviousStepButton_Click"
+                                    Visibility="Collapsed" IsEnabled="False" Margin="8,0,0,0" Padding="18,6" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
                 <Border Grid.Row="1" Background="#111111" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="6">
                     <Grid>
-                        <local:ImageViewer Background="#111111">
-                            <Image x:Name="PreviewImage" Stretch="Uniform" />
-                        </local:ImageViewer>
+                        <Grid Background="#111111" ClipToBounds="True">
+                            <Image x:Name="PreviewImage"
+                                   Stretch="Uniform"
+                                   HorizontalAlignment="Stretch"
+                                   VerticalAlignment="Stretch" />
+                        </Grid>
                         <MediaElement x:Name="VideoPlayer" Visibility="Collapsed"
                                       LoadedBehavior="Manual" UnloadedBehavior="Stop" Stretch="Uniform"
                                       MediaOpened="VideoPlayer_MediaOpened" MediaEnded="VideoPlayer_MediaEnded" />

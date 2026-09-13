@@ -23,6 +23,8 @@ public sealed class AppSettings
 {
     public string DataDirectory { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VisionWorkbench");
+    /// <summary>SOP 录制视频、原始帧和步骤片段的独立存储目录。</summary>
+    public string SopRecordingDirectory { get; set; } = "";
     /// <summary>软件可持久化参数的统一目录。</summary>
     [JsonIgnore]
     public string ConfigDirectory => Path.Combine(DataDirectory, "Config");
@@ -195,6 +197,23 @@ public sealed class AppServices
                 // 用户配置损坏 → 用默认
             }
         }
+
+        if (string.IsNullOrWhiteSpace(Settings.SopRecordingDirectory))
+        {
+            Settings.SopRecordingDirectory = Path.Combine(Settings.DataDirectory, "sop-recordings");
+        }
+        else
+        {
+            try
+            {
+                Settings.SopRecordingDirectory = Path.GetFullPath(Settings.SopRecordingDirectory);
+            }
+            catch
+            {
+                Settings.SopRecordingDirectory = Path.Combine(Settings.DataDirectory, "sop-recordings");
+            }
+        }
+        Directory.CreateDirectory(Settings.SopRecordingDirectory);
 
         EnsureAccounts();
 
@@ -480,6 +499,12 @@ public sealed class AppServices
     /// <summary>开发态：从 cwd 向上找 workers 目录；找不到用 exe 旁 plugins。</summary>
     private static string FindPluginsRoot()
     {
+        var bundled = Path.Combine(AppContext.BaseDirectory, "plugins");
+        if (Directory.Exists(bundled))
+        {
+            return bundled;
+        }
+
         var dir = new DirectoryInfo(Environment.CurrentDirectory);
         for (var i = 0; i < 6 && dir is not null; i++, dir = dir.Parent)
         {
@@ -494,9 +519,11 @@ public sealed class AppServices
 
     private static string? FindVenvPython(string pluginsRoot)
     {
-        // workers/.venv/Scripts/python.exe（开发态默认，宿主可配置覆盖）
+        // 发布态优先使用安装目录内置的可迁移 Python，不能依赖客户机器的 PATH 或开发目录。
         var candidates = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "runtime", "python", "python.exe"),
+            Path.Combine(AppContext.BaseDirectory, "runtime", "python.exe"),
             Path.Combine(pluginsRoot, ".venv", "Scripts", "python.exe"),
             Path.Combine(Directory.GetParent(pluginsRoot)?.FullName ?? "", ".venv", "Scripts", "python.exe"),
         };

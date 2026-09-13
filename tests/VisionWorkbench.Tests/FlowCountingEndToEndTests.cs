@@ -339,11 +339,13 @@ public sealed class FlowCountingEndToEndTests(ITestOutputHelper output)
             Rules = [],
         }));
 
+        var videoPath = Path.Combine(ctx.DataDir, "conveyor.avi");
+        File.WriteAllBytes(videoPath, []);
         var saved = await service.SaveAsync(new Recipe
         {
             Name = "flow-roundtrip",
             CameraProviderId = "video-file",
-            CameraDeviceId = "conveyor.avi",
+            CameraDeviceId = videoPath,
             PluginId = FlowPlugin,
             CountingMode = CountingMode.LineCrossing,
             CountingLine = new CountingLineConfig
@@ -370,12 +372,14 @@ public sealed class FlowCountingEndToEndTests(ITestOutputHelper output)
     {
         await using var ctx = await CreateContextAsync();
         var service = new RecipeService(ctx.Tasks);
+        var imageDirectory = Path.Combine(ctx.DataDir, "images");
+        Directory.CreateDirectory(imageDirectory);
 
         var saved = await service.SaveAsync(new Recipe
         {
             Name = "contour-analysis",
             CameraProviderId = "image-folder",
-            CameraDeviceId = "images",
+            CameraDeviceId = imageDirectory,
             PluginId = FlowPlugin,
             TaskType = InspectionTaskType.ContourAnalysis,
             Rules = [],

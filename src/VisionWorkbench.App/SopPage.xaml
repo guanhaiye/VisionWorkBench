@@ -80,9 +80,9 @@
                         <GroupBox Grid.Row="1" Header="基本信息" Margin="0,0,0,10">
                             <Grid Margin="8">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="170" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
@@ -240,7 +240,13 @@
                                 </Grid.RowDefinitions>
                                 <StackPanel Grid.Row="0" Orientation="Horizontal">
                                     <TextBlock Text="相机" VerticalAlignment="Center" Margin="0,0,6,0" />
-                                    <ComboBox x:Name="CaptureCameraCombo" DisplayMemberPath="DisplayName" Width="220" />
+                                    <ComboBox x:Name="CaptureCameraCombo" Width="220">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding DisplayName}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
                                     <Button Content="刷新" Click="RefreshCaptureCameras_Click" Margin="6,0,0,0" Padding="10,3" />
                                     <TextBlock Text="准备倒计时（秒）" VerticalAlignment="Center" Margin="16,0,6,0" />
                                     <TextBox x:Name="CapturePreparationSecondsText" Text="3" Width="55" />

@@ -1,0 +1,46 @@
+{
+  "models": [
+    {
+      "name": "yolo11n.pt",
+      "type": "object-detection",
+      "version": "YOLO11n",
+      "source": "workers/yolo11/models/yolo11n.pt",
+      "target": "plugins/yolo11/models/yolo11n.pt",
+      "sha256": "",
+      "officialSource": "https://github.com/ultralytics/assets",
+      "license": "AGPL-3.0; commercial terms require confirmation",
+      "commercialUse": false,
+      "redistributable": false,
+      "included": false,
+      "reason": "Commercial redistribution authorization was not provided; model is not packaged."
+    },
+    {
+      "name": "yolo11n-seg.pt",
+      "type": "instance-segmentation",
+      "version": "YOLO11n-seg",
+      "source": "workers/yolo11/models/yolo11n-seg.pt",
+      "target": "plugins/yolo11/models/yolo11n-seg.pt",
+      "sha256": "",
+      "officialSource": "https://github.com/ultralytics/assets",
+      "license": "AGPL-3.0; commercial terms require confirmation",
+      "commercialUse": false,
+      "redistributable": false,
+      "included": false,
+      "reason": "Commercial redistribution authorization was not provided; model is not packaged."
+    },
+    {
+      "name": "yolo11n-pose.pt",
+      "type": "pose",
+      "version": "YOLO11n-pose",
+      "source": "workers/yolo11/models/yolo11n-pose.pt",
+      "target": "plugins/yolo11/models/yolo11n-pose.pt",
+      "sha256": "",
+      "officialSource": "https://github.com/ultralytics/assets",
+      "license": "AGPL-3.0; commercial terms require confirmation",
+      "commercialUse": false,
+      "redistributable": false,
+      "included": false,
+      "reason": "Commercial redistribution authorization was not provided; model is not packaged."
+    }
+  ]
+}

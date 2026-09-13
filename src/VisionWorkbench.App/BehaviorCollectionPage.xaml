@@ -38,7 +38,13 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                     <TextBlock Text="&#x76F8;&#x673A;" VerticalAlignment="Center" Margin="0,0,8,4" />
-                    <ComboBox x:Name="CameraCombo" Grid.Column="1" DisplayMemberPath="DisplayName" SelectionChanged="CameraCombo_SelectionChanged" Margin="0,0,6,4" />
+                    <ComboBox x:Name="CameraCombo" Grid.Column="1" SelectionChanged="CameraCombo_SelectionChanged" Margin="0,0,6,4">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                     <Button Grid.Column="2" Content="&#x5237;&#x65B0;" Click="RefreshCamera_Click" Padding="10,3" />
                     <TextBlock Grid.Row="1" Text="&#x91C7;&#x96C6;&#x5E27;&#x7387;" VerticalAlignment="Center" Margin="0,0,8,4" />
                     <ComboBox x:Name="FpsCombo" Grid.Row="1" Grid.Column="1" SelectedIndex="1" Margin="0,0,6,4">

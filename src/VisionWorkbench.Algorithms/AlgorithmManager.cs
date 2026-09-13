@@ -149,7 +149,12 @@ public sealed class AlgorithmManager
                 ? Path.Combine(pluginDirectory, "..", "yolo11", ".venv", "Scripts", "python.exe")
                 : Path.Combine(pluginDirectory, "..", "yolo11", ".venv", "bin", "python"))
             : null;
-        var python = File.Exists(pluginVenv) ? pluginVenv
+        // 发布态统一使用安装目录内置 runtime，避免客户机上的 Python/开发环境污染运行结果。
+        var bundledPython = OperatingSystem.IsWindows()
+            ? Path.Combine(AppContext.BaseDirectory, "runtime", "python", "python.exe")
+            : Path.Combine(AppContext.BaseDirectory, "runtime", "python", "bin", "python");
+        var python = File.Exists(bundledPython) ? bundledPython
+            : File.Exists(pluginVenv) ? pluginVenv
             : sharedVisionPython is not null && File.Exists(sharedVisionPython) ? sharedVisionPython
             : _options.PythonExecutable;
         if (string.IsNullOrWhiteSpace(python))

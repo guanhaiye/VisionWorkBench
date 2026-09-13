@@ -32,6 +32,8 @@
     <SolidColorBrush x:Key="SuccessBrush" Color="#16A34A"/>
     <SolidColorBrush x:Key="DangerBrush" Color="#DC2626"/>
     <sys:Double x:Key="GlobalFontSize">13</sys:Double>
+    <sys:Double x:Key="SidebarGroupFontSize">12</sys:Double>
+    <sys:Double x:Key="SidebarItemFontSize">13</sys:Double>
 
     <Style TargetType="Window">
         <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>

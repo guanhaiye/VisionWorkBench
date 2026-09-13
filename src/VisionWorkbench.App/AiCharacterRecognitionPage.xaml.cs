@@ -356,9 +356,13 @@ public partial class AiCharacterRecognitionPage : UserControl
         worker = null;
         foreach (var root in CandidateRoots())
         {
-            var python = Path.Combine(root, "workers", ".venv", "Scripts", "python.exe");
+            var python = new[]
+            {
+                Path.Combine(root, "runtime", "python", "python.exe"),
+                Path.Combine(root, "workers", ".venv", "Scripts", "python.exe"),
+            }.FirstOrDefault(File.Exists);
             var script = Path.Combine(root, "workers", "paddleocr-vl", WorkerFileName);
-            if (!File.Exists(python) || !File.Exists(script)) continue;
+            if (python is null || !File.Exists(script)) continue;
             var runtimeReady = _kind == AiRecognitionKind.Character ? HasPaddleOcr(python) : HasOpenCv(python);
             if (!runtimeReady) continue;
             worker = script;

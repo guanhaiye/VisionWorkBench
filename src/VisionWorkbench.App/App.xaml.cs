@@ -16,6 +16,7 @@ public partial class App : System.Windows.Application
     private bool _ownsSingleInstanceMutex;
     private Shell? _shell;
     private bool _isShuttingDown;
+    private bool _environmentCheckMode;
 
     public App()
     {
@@ -26,6 +27,9 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        var environmentCheck = e.Args.Any(argument =>
+            string.Equals(argument, "--environment-check", StringComparison.OrdinalIgnoreCase));
+        _environmentCheckMode = environmentCheck;
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName,
             out _ownsSingleInstanceMutex);
         if (!_ownsSingleInstanceMutex)
@@ -55,13 +59,23 @@ public partial class App : System.Windows.Application
         // 启动页先于主窗口显示时，WPF 可能自动把启动页认作 MainWindow；
         // 若此时使用 OnMainWindowClose，关闭启动页会连带退出整个应用。
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
-        var splash = new SplashWindow();
-        splash.Show();
-        Dispatcher.Invoke(DispatcherPriority.Render, new Action(() => { }));
+        SplashWindow? splash = null;
+        if (!environmentCheck)
+        {
+            splash = new SplashWindow();
+            splash.Show();
+            Dispatcher.Invoke(DispatcherPriority.Render, new Action(() => { }));
+        }
         try
         {
             // 初始化包含数据库建表、完整性检查和权限种子写入，不能阻塞 WPF UI 线程。
             await Task.Run(AppServices.Instance.Initialize);
+            if (environmentCheck)
+            {
+                var exitCode = await EnvironmentCheckService.RunAsync();
+                Shutdown(exitCode);
+                return;
+            }
             ThemeManager.Apply(AppServices.Instance.Settings.ThemeMode);
             ThemeManager.ApplyUiScale(AppServices.Instance.Settings.UiScale);
         }
@@ -101,13 +115,13 @@ public partial class App : System.Windows.Application
                 ShowWindowAsync(shellHandle, 9); // SW_RESTORE
                 SetForegroundWindow(shellHandle);
             }
-            splash.Close();
+            splash?.Close();
         }
         catch (Exception ex)
         {
             try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "startup-error.log"), ex.ToString()); } catch { }
             ThemedMessageBox.Show(ex.ToString(), "VisionWorkbench 界面启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
-            splash.Close();
+            splash?.Close();
             Shutdown(-1);
             return;
         }
@@ -145,6 +159,16 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        if (_environmentCheckMode)
+        {
+            if (_ownsSingleInstanceMutex)
+            {
+                try { _singleInstanceMutex?.ReleaseMutex(); } catch (ApplicationException) { }
+            }
+            _singleInstanceMutex?.Dispose();
+            base.OnExit(e);
+            return;
+        }
         // 优雅退出：算法 Worker 全部关闭（PLG-011/STB-004）
         try
         {

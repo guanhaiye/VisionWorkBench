@@ -2,11 +2,21 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Media.Media3D;
 
 namespace VisionWorkbench.App;
 
 public static class ThemeManager
 {
+    private static readonly HashSet<Window> FontScaleWindows = [];
+    private static readonly DependencyProperty BaseFontSizeProperty =
+        DependencyProperty.RegisterAttached(
+            "BaseFontSize",
+            typeof(double),
+            typeof(ThemeManager),
+            new FrameworkPropertyMetadata(double.NaN));
+    private static double _uiScale = 1.0;
+
     private static readonly string[] ThemeBrushKeys =
     [
         "AccentBrush", "AccentHoverBrush", "AccentSoftBrush",
@@ -19,6 +29,7 @@ public static class ThemeManager
         "SidebarSelectedBrush", "SidebarSelectedTextBrush",
         "SidebarStatusTextBrush", "SidebarStatusMutedBrush",
         "GlobalFontSize",
+        "SidebarGroupFontSize", "SidebarItemFontSize",
     ];
 
     public static void Apply(string? mode)
@@ -67,6 +78,8 @@ public static class ThemeManager
                 window.Resources[key] = applicationResources[key];
             }
         }
+
+        EnsureFontScaleHandler(window);
     }
 
     public static void ApplyPageTextBrush(FrameworkElement element)
@@ -87,9 +100,100 @@ public static class ThemeManager
     public static void ApplyUiScale(double scale)
     {
         scale = Math.Clamp(scale, 0.8, 1.5);
+        _uiScale = scale;
         // Font scaling must not apply a LayoutTransform to the custom chrome Window:
         // doing so offsets native hit testing for minimize/maximize/close buttons.
         System.Windows.Application.Current.Resources["GlobalFontSize"] = 13d * scale;
+        // 左侧导航使用独立的动态字号，避免 Expander/ListBoxItem 模板在重启后
+        // 依赖视觉树遍历的时机不同，导致一级、二级菜单缩放比例不一致。
+        System.Windows.Application.Current.Resources["SidebarGroupFontSize"] = 12d * scale;
+        System.Windows.Application.Current.Resources["SidebarItemFontSize"] = 13d * scale;
+        // Shell keeps a local copy of the application theme resources so that
+        // pages use the same brushes. Refresh it here as well; otherwise the
+        // saved scale changes only Application.Resources and has no visible
+        // effect until a new window is created.
+        foreach (Window window in System.Windows.Application.Current.Windows)
+        {
+            SyncWindowResources(window);
+            ApplyFontScaleToTree(window);
+        }
+    }
+
+    private static void EnsureFontScaleHandler(Window window)
+    {
+        if (!FontScaleWindows.Add(window))
+        {
+            return;
+        }
+
+        window.AddHandler(
+            FrameworkElement.LoadedEvent,
+            new RoutedEventHandler(FontScaleElement_Loaded),
+            handledEventsToo: true);
+        // Shell 的部分导航模板会在 Window.Loaded 之后才完成最终布局。
+        // 首次渲染完成后再补应用一次，确保重启时左侧导航等模板内容也使用已保存的字号。
+        window.ContentRendered += FontScaleWindow_ContentRendered;
+        window.Closed += (_, _) => FontScaleWindows.Remove(window);
+    }
+
+    private static void FontScaleWindow_ContentRendered(object? sender, EventArgs e)
+    {
+        if (sender is Window window)
+        {
+            ApplyFontScaleToTree(window);
+        }
+    }
+
+    private static void FontScaleElement_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject element)
+        {
+            ApplyFontScaleToTree(element);
+        }
+    }
+
+    private static void ApplyFontScaleToTree(DependencyObject root)
+    {
+        var visited = new HashSet<DependencyObject>();
+        ApplyFontScaleToTree(root, visited);
+    }
+
+    private static void ApplyFontScaleToTree(DependencyObject element, HashSet<DependencyObject> visited)
+    {
+        if (!visited.Add(element))
+        {
+            return;
+        }
+
+        ApplyFontScale(element);
+        if (element is Visual || element is Visual3D)
+        {
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
+            {
+                ApplyFontScaleToTree(VisualTreeHelper.GetChild(element, index), visited);
+            }
+        }
+
+    }
+
+    private static void ApplyFontScale(DependencyObject element)
+    {
+        var currentValue = element.GetValue(TextElement.FontSizeProperty);
+        if (currentValue is not double currentSize || currentSize <= 0)
+        {
+            return;
+        }
+
+        var baseValue = element.GetValue(BaseFontSizeProperty);
+        if (baseValue is not double baseSize || double.IsNaN(baseSize))
+        {
+            var source = DependencyPropertyHelper.GetValueSource(element, TextElement.FontSizeProperty);
+            var isInheritedOrDynamic = source.BaseValueSource == BaseValueSource.Inherited || source.IsExpression;
+            baseSize = isInheritedOrDynamic ? currentSize / _uiScale : currentSize;
+            element.SetValue(BaseFontSizeProperty, baseSize);
+        }
+
+        element.SetValue(TextElement.FontSizeProperty, baseSize * _uiScale);
     }
 
     private static void Set(string key, string color) =>
