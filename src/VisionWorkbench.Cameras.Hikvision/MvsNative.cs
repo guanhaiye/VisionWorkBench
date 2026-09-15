@@ -40,6 +40,7 @@ internal static class MvsNative
                 paths.Add(Path.Combine(configured, LibraryName));
             }
             paths.Add(Path.Combine(AppContext.BaseDirectory, LibraryName));
+            paths.Add(Path.Combine(AppContext.BaseDirectory, "runtime", "mvs", "Win64_x64", LibraryName));
             foreach (var root in new[]
             {
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),

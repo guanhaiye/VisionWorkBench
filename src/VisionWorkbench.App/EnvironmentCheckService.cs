@@ -23,11 +23,12 @@ internal static class EnvironmentCheckService
             CheckWritableDirectory(settings.DataDirectory, "参数数据目录"),
             CheckWritableDirectory(settings.ConfigDirectory, "配置目录"),
             CheckFile(Path.Combine(AppContext.BaseDirectory, "plugins", "yolo11", "worker.py"), "YOLO Worker"),
+            CheckFile(Path.Combine(AppContext.BaseDirectory, "runtime", "mvs", "Win64_x64", "MvCameraControl.dll"), "Hikvision MVS Runtime"),
             CheckFile(Path.Combine(AppContext.BaseDirectory, "plugins", "yolo11", "models", "yolo11n.pt"), "YOLO基础模型"),
         };
         if (!HasBundledModels())
         {
-            results[3] = new CheckResult("Model manifest", true, "No unlicensed model bundled; import an authorized model after installation.");
+            results[4] = new CheckResult("Model manifest", true, "No unlicensed model bundled; import an authorized model after installation.");
         }
 
         var python = ResolvePython();
