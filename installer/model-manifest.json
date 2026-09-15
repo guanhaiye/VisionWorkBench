@@ -1,6 +1,34 @@
 {
   "models": [
     {
+      "name": "yolo26n.pt",
+      "type": "object-detection",
+      "version": "YOLO26n",
+      "source": "workers/yolo11/yolo26n.pt",
+      "target": "plugins/yolo11/models/yolo26n.pt",
+      "sha256": "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef",
+      "officialSource": "https://github.com/ultralytics/assets",
+      "license": "Ultralytics model license; verify commercial terms",
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
+    },
+    {
+      "name": "best.pt",
+      "type": "object-detection",
+      "version": "Customer-trained YOLO model",
+      "source": "workers/yolo11/models/best.pt",
+      "target": "plugins/yolo11/models/best.pt",
+      "sha256": "aa2b6abf038542747ba497b04f0f166f634cfd79a25a7de74820695b901003b9",
+      "officialSource": "local customer-trained model asset",
+      "license": "Customer-provided model",
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
+    },
+    {
       "name": "yolo11n.pt",
       "type": "object-detection",
       "version": "YOLO11n",
