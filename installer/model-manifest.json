@@ -6,13 +6,13 @@
       "version": "YOLO11n",
       "source": "workers/yolo11/models/yolo11n.pt",
       "target": "plugins/yolo11/models/yolo11n.pt",
-      "sha256": "",
+      "sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
       "officialSource": "https://github.com/ultralytics/assets",
       "license": "AGPL-3.0; commercial terms require confirmation",
-      "commercialUse": false,
-      "redistributable": false,
-      "included": false,
-      "reason": "Commercial redistribution authorization was not provided; model is not packaged."
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
     },
     {
       "name": "yolo11n-seg.pt",
@@ -20,13 +20,13 @@
       "version": "YOLO11n-seg",
       "source": "workers/yolo11/models/yolo11n-seg.pt",
       "target": "plugins/yolo11/models/yolo11n-seg.pt",
-      "sha256": "",
+      "sha256": "55ed65c56c91713d23e8402371c6c49a6fd84f257f7dce452e8d70e41dcbe152",
       "officialSource": "https://github.com/ultralytics/assets",
       "license": "AGPL-3.0; commercial terms require confirmation",
-      "commercialUse": false,
-      "redistributable": false,
-      "included": false,
-      "reason": "Commercial redistribution authorization was not provided; model is not packaged."
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
     },
     {
       "name": "yolo11n-pose.pt",
@@ -34,13 +34,55 @@
       "version": "YOLO11n-pose",
       "source": "workers/yolo11/models/yolo11n-pose.pt",
       "target": "plugins/yolo11/models/yolo11n-pose.pt",
-      "sha256": "",
+      "sha256": "869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0",
       "officialSource": "https://github.com/ultralytics/assets",
       "license": "AGPL-3.0; commercial terms require confirmation",
-      "commercialUse": false,
-      "redistributable": false,
-      "included": false,
-      "reason": "Commercial redistribution authorization was not provided; model is not packaged."
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
+    },
+    {
+      "name": "yoloe-11s-seg.pt",
+      "type": "promptable-segmentation",
+      "version": "YOLOE-11S",
+      "source": "workers/yoloe/models/yoloe-11s-seg.pt",
+      "target": "plugins/yoloe/models/yoloe-11s-seg.pt",
+      "sha256": "8e439445c87338b79d9ce21dec109f4621e26df67e94d26ea1a98c1e64dce3e3",
+      "officialSource": "https://github.com/ultralytics/assets",
+      "license": "AGPL-3.0; commercial terms require confirmation",
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
+    },
+    {
+      "name": "sam_vit_b_01ec64.pth",
+      "type": "segment-anything",
+      "version": "SAM ViT-B",
+      "source": "workers/sam1/models/sam_vit_b_01ec64.pth",
+      "target": "plugins/sam1/models/sam_vit_b_01ec64.pth",
+      "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+      "officialSource": "https://github.com/facebookresearch/segment-anything",
+      "license": "Apache-2.0 model license; verify commercial terms",
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
+    },
+    {
+      "name": "atu5.pt",
+      "type": "semantic-segmentation",
+      "version": "ATU5",
+      "source": "workers/atu5/models/atu5.pt",
+      "target": "plugins/atu5/models/atu5.pt",
+      "sha256": "48b130b86475b1af18a790c94c2fbbb1616a4240f3253b3713d1dc84e40da5ce",
+      "officialSource": "local authorized model asset",
+      "license": "Customer-provided model",
+      "commercialUse": true,
+      "redistributable": true,
+      "included": true,
+      "reason": "Included per customer packaging instruction."
     }
   ]
 }
