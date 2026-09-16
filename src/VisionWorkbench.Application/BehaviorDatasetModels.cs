@@ -31,6 +31,8 @@ public sealed class BehaviorSequenceSource
 
     [JsonIgnore]
     public string DisplayName => $"{Name}（{Kind switch { "video" => "视频", _ => "图片序列" }}，{FrameCount}帧）";
+
+    public override string ToString() => DisplayName;
 }
 
 public sealed class BehaviorClipDefinition

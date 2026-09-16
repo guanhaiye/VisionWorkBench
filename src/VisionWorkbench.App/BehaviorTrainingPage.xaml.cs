@@ -235,6 +235,14 @@ public partial class BehaviorTrainingPage : UserControl
         return "models/yolo11n-pose.pt";
     }
     private static string Sanitize(string value) => string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
-    private sealed record BehaviorDatasetOption(BehaviorDatasetDefinition Dataset) { public string DisplayName => $"{Dataset.Name}（{Dataset.Clips.Count}片段）"; }
-    private sealed record BehaviorModelOption(string DisplayName, string Path);
+    private sealed record BehaviorDatasetOption(BehaviorDatasetDefinition Dataset)
+    {
+        public string DisplayName => $"{Dataset.Name}（{Dataset.Clips.Count}片段）";
+        public override string ToString() => DisplayName;
+    }
+
+    private sealed record BehaviorModelOption(string DisplayName, string Path)
+    {
+        public override string ToString() => DisplayName;
+    }
 }

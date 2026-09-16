@@ -572,5 +572,8 @@ public partial class ModelTestPage : UserControl
         string TaskType,
         string TaskTypeLabel,
         DateTime CompletedAt,
-        bool IsExternal);
+        bool IsExternal)
+    {
+        public override string ToString() => DisplayName;
+    }
 }

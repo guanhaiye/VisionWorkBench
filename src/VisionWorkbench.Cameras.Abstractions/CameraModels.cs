@@ -9,6 +9,8 @@ public sealed record CameraDescriptor
 
     /// <summary>稳定标识（序列号）；虚拟源为 null。</summary>
     public string? Serial { get; init; }
+
+    public override string ToString() => DisplayName;
 }
 
 /// <summary>相机支持的模式。</summary>
