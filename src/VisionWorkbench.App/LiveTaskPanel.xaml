@@ -167,23 +167,23 @@
                                     <ItemsControl x:Name="SopStepsItems">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Grid Margin="0,2">
+                                                <Grid Margin="0,4">
                                                     <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="34" />
+                                                        <ColumnDefinition Width="68" />
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Grid.Column="0" Width="28" Height="28" CornerRadius="14"
+                                                    <Border Grid.Column="0" Width="56" Height="56" CornerRadius="28"
                                                             Background="{Binding Brush}" HorizontalAlignment="Left">
                                                         <TextBlock Text="{Binding Indicator}" Foreground="White"
                                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                   FontWeight="Bold" />
+                                                                   FontSize="24" FontWeight="Bold" />
                                                     </Border>
                                                     <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
-                                                               TextTrimming="CharacterEllipsis" Margin="4,0,4,0" />
-                                                    <Border Grid.Column="2" Background="{Binding Brush}" CornerRadius="5"
-                                                            Padding="6,3" VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding StatusText}" Foreground="White" FontSize="11" />
+                                                               TextTrimming="CharacterEllipsis" Margin="8,0,8,0" FontSize="24" />
+                                                    <Border Grid.Column="2" Background="{Binding Brush}" CornerRadius="10"
+                                                            Padding="12,6" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding StatusText}" Foreground="White" FontSize="22" />
                                                     </Border>
                                                 </Grid>
                                             </DataTemplate>
