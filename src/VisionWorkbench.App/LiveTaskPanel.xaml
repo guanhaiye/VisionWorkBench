@@ -299,10 +299,6 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="每个任务的检测状态、算法耗时和计数结果在对应面板内独立显示。"
-                           Foreground="{DynamicResource MutedTextBrush}"
-                           VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="StatusText"
                            Grid.Column="1"
                            Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接"

@@ -237,6 +237,9 @@ public partial class Shell : Window
             _cache[key] = page;
         }
         PageHost.Content = page;
+        GlobalFooterHintText.Text = key == "live"
+            ? "每个任务的检测状态、算法耗时和计数结果在对应面板内独立显示。"
+            : string.Empty;
         if (page is FrameworkElement pageElement)
         {
             ThemeManager.ApplyPageTextBrush(pageElement);
