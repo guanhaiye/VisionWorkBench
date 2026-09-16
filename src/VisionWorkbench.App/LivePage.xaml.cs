@@ -16,6 +16,7 @@ public partial class LivePage : UserControl
     private readonly List<LiveTaskPanel> _panels = [];
     private LiveTaskItem[] _availableTasks = [];
     private bool _loadingTasks;
+    private bool _runtimeMode;
     // 兼容原有 UI 冒烟测试；正式运行时每个 LiveTaskPanel 使用自己的画布。
     private Recipe? _activeRecipe = null;
     private DetectionRunService? _run = null;
@@ -44,6 +45,7 @@ public partial class LivePage : UserControl
 
     private async void Page_Unloaded(object sender, RoutedEventArgs e)
     {
+        SetRuntimeMode(false);
         SaveWorkspaceSettings();
         await ShutdownPanelsAsync();
     }
@@ -127,6 +129,25 @@ public partial class LivePage : UserControl
     private void WorkspaceSettings_Click(object sender, RoutedEventArgs e)
     {
         WorkspaceSettingsPopup.IsOpen = !WorkspaceSettingsPopup.IsOpen;
+    }
+
+    private void RuntimeMode_Click(object sender, RoutedEventArgs e)
+    {
+        SetRuntimeMode(!_runtimeMode);
+        WorkspaceSettingsPopup.IsOpen = false;
+    }
+
+    private void SetRuntimeMode(bool enabled)
+    {
+        _runtimeMode = enabled;
+        RuntimeModeButton.Content = enabled ? "退出运行模式" : "进入运行模式";
+        if (Window.GetWindow(this) is Shell shell)
+        {
+            shell.SetLiveRuntimeMode(enabled);
+        }
+        WorkspaceStatusText.Text = enabled
+            ? "已进入运行模式，左侧工具栏已隐藏。可在“设置”中退出运行模式。"
+            : "已退出运行模式，左侧工具栏已恢复。";
     }
 
     private void AddTaskPanel(long? taskId = null)

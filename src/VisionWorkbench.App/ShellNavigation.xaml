@@ -155,7 +155,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="248" />
+            <ColumnDefinition x:Name="SidebarColumn" Width="248" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
         <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{DynamicResource SurfaceBrush}"
@@ -242,7 +242,7 @@
                 </StackPanel>
             </Grid>
         </Border>
-        <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource SidebarBrush}">
+        <Border x:Name="SidebarPanel" Grid.Row="1" Grid.Column="0" Background="{DynamicResource SidebarBrush}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />

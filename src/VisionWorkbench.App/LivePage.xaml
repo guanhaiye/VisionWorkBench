@@ -39,6 +39,12 @@
                             <Button Content="添加任务" Click="AddTask_Click" Padding="14,4" />
                             <Button Content="刷新任务" Click="RefreshTasks_Click" Padding="14,4" />
                         </StackPanel>
+                        <Button x:Name="RuntimeModeButton"
+                                Content="进入运行模式"
+                                Click="RuntimeMode_Click"
+                                Margin="0,10,0,0"
+                                Padding="14,5"
+                                HorizontalContentAlignment="Center" />
                         <TextBlock Text="删除任务" Margin="4,10,0,4" />
                         <Grid>
                             <Grid.ColumnDefinitions>

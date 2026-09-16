@@ -17,6 +17,7 @@ namespace VisionWorkbench.App;
 
 public partial class Shell : Window
 {
+    private static readonly GridLength NormalSidebarWidth = new(248);
     private readonly Dictionary<string, Func<object>> _pages = new();
     private readonly Dictionary<string, object> _cache = new();
     private readonly HashSet<ListBox> _navigationLists = [];
@@ -252,6 +253,12 @@ public partial class Shell : Window
 
     internal void NavigateToSopRecordingPage() => ShowPage("sop-recording");
     internal void NavigateToSopPage() => ShowPage("sop");
+
+    internal void SetLiveRuntimeMode(bool enabled)
+    {
+        SidebarPanel.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
+        SidebarColumn.Width = enabled ? new GridLength(0) : NormalSidebarWidth;
+    }
 
     private static bool IsLicenseExemptPage(string key) =>
         key is "welcome" or "license" or "settings" or "logs" or "monitor";
