@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 using OpenCvSharp;
@@ -125,6 +126,9 @@ public partial class SopPage : UserControl
     private bool _captureRecording;
     private CancellationTokenSource? _captureScheduleCancellation;
     private int _captureGeneration;
+    private System.Windows.Point _stepDragStartPoint;
+    private DateTime _stepDragPressedAt;
+    private StepEditorRow? _stepDragCandidate;
 
     public SopPage()
     {
@@ -385,6 +389,7 @@ public partial class SopPage : UserControl
 
     private void AddStep_Click(object sender, RoutedEventArgs e)
     {
+        RenumberStepRows();
         var number = _steps.Count + 1;
         var row = new StepEditorRow
         {
@@ -395,6 +400,125 @@ public partial class SopPage : UserControl
         _steps.Add(row);
         StepsGrid.SelectedItem = row;
         StepsGrid.ScrollIntoView(row);
+    }
+
+    private void StepsGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _stepDragCandidate = null;
+        var current = e.OriginalSource as DependencyObject;
+        while (current is not null && current is not DataGridRow)
+        {
+            if (current is TextBox or ComboBox or System.Windows.Controls.Primitives.ButtonBase)
+            {
+                return;
+            }
+            current = VisualTreeHelper.GetParent(current);
+        }
+        if (current is not DataGridRow { Item: StepEditorRow row })
+        {
+            return;
+        }
+
+        _stepDragCandidate = row;
+        _stepDragStartPoint = e.GetPosition(StepsGrid);
+        _stepDragPressedAt = DateTime.UtcNow;
+    }
+
+    private void StepsGrid_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_stepDragCandidate is not { } row || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+        var position = e.GetPosition(StepsGrid);
+        var moved = Math.Abs(position.X - _stepDragStartPoint.X) >= SystemParameters.MinimumHorizontalDragDistance
+            || Math.Abs(position.Y - _stepDragStartPoint.Y) >= SystemParameters.MinimumVerticalDragDistance;
+        if (!moved || DateTime.UtcNow - _stepDragPressedAt < TimeSpan.FromMilliseconds(300))
+        {
+            return;
+        }
+
+        _stepDragCandidate = null;
+        CommitGridEdits();
+        DragDrop.DoDragDrop(StepsGrid, row, DragDropEffects.Move);
+    }
+
+    private void StepsGrid_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        => _stepDragCandidate = null;
+
+    private void StepsGrid_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(StepEditorRow)))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        if (FindVisualChild<ScrollViewer>(StepsGrid) is { } scrollViewer)
+        {
+            var position = e.GetPosition(StepsGrid);
+            if (position.Y < 32) scrollViewer.LineUp();
+            else if (position.Y > StepsGrid.ActualHeight - 32) scrollViewer.LineDown();
+        }
+        e.Handled = true;
+    }
+
+    private void StepsGrid_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(StepEditorRow))
+            || e.Data.GetData(typeof(StepEditorRow)) is not StepEditorRow source)
+        {
+            return;
+        }
+
+        var sourceIndex = _steps.IndexOf(source);
+        if (sourceIndex < 0) return;
+
+        var targetRow = FindVisualAncestor<DataGridRow>(e.OriginalSource as DependencyObject);
+        var insertionIndex = _steps.Count;
+        if (targetRow?.Item is StepEditorRow target)
+        {
+            insertionIndex = _steps.IndexOf(target);
+            if (e.GetPosition(targetRow).Y > targetRow.ActualHeight / 2)
+            {
+                insertionIndex++;
+            }
+        }
+        if (sourceIndex < insertionIndex) insertionIndex--;
+        insertionIndex = Math.Clamp(insertionIndex, 0, _steps.Count - 1);
+        if (sourceIndex != insertionIndex)
+        {
+            _steps.Move(sourceIndex, insertionIndex);
+        }
+
+        RenumberStepRows();
+        StepsGrid.SelectedItem = source;
+        StepsGrid.ScrollIntoView(source);
+        StatusText.Text = "已调整工序顺序，请点击“保存”生效。";
+        e.Handled = true;
+    }
+
+    private static T? FindVisualAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T match) return match;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match) return match;
+            if (FindVisualChild<T>(child) is { } descendant) return descendant;
+        }
+        return null;
     }
 
     private void RemoveStep_Click(object sender, RoutedEventArgs e)

@@ -144,7 +144,12 @@
                                                Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
                                 </StackPanel>
                                 <DataGrid x:Name="StepsGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False"
+                                          CanUserSortColumns="False" AllowDrop="True"
                                           VerticalAlignment="Stretch" SelectionMode="Single"
+                                          PreviewMouseLeftButtonDown="StepsGrid_PreviewMouseLeftButtonDown"
+                                          PreviewMouseMove="StepsGrid_PreviewMouseMove"
+                                          PreviewMouseLeftButtonUp="StepsGrid_PreviewMouseLeftButtonUp"
+                                          DragOver="StepsGrid_DragOver" Drop="StepsGrid_Drop"
                                           MinHeight="260"
                                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
