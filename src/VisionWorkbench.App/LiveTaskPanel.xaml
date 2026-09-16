@@ -35,8 +35,13 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="38" />
         </Grid.RowDefinitions>
+
+        <!-- 状态文本由主窗口最底部的全局状态栏显示；保留隐藏元素供状态更新与日志监听。 -->
+        <TextBlock x:Name="StatusText"
+                   Grid.Row="0"
+                   Visibility="Collapsed"
+                   Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接" />
 
         <WrapPanel Grid.Row="0" Margin="0,0,0,6">
             <TextBlock Text="任务：" VerticalAlignment="Center" Margin="0,0,0,4" />
@@ -292,21 +297,5 @@
             </ScrollViewer>
         </Grid>
 
-        <Border Grid.Row="2" Height="32" VerticalAlignment="Top"
-                BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,6,0,0">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="StatusText"
-                           Grid.Column="1"
-                           Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接"
-                           Foreground="Green"
-                           Margin="12,0,0,0"
-                           VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis" />
-            </Grid>
-        </Border>
     </Grid>
 </UserControl>
