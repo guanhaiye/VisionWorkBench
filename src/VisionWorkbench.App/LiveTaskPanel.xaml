@@ -52,14 +52,14 @@
             <Button x:Name="ClearRoiButton" Content="清除区域" Click="ClearRoi_Click" IsEnabled="False" Margin="4,0,0,0" Padding="10,3" />
         </WrapPanel>
 
-        <Grid Grid.Row="1">
+        <Grid x:Name="WorkspaceContentGrid" Grid.Row="1" PreviewMouseWheel="WorkspaceContentGrid_PreviewMouseWheel">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*" />
                 <ColumnDefinition Width="1*" MinWidth="210" />
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#111111" MinHeight="220">
-                <local:ImageViewer x:Name="PreviewViewer">
+                <local:ImageViewer x:Name="PreviewViewer" WheelZoomEnabled="False">
                     <Grid x:Name="PreviewSurface"
                           MinWidth="1" MinHeight="1"
                           HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -85,7 +85,7 @@
                 </local:ImageViewer>
             </Border>
 
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
+            <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
                 <StackPanel>
                     <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed"
                             Background="#FFFDF5">

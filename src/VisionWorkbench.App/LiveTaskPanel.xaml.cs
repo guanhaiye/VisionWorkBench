@@ -19,6 +19,39 @@ namespace VisionWorkbench.App;
 /// <summary>实时检测页（文档 §8.2）：预览+叠加、结果面板和批次控制。</summary>
 public partial class LiveTaskPanel : UserControl
 {
+    private void WorkspaceContentGrid_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        var direction = -Math.Sign(e.Delta);
+        const double wheelStep = 54;
+        if (DetailsScrollViewer.ScrollableHeight > 0)
+        {
+            var target = Math.Clamp(
+                DetailsScrollViewer.VerticalOffset + direction * wheelStep,
+                0,
+                DetailsScrollViewer.ScrollableHeight);
+            if (Math.Abs(target - DetailsScrollViewer.VerticalOffset) > 0.1)
+            {
+                DetailsScrollViewer.ScrollToVerticalOffset(target);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        var current = VisualTreeHelper.GetParent(this);
+        while (current is not null && current is not ScrollViewer)
+        {
+            current = VisualTreeHelper.GetParent(current);
+        }
+        if (current is ScrollViewer outer && outer.ScrollableHeight > 0)
+        {
+            outer.ScrollToVerticalOffset(Math.Clamp(
+                outer.VerticalOffset + direction * wheelStep,
+                0,
+                outer.ScrollableHeight));
+            e.Handled = true;
+        }
+    }
+
     private sealed record SopStepView(string Indicator, string Name, string StatusText, Brush Brush);
 
     private readonly PreviewRenderer _preview = new();
