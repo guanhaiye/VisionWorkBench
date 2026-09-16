@@ -294,7 +294,23 @@
 
         <Border Grid.Row="2" Height="32" VerticalAlignment="Top"
                 BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="4" Margin="0,6,0,0">
-            <TextBlock x:Name="StatusText" Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接" TextWrapping="Wrap" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="每个任务的检测状态、算法耗时和计数结果在对应面板内独立显示。"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="StatusText"
+                           Grid.Column="1"
+                           Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接"
+                           Foreground="Green"
+                           Margin="12,0,0,0"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+            </Grid>
         </Border>
     </Grid>
 </UserControl>
