@@ -272,7 +272,7 @@ public partial class SopPage : UserControl
                 Code = copyCode,
                 Name = BuildCopyName(definition.Name),
                 Version = 1,
-                Status = SopDefinitionStatus.Published,
+                Status = SopDefinitionStatus.Draft,
                 Steps = copiedSteps,
             };
 
