@@ -22,7 +22,7 @@ public partial class LiveTaskPanel : UserControl
     private void WorkspaceContentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         // 右侧指标、质量卡片和底部操作区保持可见；仅步骤列表在剩余高度内滚动。
-        SopStepsScrollViewer.MaxHeight = Math.Clamp(e.NewSize.Height - 310, 120, 420);
+        SopStepsScrollViewer.MaxHeight = Math.Clamp(e.NewSize.Height - 380, 96, 420);
     }
 
     private void WorkspaceContentGrid_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
