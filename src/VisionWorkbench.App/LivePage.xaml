@@ -30,43 +30,62 @@
                 <Border Background="{DynamicResource SurfaceBrush}"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="8"
-                        Padding="12"
-                        Width="320">
+                        CornerRadius="10"
+                        Padding="16"
+                        Width="360">
                     <StackPanel>
-                        <TextBlock Text="工作区设置" FontWeight="SemiBold" Margin="0,0,0,8" />
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="添加任务" Click="AddTask_Click" Padding="14,4" />
-                            <Button Content="刷新任务" Click="RefreshTasks_Click" Padding="14,4" />
-                        </StackPanel>
-                        <Button x:Name="RuntimeModeButton"
-                                Content="进入运行模式"
-                                Click="RuntimeMode_Click"
-                                Margin="0,10,0,0"
-                                Padding="14,5"
-                                HorizontalContentAlignment="Center" />
-                        <TextBlock Text="删除任务" Margin="4,10,0,4" />
+                        <TextBlock Text="工作区设置" FontSize="16" FontWeight="SemiBold" />
+                        <TextBlock Text="管理检测面板、显示方式和任务。"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   Margin="0,3,0,14" />
+
+                        <TextBlock Text="任务面板" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Content="添加任务" Click="AddTask_Click" Padding="14,5" Margin="0,0,4,0" />
+                            <Button Grid.Column="1" Content="刷新任务" Click="RefreshTasks_Click"
+                                    Padding="14,5" Margin="4,0,0,0" />
+                        </Grid>
+
+                        <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Margin="0,14,0,12" />
+                        <TextBlock Text="显示模式" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <Button x:Name="RuntimeModeButton"
+                                Content="进入运行模式"
+                                Click="RuntimeMode_Click"
+                                Padding="14,6"
+                                HorizontalContentAlignment="Center" />
+                        <TextBlock Text="运行模式会隐藏左侧工具栏，扩大检测画面。"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="11" Margin="2,5,0,10" />
+                        <TextBlock Text="窗口布局" Margin="0,0,0,5" />
+                        <ComboBox x:Name="LayoutCombo" SelectionChanged="LayoutCombo_SelectionChanged">
+                            <ComboBoxItem Content="田字格" Tag="grid" />
+                            <ComboBoxItem Content="纵向排列" Tag="vertical" />
+                            <ComboBoxItem Content="横向排列" Tag="horizontal" />
+                        </ComboBox>
+
+                        <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Margin="0,14,0,12" />
+                        <TextBlock Text="删除任务" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="78" />
                             </Grid.ColumnDefinitions>
                             <ComboBox x:Name="DeleteTaskCombo"
-                                      MinWidth="190"
                                       ItemsSource="{Binding}"
                                       ToolTip="选择要永久删除的任务" />
                             <Button Grid.Column="1"
                                     Content="删除"
                                     Click="DeleteTask_Click"
                                     Margin="8,0,0,0"
-                                    Padding="14,4" />
+                                    Padding="12,5" />
                         </Grid>
-                        <TextBlock Text="窗口布局" Margin="4,10,0,4" />
-                        <ComboBox x:Name="LayoutCombo" SelectionChanged="LayoutCombo_SelectionChanged">
-                            <ComboBoxItem Content="田字格" Tag="grid" />
-                            <ComboBoxItem Content="纵向排列" Tag="vertical" />
-                            <ComboBoxItem Content="横向排列" Tag="horizontal" />
-                        </ComboBox>
+                        <TextBlock Text="删除后无法恢复，请谨慎操作。"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="11" Margin="2,5,0,0" />
                     </StackPanel>
                 </Border>
             </Popup>
