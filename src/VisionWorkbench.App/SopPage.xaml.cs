@@ -320,13 +320,6 @@ public partial class SopPage : UserControl
         CommitGridEdits();
         try
         {
-            if (_selectedDefinition?.Status == SopDefinitionStatus.Published)
-            {
-                ThemedMessageBox.Show("已发布版本不能原位修改。请点击“新建SOP”制作新版本，避免影响已经投产的任务。",
-                    "SOP版本保护", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
             var definition = BuildDefinition();
             await AppServices.Instance.SopDefinitions.SaveAsync(definition);
             _selectedDefinition = definition;
@@ -846,9 +839,7 @@ public partial class SopPage : UserControl
             });
         }
         _ = LoadVideoRecordsAsync(definition.Id);
-        StatusText.Text = definition.Status == SopDefinitionStatus.Published
-            ? "已发布版本只读保护：如需修改，请点击“新建SOP”制作新版本。"
-            : $"当前编辑：{definition.Name} v{definition.Version}";
+        StatusText.Text = $"当前编辑：{definition.Name} v{definition.Version}（{GetStatus(definition.Status)}）；保存后自动发布。";
     }
 
     private void ClearEditor()
