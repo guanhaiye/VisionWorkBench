@@ -19,7 +19,10 @@ namespace VisionWorkbench.App;
 /// <summary>SOP 流程模型、步骤模型配置与版本管理。</summary>
 public partial class SopPage : UserControl
 {
-    private sealed record StatusOption(SopDefinitionStatus Value, string Label);
+    private sealed record StatusOption(SopDefinitionStatus Value, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
     private sealed record DefinitionRow(SopDefinition Definition)
     {
