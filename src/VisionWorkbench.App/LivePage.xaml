@@ -54,19 +54,13 @@
             <TextBlock x:Name="WorkspaceStatusText" Text="请选择任务并点击“添加任务”。每个任务拥有独立的预览、结果和控制按钮。" Foreground="#555" />
         </Border>
 
-        <ScrollViewer x:Name="PanelsScrollViewer" Grid.Row="2"
-                      HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollBarVisibility="Disabled"
-                      CanContentScroll="False"
-                      SizeChanged="PanelsScrollViewer_SizeChanged"
-                      HorizontalAlignment="Stretch"
-                      VerticalAlignment="Stretch"
-                      HorizontalContentAlignment="Stretch"
-                      VerticalContentAlignment="Stretch">
+        <Grid x:Name="PanelsViewport" Grid.Row="2"
+              SizeChanged="PanelsViewport_SizeChanged"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch">
             <ItemsControl x:Name="PanelsHost"
-                          Width="{Binding ViewportWidth, ElementName=PanelsScrollViewer}"
-                          Height="{Binding ViewportHeight, ElementName=PanelsScrollViewer}"
-                          HorizontalAlignment="Left"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch"
                           VerticalContentAlignment="Stretch">
                 <ItemsControl.ItemContainerStyle>
@@ -76,7 +70,7 @@
                     </Style>
                 </ItemsControl.ItemContainerStyle>
             </ItemsControl>
-        </ScrollViewer>
+        </Grid>
 
         <!-- 保留 UI 冒烟测试所需的兼容性画布；实际显示由上面的任务面板负责。 -->
         <Grid Grid.Row="2" Opacity="0" IsHitTestVisible="False">

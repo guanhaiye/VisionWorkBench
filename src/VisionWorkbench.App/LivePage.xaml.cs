@@ -211,7 +211,7 @@ public partial class LivePage : UserControl
         }
     }
 
-    private void PanelsScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+    private void PanelsViewport_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (IsLoaded)
         {
@@ -296,16 +296,16 @@ public partial class LivePage : UserControl
             default:
                 factory = new FrameworkElementFactory(typeof(UniformGrid));
                 // 单个任务占满工作区，多个任务仅在空间足够时分成两列，避免窄窗口中控件互相挤压。
-                columns = _panels.Count > 1 && PanelsScrollViewer.ActualWidth >= 1100 ? 2 : 1;
+                columns = _panels.Count > 1 && PanelsViewport.ActualWidth >= 1100 ? 2 : 1;
                 rows = Math.Max(1, (int)Math.Ceiling(_panels.Count / (double)columns));
                 factory.SetValue(UniformGrid.ColumnsProperty, columns);
                 break;
         }
 
         PanelsHost.ItemsPanel = new ItemsPanelTemplate(factory);
-        var panelHeight = Math.Max(1, PanelsScrollViewer.ViewportHeight / rows);
+        var panelHeight = Math.Max(1, PanelsViewport.ActualHeight / rows);
         var panelWidth = layout == "horizontal"
-            ? Math.Max(1, PanelsScrollViewer.ViewportWidth / Math.Max(1, _panels.Count))
+            ? Math.Max(1, PanelsViewport.ActualWidth / Math.Max(1, _panels.Count))
             : double.NaN;
         foreach (var panel in _panels)
         {
