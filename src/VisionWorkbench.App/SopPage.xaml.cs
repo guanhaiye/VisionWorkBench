@@ -21,6 +21,9 @@ public partial class SopPage : UserControl
 {
     private sealed record DefinitionRow(SopDefinition Definition)
     {
+        public string Name => Definition.Name;
+        public string CodeAndVersion => $"{Definition.Code}  ·  v{Definition.Version}";
+        public string Status => GetStatus(Definition.Status);
         public string DisplayName => $"{Definition.Name}  ·  {Definition.Code}  ·  v{Definition.Version}  ·  {GetStatus(Definition.Status)}";
     }
 
