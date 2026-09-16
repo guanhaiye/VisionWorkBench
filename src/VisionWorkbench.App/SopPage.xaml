@@ -103,7 +103,7 @@
             </Border>
 
             <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="12">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer x:Name="EditorScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <Grid x:Name="EditorPanel" IsEnabled="False">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -166,6 +166,7 @@
                                           PreviewMouseLeftButtonDown="StepsGrid_PreviewMouseLeftButtonDown"
                                           PreviewMouseMove="StepsGrid_PreviewMouseMove"
                                           PreviewMouseLeftButtonUp="StepsGrid_PreviewMouseLeftButtonUp"
+                                          PreviewMouseWheel="StepsGrid_PreviewMouseWheel"
                                           DragOver="StepsGrid_DragOver" Drop="StepsGrid_Drop"
                                           MinHeight="260"
                                           ScrollViewer.VerticalScrollBarVisibility="Auto"

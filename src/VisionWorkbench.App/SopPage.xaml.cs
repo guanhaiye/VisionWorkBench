@@ -477,6 +477,33 @@ public partial class SopPage : UserControl
     private void StepsGrid_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         => _stepDragCandidate = null;
 
+    private void StepsGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var direction = -Math.Sign(e.Delta);
+        const double wheelStep = 54;
+        var inner = FindVisualChild<ScrollViewer>(StepsGrid);
+        if (inner is not null && inner.ScrollableHeight > 0)
+        {
+            var target = Math.Clamp(inner.VerticalOffset + direction * wheelStep, 0, inner.ScrollableHeight);
+            if (Math.Abs(target - inner.VerticalOffset) > 0.1)
+            {
+                inner.ScrollToVerticalOffset(target);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (EditorScrollViewer.ScrollableHeight > 0)
+        {
+            var target = Math.Clamp(
+                EditorScrollViewer.VerticalOffset + direction * wheelStep,
+                0,
+                EditorScrollViewer.ScrollableHeight);
+            EditorScrollViewer.ScrollToVerticalOffset(target);
+            e.Handled = true;
+        }
+    }
+
     private void StepsGrid_DragOver(object sender, DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(typeof(StepEditorRow)))
