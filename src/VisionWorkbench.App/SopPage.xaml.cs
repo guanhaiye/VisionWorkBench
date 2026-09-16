@@ -19,6 +19,8 @@ namespace VisionWorkbench.App;
 /// <summary>SOP 流程模型、步骤模型配置与版本管理。</summary>
 public partial class SopPage : UserControl
 {
+    private sealed record StatusOption(SopDefinitionStatus Value, string Label);
+
     private sealed record DefinitionRow(SopDefinition Definition)
     {
         public string Name => Definition.Name;
@@ -124,6 +126,13 @@ public partial class SopPage : UserControl
     public SopPage()
     {
         InitializeComponent();
+        DefinitionStatusCombo.ItemsSource = new[]
+        {
+            new StatusOption(SopDefinitionStatus.Draft, "未发布"),
+            new StatusOption(SopDefinitionStatus.Published, "已发布"),
+            new StatusOption(SopDefinitionStatus.Retired, "已停用"),
+        };
+        DefinitionStatusCombo.SelectedValue = SopDefinitionStatus.Draft;
         StepsGrid.ItemsSource = _steps;
     }
 
@@ -812,6 +821,7 @@ public partial class SopPage : UserControl
         DefinitionCodeText.Text = definition.Code;
         ProductCodeText.Text = definition.ProductCode;
         VersionText.Text = definition.Version.ToString(CultureInfo.InvariantCulture);
+        DefinitionStatusCombo.SelectedValue = definition.Status;
         _steps.Clear();
         foreach (var step in definition.Steps.OrderBy(item => item.Order))
         {
@@ -839,7 +849,7 @@ public partial class SopPage : UserControl
             });
         }
         _ = LoadVideoRecordsAsync(definition.Id);
-        StatusText.Text = $"当前编辑：{definition.Name} v{definition.Version}（{GetStatus(definition.Status)}）；保存后自动发布。";
+        StatusText.Text = $"当前编辑：{definition.Name} v{definition.Version}（{GetStatus(definition.Status)}）；保存时按所选发布状态生效。";
     }
 
     private void ClearEditor()
@@ -849,6 +859,7 @@ public partial class SopPage : UserControl
         DefinitionCodeText.Text = "";
         ProductCodeText.Text = "";
         VersionText.Text = "";
+        DefinitionStatusCombo.SelectedValue = SopDefinitionStatus.Draft;
         _steps.Clear();
         _videoRecords.Clear();
         CaptureVideoList.ItemsSource = _videoRecords;
@@ -998,8 +1009,9 @@ public partial class SopPage : UserControl
             Name = name,
             ProductCode = ProductCodeText.Text.Trim(),
             Version = version,
-            // SOP 不再暴露生命周期字段，保存即形成可绑定的正式版本。
-            Status = SopDefinitionStatus.Published,
+            Status = DefinitionStatusCombo.SelectedValue is SopDefinitionStatus status
+                ? status
+                : SopDefinitionStatus.Draft,
             // 输入源、设备/路径和运行模式属于任务实例，不属于可复用的 SOP 定义。
             // 保留旧版 Definition.Execution 的读取兼容性，但新 SOP 不再写入全局运行配置。
             Execution = null,
