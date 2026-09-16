@@ -33,7 +33,6 @@
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button Content="视频录制" Click="Recording_Click" />
                 <Button Content="新建SOP" Click="New_Click" />
-                <Button Content="复制SOP" Click="Copy_Click" />
                 <Button Content="删除" Click="Delete_Click" />
                 <Button Content="保存" Click="Save_Click" />
                 <Button Content="刷新" Click="Refresh_Click" />
@@ -56,7 +55,14 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="SOP目录" FontWeight="SemiBold" Margin="4,2,4,8" />
                     <ListBox x:Name="DefinitionList" DisplayMemberPath="DisplayName"
-                             SelectionChanged="DefinitionList_SelectionChanged" />
+                             SelectionChanged="DefinitionList_SelectionChanged"
+                             PreviewMouseRightButtonDown="DefinitionList_PreviewMouseRightButtonDown">
+                        <ListBox.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="复制SOP" Click="Copy_Click" />
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+                    </ListBox>
                 </DockPanel>
             </Border>
 

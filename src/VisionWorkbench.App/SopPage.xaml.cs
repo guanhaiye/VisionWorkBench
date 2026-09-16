@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Microsoft.Win32;
 using OpenCvSharp;
 using VisionWorkbench.Cameras.Abstractions;
@@ -207,6 +208,20 @@ public partial class SopPage : UserControl
         LoadDefinition(row.Definition);
     }
 
+    private void DefinitionList_PreviewMouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var current = e.OriginalSource as DependencyObject;
+        while (current is not null && current is not ListBoxItem)
+        {
+            current = VisualTreeHelper.GetParent(current);
+        }
+        if (current is ListBoxItem item)
+        {
+            item.IsSelected = true;
+            item.Focus();
+        }
+    }
+
     private void LoadAvailablePlugins()
     {
         _availablePluginIds = AppServices.Instance.AlgorithmManager.ScanPlugins()
@@ -225,7 +240,7 @@ public partial class SopPage : UserControl
         StatusText.Text = "正在制作新SOP草稿，填写步骤后点击“保存”。";
     }
 
-    private void Copy_Click(object sender, RoutedEventArgs e)
+    private async void Copy_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedDefinition is not { } definition)
         {
@@ -233,16 +248,40 @@ public partial class SopPage : UserControl
             return;
         }
 
-        // 先完整加载源定义，再切换为未保存的新定义；这样步骤、模型参数和条件都会被带入。
-        LoadDefinition(definition);
-        _selectedDefinition = null;
-        DefinitionList.SelectedItem = null;
-        DefinitionNameText.Text = BuildCopyName(definition.Name);
-        DefinitionCodeText.Text = BuildCopyCode();
-        VersionText.Text = "1";
-        EditorPanel.IsEnabled = true;
-        DefinitionNameText.Focus();
-        StatusText.Text = "已复制为新 SOP 草稿；修改完成后点击“保存”即可生成独立流程。";
+        try
+        {
+            var copyCode = BuildCopyCode();
+            var copiedSteps = definition.Steps.Select(step =>
+            {
+                var stepId = $"{copyCode}-step-{step.Order:00}";
+                return step with
+                {
+                    Id = stepId,
+                    Conditions = step.Conditions.Select((condition, index) => condition with
+                    {
+                        Id = $"{stepId}-condition-{index + 1:00}",
+                    }).ToArray(),
+                };
+            }).ToArray();
+            var copy = definition with
+            {
+                Id = $"sop:{Guid.NewGuid():N}",
+                Code = copyCode,
+                Name = BuildCopyName(definition.Name),
+                Version = 1,
+                Status = SopDefinitionStatus.Published,
+                Steps = copiedSteps,
+            };
+
+            await AppServices.Instance.SopDefinitions.SaveAsync(copy);
+            await LoadAsync(copy.Id);
+            StatusText.Text = $"已复制并新增：{copy.Name}";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"复制 SOP 失败：{ex.Message}", "复制SOP",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void Recording_Click(object sender, RoutedEventArgs e)
