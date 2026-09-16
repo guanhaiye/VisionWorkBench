@@ -32,7 +32,7 @@
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" MinHeight="460" />
+            <RowDefinition Height="*" />
             <RowDefinition Height="38" />
         </Grid.RowDefinitions>
 
@@ -58,7 +58,7 @@
                 <ColumnDefinition Width="1*" MinWidth="210" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="#111111" MinHeight="220">
+            <Border Grid.Column="0" Background="#111111">
                 <local:ImageViewer x:Name="PreviewViewer" WheelZoomEnabled="False">
                     <Grid x:Name="PreviewSurface"
                           MinWidth="1" MinHeight="1"

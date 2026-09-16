@@ -213,8 +213,7 @@ public partial class LivePage : UserControl
 
     private void PanelsScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // 只有在网格布局下，窗口宽度变化才会影响列数；纵向/横向布局不需要重建。
-        if (IsLoaded && (LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() == "grid")
+        if (IsLoaded)
         {
             ApplyLayout();
         }
@@ -279,12 +278,16 @@ public partial class LivePage : UserControl
             return;
         }
 
+        var layout = (LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "grid";
+        var columns = 1;
+        var rows = 1;
         FrameworkElementFactory factory;
-        switch ((LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString())
+        switch (layout)
         {
             case "vertical":
                 factory = new FrameworkElementFactory(typeof(StackPanel));
                 factory.SetValue(StackPanel.OrientationProperty, Orientation.Vertical);
+                rows = Math.Max(1, _panels.Count);
                 break;
             case "horizontal":
                 factory = new FrameworkElementFactory(typeof(StackPanel));
@@ -293,12 +296,22 @@ public partial class LivePage : UserControl
             default:
                 factory = new FrameworkElementFactory(typeof(UniformGrid));
                 // 单个任务占满工作区，多个任务仅在空间足够时分成两列，避免窄窗口中控件互相挤压。
-                var columns = _panels.Count > 1 && PanelsScrollViewer.ActualWidth >= 1100 ? 2 : 1;
+                columns = _panels.Count > 1 && PanelsScrollViewer.ActualWidth >= 1100 ? 2 : 1;
+                rows = Math.Max(1, (int)Math.Ceiling(_panels.Count / (double)columns));
                 factory.SetValue(UniformGrid.ColumnsProperty, columns);
                 break;
         }
 
         PanelsHost.ItemsPanel = new ItemsPanelTemplate(factory);
+        var panelHeight = Math.Max(1, PanelsScrollViewer.ViewportHeight / rows);
+        var panelWidth = layout == "horizontal"
+            ? Math.Max(1, PanelsScrollViewer.ViewportWidth / Math.Max(1, _panels.Count))
+            : double.NaN;
+        foreach (var panel in _panels)
+        {
+            panel.Height = panelHeight;
+            panel.Width = panelWidth;
+        }
     }
 
     private void UpdateWorkspaceStatus()
