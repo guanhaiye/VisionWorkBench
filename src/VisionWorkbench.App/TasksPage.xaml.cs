@@ -42,6 +42,7 @@ public partial class TasksPage : UserControl
     private sealed record SopOption(SopDefinition Definition)
     {
         public string DisplayName => $"{Definition.Name} · v{Definition.Version}";
+        public override string ToString() => DisplayName;
     }
 
     private sealed record TaskRow(long Id, string StationCode, string TaskName)
