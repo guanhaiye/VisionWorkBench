@@ -104,29 +104,29 @@
                             <UniformGrid Columns="4" Margin="0,0,0,8">
                                 <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="0,0,3,0">
                                     <StackPanel>
-                                        <TextBlock Text="当前步骤" Style="{StaticResource MetricCaption}" />
-                                        <TextBlock x:Name="SopMetricCurrentStep" Text="--" FontWeight="SemiBold"
+                                        <TextBlock Text="当前步骤" Style="{StaticResource MetricCaption}" FontSize="16.5" />
+                                        <TextBlock x:Name="SopMetricCurrentStep" Text="--" FontSize="18" FontWeight="SemiBold"
                                                    TextTrimming="CharacterEllipsis" Margin="0,3,0,0" />
                                     </StackPanel>
                                 </Border>
                                 <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="3,0">
                                     <StackPanel>
-                                        <TextBlock Text="已完成" Style="{StaticResource MetricCaption}" />
-                                        <TextBlock x:Name="SopMetricCompleted" Text="0 / 0" FontSize="16"
+                                        <TextBlock Text="已完成" Style="{StaticResource MetricCaption}" FontSize="16.5" />
+                                        <TextBlock x:Name="SopMetricCompleted" Text="0 / 0" FontSize="24"
                                                    FontWeight="SemiBold" Margin="0,1,0,0" />
                                     </StackPanel>
                                 </Border>
                                 <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="3,0">
                                     <StackPanel>
-                                        <TextBlock Text="步骤耗时" Style="{StaticResource MetricCaption}" />
-                                        <TextBlock x:Name="SopMetricElapsed" Text="--" FontWeight="SemiBold"
+                                        <TextBlock Text="步骤耗时" Style="{StaticResource MetricCaption}" FontSize="16.5" />
+                                        <TextBlock x:Name="SopMetricElapsed" Text="--" FontSize="18" FontWeight="SemiBold"
                                                    Margin="0,3,0,0" />
                                     </StackPanel>
                                 </Border>
                                 <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="3,0,0,0">
                                     <StackPanel>
-                                        <TextBlock Text="异常" Style="{StaticResource MetricCaption}" />
-                                        <TextBlock x:Name="SopMetricExceptions" Text="0" FontSize="16"
+                                        <TextBlock Text="异常" Style="{StaticResource MetricCaption}" FontSize="16.5" />
+                                        <TextBlock x:Name="SopMetricExceptions" Text="0" FontSize="24"
                                                    FontWeight="SemiBold" Foreground="#C65D16" Margin="0,1,0,0" />
                                     </StackPanel>
                                 </Border>
