@@ -90,9 +90,11 @@
             </Popup>
         </Grid>
 
-        <Border Grid.Row="1" BorderBrush="#DDD" BorderThickness="0,1,0,1" Padding="6" Margin="0,0,0,8">
-            <TextBlock x:Name="WorkspaceStatusText" Text="请选择任务并点击“添加任务”。每个任务拥有独立的预览、结果和控制按钮。" Foreground="#555" />
-        </Border>
+        <!-- 工作区状态通过操作提示和对话框反馈，不再占用顶部独立状态栏。 -->
+        <TextBlock x:Name="WorkspaceStatusText"
+                   Grid.Row="1"
+                   Visibility="Collapsed"
+                   Text="请选择任务并点击“添加任务”。每个任务拥有独立的预览、结果和控制按钮。" />
 
         <Grid x:Name="PanelsViewport" Grid.Row="2"
               SizeChanged="PanelsViewport_SizeChanged"
