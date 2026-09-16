@@ -1,7 +1,9 @@
 <UserControl x:Class="VisionWorkbench.App.LiveTaskPanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:VisionWorkbench.App">
+             xmlns:local="clr-namespace:VisionWorkbench.App"
+             HorizontalContentAlignment="Stretch"
+             VerticalContentAlignment="Stretch">
     <UserControl.Resources>
         <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
         <Style x:Key="InfoCard" TargetType="Border">
@@ -52,7 +54,9 @@
             <Button x:Name="ClearRoiButton" Content="清除区域" Click="ClearRoi_Click" IsEnabled="False" Margin="4,0,0,0" Padding="10,3" />
         </WrapPanel>
 
-        <Grid x:Name="WorkspaceContentGrid" Grid.Row="1" PreviewMouseWheel="WorkspaceContentGrid_PreviewMouseWheel">
+        <Grid x:Name="WorkspaceContentGrid" Grid.Row="1"
+              PreviewMouseWheel="WorkspaceContentGrid_PreviewMouseWheel"
+              SizeChanged="WorkspaceContentGrid_SizeChanged">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*" />
                 <ColumnDefinition Width="1*" MinWidth="210" />
@@ -85,7 +89,10 @@
                 </local:ImageViewer>
             </Border>
 
-            <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="6,0,0,0">
+            <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1"
+                          VerticalScrollBarVisibility="Disabled"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Margin="6,0,0,0">
                 <StackPanel>
                     <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed"
                             Background="#FFFDF5">
