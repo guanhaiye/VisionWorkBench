@@ -90,6 +90,12 @@
             </Popup>
         </Grid>
 
+        <Border Grid.Row="0"
+                VerticalAlignment="Bottom"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="0,0,0,1"
+                IsHitTestVisible="False" />
+
         <!-- 工作区状态通过操作提示和对话框反馈，不再占用顶部独立状态栏。 -->
         <TextBlock x:Name="WorkspaceStatusText"
                    Grid.Row="1"
