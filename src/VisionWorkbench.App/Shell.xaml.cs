@@ -95,7 +95,6 @@ public partial class Shell : Window
         _pages["communication"] = () => new CommunicationPage();
         _pages["history"] = () => new HistoryPage();
         _pages["logs"] = () => new LogPage();
-        _pages["plugins"] = () => new PluginsPage();
         _pages["devices"] = () => new DevicesPage();
         _pages["monitor"] = () => new SystemMonitorPage();
         _pages["license"] = () => new LicensePage();

@@ -302,7 +302,6 @@
                         </Expander>
                         <Expander x:Name="SystemManagementExpander" Header="&#x7CFB;&#x7EDF;&#x7BA1;&#x7406;" IsExpanded="False">
                             <ListBox x:Name="SystemNavList" ItemContainerStyle="{StaticResource SidebarListBoxItem}" SelectionChanged="NavList_SelectionChanged">
-                                <ListBoxItem Content="&#x7B97;&#x6CD5;&#x7BA1;&#x7406;" Tag="plugins" />
                                 <ListBoxItem Content="&#x8BBE;&#x5907;&#x7BA1;&#x7406;" Tag="devices" />
                                 <ListBoxItem Content="&#x672C;&#x673A;&#x76D1;&#x63A7;" Tag="monitor" />
                                 <ListBoxItem Content="&#x8BB8;&#x53EF;&#x8BC1;&#x7BA1;&#x7406;" Tag="license" />
