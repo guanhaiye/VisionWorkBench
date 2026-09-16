@@ -358,11 +358,14 @@ public partial class SopPage : UserControl
         CommitGridEdits();
         try
         {
-            var definition = BuildDefinition();
+            var definition = BuildDefinition() with { Status = SopDefinitionStatus.Published };
             await AppServices.Instance.SopDefinitions.SaveAsync(definition);
             _selectedDefinition = definition;
-            StatusText.Text = $"已保存：{definition.Name} v{definition.Version}（{GetStatus(definition.Status)}）";
             await LoadAsync(definition.Id);
+            DefinitionStatusCombo.SelectedValue = SopDefinitionStatus.Published;
+            StatusText.Text = $"保存成功：{definition.Name} v{definition.Version}（已发布）";
+            ThemedMessageBox.Show("保存成功，SOP 已发布。", "SOP保存",
+                MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
