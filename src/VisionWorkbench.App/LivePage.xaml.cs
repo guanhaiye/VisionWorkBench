@@ -159,6 +159,9 @@ public partial class LivePage : UserControl
         _panels.Add(panel);
         PanelsHost.Items.Add(panel);
         ApplyLayout();
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(ApplyLayout));
         if (taskId is { } id)
         {
             panel.SelectTask(id);
@@ -384,9 +387,13 @@ public partial class LivePage : UserControl
         }
 
         PanelsHost.ItemsPanel = new ItemsPanelTemplate(factory);
-        var panelHeight = Math.Max(1, PanelsViewport.ActualHeight / rows);
-        var panelWidth = layout == "horizontal"
-            ? Math.Max(1, PanelsViewport.ActualWidth / Math.Max(1, _panels.Count))
+        // 页面首次显示时容器可能尚未完成测量。此时不能写入 1px 的固定高度，
+        // 否则后续没有 SizeChanged 事件时，整个任务面板会保持不可见。
+        var panelHeight = PanelsViewport.ActualHeight > 1
+            ? PanelsViewport.ActualHeight / rows
+            : double.NaN;
+        var panelWidth = layout == "horizontal" && PanelsViewport.ActualWidth > 1
+            ? PanelsViewport.ActualWidth / Math.Max(1, _panels.Count)
             : double.NaN;
         foreach (var panel in _panels)
         {
