@@ -65,6 +65,11 @@ public partial class LivePage : UserControl
                 .Select(t => new LiveTaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
                 .ToArray();
             _availableTasks = items;
+            var deleteSelectionId = (DeleteTaskCombo.SelectedItem as LiveTaskItem)?.Id;
+            DeleteTaskCombo.ItemsSource = _availableTasks;
+            DeleteTaskCombo.SelectedItem = deleteSelectionId is { } selectedId
+                ? _availableTasks.FirstOrDefault(item => item.Id == selectedId)
+                : null;
             foreach (var panel in _panels)
             {
                 panel.SetAvailableTasks(_availableTasks);
@@ -200,6 +205,61 @@ public partial class LivePage : UserControl
     private async void RefreshTasks_Click(object sender, RoutedEventArgs e)
     {
         await LoadTasksAsync();
+    }
+
+    private async void DeleteTask_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RolePolicy.CanEditRecipe)
+        {
+            ThemedMessageBox.Show("操作员模式不能删除任务。", "权限限制");
+            return;
+        }
+        if (DeleteTaskCombo.SelectedItem is not LiveTaskItem task)
+        {
+            ThemedMessageBox.Show("请先选择要删除的任务。", "删除任务",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        WorkspaceSettingsPopup.IsOpen = false;
+        var confirmation = new ConfirmDialog(
+            "确认删除任务",
+            $"确定要永久删除任务“{task.Name}”吗？\n关联的实时检测面板将同时关闭，此操作无法撤销。")
+        {
+            Owner = Window.GetWindow(this)
+        };
+        if (confirmation.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var matchingPanels = _panels.Where(panel => panel.TaskId == task.Id).ToArray();
+            foreach (var panel in matchingPanels)
+            {
+                panel.RemoveRequested -= Panel_RemoveRequested;
+                panel.TaskSelectionChanged -= Panel_TaskSelectionChanged;
+                panel.SettingsChanged -= Panel_SettingsChanged;
+                await panel.ShutdownAsync();
+                _panels.Remove(panel);
+                PanelsHost.Items.Remove(panel);
+            }
+
+            await AppServices.Instance.Recipes.DeleteAsync(task.Id);
+            AppServices.Instance.Settings.LiveRois?.Remove(task.Id);
+            DeleteTaskCombo.SelectedItem = null;
+            SaveWorkspaceSettings();
+            await LoadTasksAsync();
+            ApplyLayout();
+            WorkspaceStatusText.Text = $"任务“{task.Name}”已删除。";
+            ThemedMessageBox.Show("任务删除成功。", "删除任务");
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"删除失败：{ex.Message}", "删除任务",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void LayoutCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)

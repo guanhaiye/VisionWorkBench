@@ -32,13 +32,29 @@
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="12"
-                        Width="250">
+                        Width="320">
                     <StackPanel>
                         <TextBlock Text="工作区设置" FontWeight="SemiBold" Margin="0,0,0,8" />
                         <StackPanel Orientation="Horizontal">
                             <Button Content="添加任务" Click="AddTask_Click" Padding="14,4" />
                             <Button Content="刷新任务" Click="RefreshTasks_Click" Padding="14,4" />
                         </StackPanel>
+                        <TextBlock Text="删除任务" Margin="4,10,0,4" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="DeleteTaskCombo"
+                                      MinWidth="190"
+                                      ItemsSource="{Binding}"
+                                      ToolTip="选择要永久删除的任务" />
+                            <Button Grid.Column="1"
+                                    Content="删除"
+                                    Click="DeleteTask_Click"
+                                    Margin="8,0,0,0"
+                                    Padding="14,4" />
+                        </Grid>
                         <TextBlock Text="窗口布局" Margin="4,10,0,4" />
                         <ComboBox x:Name="LayoutCombo" SelectionChanged="LayoutCombo_SelectionChanged">
                             <ComboBoxItem Content="田字格" Tag="grid" />
