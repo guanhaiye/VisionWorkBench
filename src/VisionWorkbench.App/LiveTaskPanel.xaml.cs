@@ -486,9 +486,16 @@ public partial class LiveTaskPanel : UserControl
     {
         var hasSop = snapshot is not null && _run is not null;
         var active = _run?.State is DetectionRunState.Running or DetectionRunState.Paused;
-        var terminal = snapshot is not null && IsSopTerminal(snapshot.Status);
-        StartNextSopButton.IsEnabled = hasSop && active && terminal;
+        // SOP 检测开始后保持周期操作按钮可点击。是否允许切换到下一件由服务层
+        // 根据当前周期状态判断，并通过对话框向操作员说明原因，避免按钮置灰后毫无反馈。
+        StartNextSopButton.IsEnabled = hasSop && active;
         ResetSopButton.IsEnabled = hasSop && active;
+        StartNextSopButton.ToolTip = hasSop && active
+            ? "当前产品完成或失败后开始下一件；检测中点击会给出操作提示"
+            : "请先启动 SOP 检测";
+        ResetSopButton.ToolTip = hasSop && active
+            ? "放弃当前产品并重新开始本产品周期"
+            : "请先启动 SOP 检测";
         SopCycleText.Text = string.IsNullOrWhiteSpace(_run?.SopCycleId)
             ? ""
             : $"周期：{_run.SopCycleId[..Math.Min(16, _run.SopCycleId.Length)]}";
@@ -498,6 +505,7 @@ public partial class LiveTaskPanel : UserControl
     {
         if (_run is null)
         {
+            ThemedMessageBox.Show("请先启动 SOP 检测。", "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         try
@@ -519,6 +527,7 @@ public partial class LiveTaskPanel : UserControl
     {
         if (_run is null)
         {
+            ThemedMessageBox.Show("请先启动 SOP 检测。", "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         try
