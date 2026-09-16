@@ -23,6 +23,19 @@ public partial class LiveTaskPanel : UserControl
     {
         var direction = -Math.Sign(e.Delta);
         const double wheelStep = 54;
+        if (SopStepsScrollViewer.IsMouseOver && SopStepsScrollViewer.ScrollableHeight > 0)
+        {
+            var target = Math.Clamp(
+                SopStepsScrollViewer.VerticalOffset + direction * wheelStep,
+                0,
+                SopStepsScrollViewer.ScrollableHeight);
+            if (Math.Abs(target - SopStepsScrollViewer.VerticalOffset) > 0.1)
+            {
+                SopStepsScrollViewer.ScrollToVerticalOffset(target);
+                e.Handled = true;
+                return;
+            }
+        }
         if (DetailsScrollViewer.ScrollableHeight > 0)
         {
             var target = Math.Clamp(
