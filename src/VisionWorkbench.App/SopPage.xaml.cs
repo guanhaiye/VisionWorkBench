@@ -1273,6 +1273,6 @@ public partial class SopPage : UserControl
     {
         SopDefinitionStatus.Published => "已发布",
         SopDefinitionStatus.Retired => "已停用",
-        _ => "草稿",
+        _ => "未发布",
     };
 }
