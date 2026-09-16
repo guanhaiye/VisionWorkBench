@@ -99,8 +99,7 @@
                           HorizontalScrollBarVisibility="Disabled"
                           Margin="6,0,0,0">
                 <StackPanel>
-                    <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed"
-                            Background="#FFFDF5">
+                    <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed">
                         <StackPanel>
                             <UniformGrid Columns="4" Margin="0,0,0,8">
                                 <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="0,0,3,0">
@@ -133,7 +132,8 @@
                                 </Border>
                             </UniformGrid>
 
-                            <Border Background="#FFF7E8" BorderBrush="#F2D6A2" BorderThickness="1"
+                            <Border Background="{DynamicResource SurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                                     CornerRadius="8" Padding="9" Margin="0,0,0,8">
                                 <StackPanel>
                                     <TextBlock Text="本轮外观质量检测" Style="{StaticResource CardTitle}" />
@@ -159,7 +159,9 @@
                                             <ColumnDefinition Width="72" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <Border Grid.Column="0" Width="64" Height="48" Background="#E7DED5"
+                                        <Border Grid.Column="0" Width="64" Height="48"
+                                                Background="{DynamicResource SurfaceBrush}"
+                                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                                                 CornerRadius="4" HorizontalAlignment="Left">
                                             <Image x:Name="SopPreviousImage" Stretch="Uniform" Visibility="Collapsed" />
                                         </Border>
