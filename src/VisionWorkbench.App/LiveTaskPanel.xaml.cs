@@ -111,6 +111,7 @@ public partial class LiveTaskPanel : UserControl
     private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
 
     private IReadOnlyList<LiveTaskItem> _availableTasks = [];
+    private bool _sopCycleActionBusy;
 
     public event EventHandler? RemoveRequested;
     public event EventHandler? TaskSelectionChanged;
@@ -484,12 +485,12 @@ public partial class LiveTaskPanel : UserControl
 
     private void UpdateSopControls(SopSnapshot? snapshot)
     {
-        var hasSop = snapshot is not null && _run is not null;
+        var hasSop = snapshot is not null;
         var active = _run?.State is DetectionRunState.Running or DetectionRunState.Paused;
-        // SOP 检测开始后保持周期操作按钮可点击。是否允许切换到下一件由服务层
-        // 根据当前周期状态判断，并通过对话框向操作员说明原因，避免按钮置灰后毫无反馈。
-        StartNextSopButton.IsEnabled = hasSop && active;
-        ResetSopButton.IsEnabled = hasSop && active;
+        // SOP 任务始终允许点击周期操作。运行状态不满足时由点击处理给出明确提示，
+        // 避免按钮置灰后操作员误以为界面失效。
+        StartNextSopButton.IsEnabled = hasSop && !_sopCycleActionBusy;
+        ResetSopButton.IsEnabled = hasSop && !_sopCycleActionBusy;
         StartNextSopButton.ToolTip = hasSop && active
             ? "当前产品完成或失败后开始下一件；检测中点击会给出操作提示"
             : "请先启动 SOP 检测";
@@ -503,11 +504,18 @@ public partial class LiveTaskPanel : UserControl
 
     private async void StartNextSop_Click(object sender, RoutedEventArgs e)
     {
+        if (_sopCycleActionBusy)
+        {
+            return;
+        }
         if (_run is null)
         {
             ThemedMessageBox.Show("请先启动 SOP 检测。", "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        _sopCycleActionBusy = true;
+        StartNextSopButton.Content = "处理中…";
+        UpdateSopControls(_lastSopSnapshot);
         try
         {
             var snapshot = await _run.StartNextProductAsync();
@@ -521,15 +529,28 @@ public partial class LiveTaskPanel : UserControl
         {
             ThemedMessageBox.Show(ex.Message, "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Information);
         }
+        finally
+        {
+            _sopCycleActionBusy = false;
+            StartNextSopButton.Content = "开始下一件";
+            UpdateSopControls(_lastSopSnapshot);
+        }
     }
 
     private async void ResetSop_Click(object sender, RoutedEventArgs e)
     {
+        if (_sopCycleActionBusy)
+        {
+            return;
+        }
         if (_run is null)
         {
             ThemedMessageBox.Show("请先启动 SOP 检测。", "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        _sopCycleActionBusy = true;
+        ResetSopButton.Content = "处理中…";
+        UpdateSopControls(_lastSopSnapshot);
         try
         {
             var snapshot = await _run.ResetProductAsync();
@@ -542,6 +563,12 @@ public partial class LiveTaskPanel : UserControl
         catch (Exception ex)
         {
             ThemedMessageBox.Show(ex.Message, "SOP产品周期", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _sopCycleActionBusy = false;
+            ResetSopButton.Content = "复位当前产品";
+            UpdateSopControls(_lastSopSnapshot);
         }
     }
 
