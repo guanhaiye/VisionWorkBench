@@ -22,6 +22,23 @@
             <Setter Property="TextAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
+        <Style x:Key="SopDraggableRowStyle" TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsDragging}" Value="True">
+                    <Setter Property="Opacity" Value="0.45" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DropIndicator}" Value="Before">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                    <Setter Property="BorderThickness" Value="0,3,0,0" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DropIndicator}" Value="After">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                    <Setter Property="BorderThickness" Value="0,0,0,3" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
     <Grid Margin="12">
         <Grid.RowDefinitions>
@@ -154,6 +171,7 @@
                                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                           CellStyle="{StaticResource SopDataGridCellStyle}"
+                                          RowStyle="{StaticResource SopDraggableRowStyle}"
                                           ColumnHeaderStyle="{StaticResource SopDataGridHeaderStyle}">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="顺序" Binding="{Binding Order, UpdateSourceTrigger=LostFocus}" Width="55"

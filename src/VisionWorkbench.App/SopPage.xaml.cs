@@ -38,6 +38,28 @@ public partial class SopPage : UserControl
         private string _order = "1";
         private string _code = "STEP-01";
         private string _modelPath = "";
+        private bool _isDragging;
+        private string _dropIndicator = "";
+        public bool IsDragging
+        {
+            get => _isDragging;
+            set
+            {
+                if (_isDragging == value) return;
+                _isDragging = value;
+                OnPropertyChanged();
+            }
+        }
+        public string DropIndicator
+        {
+            get => _dropIndicator;
+            set
+            {
+                if (string.Equals(_dropIndicator, value, StringComparison.Ordinal)) return;
+                _dropIndicator = value;
+                OnPropertyChanged();
+            }
+        }
         public string Order
         {
             get => _order;
@@ -440,7 +462,16 @@ public partial class SopPage : UserControl
 
         _stepDragCandidate = null;
         CommitGridEdits();
-        DragDrop.DoDragDrop(StepsGrid, row, DragDropEffects.Move);
+        row.IsDragging = true;
+        try
+        {
+            DragDrop.DoDragDrop(StepsGrid, row, DragDropEffects.Move);
+        }
+        finally
+        {
+            row.IsDragging = false;
+            ClearStepDropIndicators();
+        }
     }
 
     private void StepsGrid_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -456,6 +487,18 @@ public partial class SopPage : UserControl
         }
 
         e.Effects = DragDropEffects.Move;
+        ClearStepDropIndicators();
+        var targetRow = FindVisualAncestor<DataGridRow>(e.OriginalSource as DependencyObject);
+        if (targetRow?.Item is StepEditorRow target)
+        {
+            target.DropIndicator = e.GetPosition(targetRow).Y <= targetRow.ActualHeight / 2
+                ? "Before"
+                : "After";
+        }
+        else if (_steps.Count > 0)
+        {
+            _steps[^1].DropIndicator = "After";
+        }
         if (FindVisualChild<ScrollViewer>(StepsGrid) is { } scrollViewer)
         {
             var position = e.GetPosition(StepsGrid);
@@ -497,7 +540,16 @@ public partial class SopPage : UserControl
         StepsGrid.SelectedItem = source;
         StepsGrid.ScrollIntoView(source);
         StatusText.Text = "已调整工序顺序，请点击“保存”生效。";
+        ClearStepDropIndicators();
         e.Handled = true;
+    }
+
+    private void ClearStepDropIndicators()
+    {
+        foreach (var step in _steps)
+        {
+            step.DropIndicator = "";
+        }
     }
 
     private static T? FindVisualAncestor<T>(DependencyObject? current) where T : DependencyObject
