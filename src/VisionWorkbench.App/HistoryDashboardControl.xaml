@@ -1,0 +1,43 @@
+<UserControl x:Class="VisionWorkbench.App.HistoryDashboardControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource PageTextBlockBaseStyle}" />
+        <Style x:Key="DashboardMetricCard" TargetType="Border"><Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="8" /><Setter Property="Padding" Value="10" /><Setter Property="Margin" Value="0,0,6,6" /></Style>
+        <Style x:Key="DashboardMetricCaption" TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /><Setter Property="FontSize" Value="11" /></Style>
+        <Style x:Key="DashboardMetricValue" TargetType="TextBlock"><Setter Property="FontSize" Value="22" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Margin" Value="0,5,0,0" /></Style>
+        <Style x:Key="DashboardChartCard" TargetType="Border"><Setter Property="Background" Value="{DynamicResource SurfaceBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="8" /><Setter Property="Padding" Value="8" /><Setter Property="Margin" Value="0,0,6,6" /></Style>
+        <Style x:Key="DashboardChartTitle" TargetType="TextBlock"><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Margin" Value="0,0,0,5" /></Style>
+    </UserControl.Resources>
+    <Grid Margin="8">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="0,0,0,8"><Button Content="返回明细" Click="Back_Click" Padding="12,4" DockPanel.Dock="Right" /><TextBlock Text="历史数据看板" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" /></DockPanel>
+        <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" Padding="8" Margin="0,0,0,8">
+            <WrapPanel>
+                <TextBlock Text="任务：" VerticalAlignment="Center" /><ComboBox x:Name="TaskFilter" Width="190" DisplayMemberPath="Name" Margin="0,0,12,4" />
+                <TextBlock Text="状态：" VerticalAlignment="Center" /><ComboBox x:Name="StatusFilter" Width="130" Margin="0,0,12,4"><ComboBoxItem Content="全部" IsSelected="True" /><ComboBoxItem Content="ok" /><ComboBoxItem Content="ng" /><ComboBoxItem Content="review_required" /><ComboBoxItem Content="processing" /><ComboBoxItem Content="error" /></ComboBox>
+                <TextBlock Text="时间：" VerticalAlignment="Center" /><ComboBox x:Name="RangeFilter" Width="120" SelectionChanged="RangeFilter_SelectionChanged" Margin="0,0,8,4"><ComboBoxItem Content="今天" Tag="today" /><ComboBoxItem Content="近7天" Tag="7" /><ComboBoxItem Content="近30天" Tag="30" IsSelected="True" /><ComboBoxItem Content="自定义" Tag="custom" /></ComboBox>
+                <DatePicker x:Name="FromDate" Width="145" Margin="0,0,6,4" /><TextBlock Text="至" VerticalAlignment="Center" Margin="0,0,6,4" /><DatePicker x:Name="ToDate" Width="145" Margin="0,0,10,4" />
+                <Button Content="刷新看板" Click="Query_Click" Padding="12,4" Margin="0,0,6,4" /><TextBlock x:Name="QueryStatusText" Text="准备查询" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="4,0,0,4" />
+            </WrapPanel>
+        </Border>
+        <UniformGrid Grid.Row="2" Columns="4" Margin="0,0,0,8">
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="终态检测" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="TotalText" Style="{StaticResource DashboardMetricValue}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="OK" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="OkText" Style="{StaticResource DashboardMetricValue}" Foreground="{DynamicResource SuccessBrush}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="NG" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="NgText" Style="{StaticResource DashboardMetricValue}" Foreground="{DynamicResource DangerBrush}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="待复核" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="ReviewText" Style="{StaticResource DashboardMetricValue}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="良率" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="RateText" Style="{StaticResource DashboardMetricValue}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="平均耗时" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="AverageText" Style="{StaticResource DashboardMetricValue}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="P95 耗时" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="P95Text" Style="{StaticResource DashboardMetricValue}" /></StackPanel></Border>
+            <Border Style="{StaticResource DashboardMetricCard}"><StackPanel><TextBlock Text="错误 / 处理中" Style="{StaticResource DashboardMetricCaption}" /><TextBlock x:Name="OtherText" Style="{StaticResource DashboardMetricValue}" /></StackPanel></Border>
+        </UniformGrid>
+        <Grid Grid.Row="3">
+            <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="*" /></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="1.45*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>
+            <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource DashboardChartCard}"><DockPanel><TextBlock Text="检测量与良率趋势" Style="{StaticResource DashboardChartTitle}" DockPanel.Dock="Top" /><Canvas x:Name="TrendCanvas" SizeChanged="ChartCanvas_SizeChanged" Background="Transparent" /></DockPanel></Border>
+            <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource DashboardChartCard}"><DockPanel><TextBlock Text="质量状态占比（不含错误）" Style="{StaticResource DashboardChartTitle}" DockPanel.Dock="Top" /><Canvas x:Name="StatusCanvas" SizeChanged="ChartCanvas_SizeChanged" Background="Transparent" /></DockPanel></Border>
+            <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource DashboardChartCard}"><DockPanel><TextBlock Text="任务检测量排行（Top 10）" Style="{StaticResource DashboardChartTitle}" DockPanel.Dock="Top" /><Canvas x:Name="TaskCanvas" SizeChanged="ChartCanvas_SizeChanged" Background="Transparent" /></DockPanel></Border>
+            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource DashboardChartCard}"><DockPanel><TextBlock Text="耗时分位数（毫秒）" Style="{StaticResource DashboardChartTitle}" DockPanel.Dock="Top" /><Canvas x:Name="PerformanceCanvas" SizeChanged="ChartCanvas_SizeChanged" Background="Transparent" /></DockPanel></Border>
+        </Grid>
+        <Border Grid.Row="4" x:Name="SopSummaryCard" Style="{StaticResource DashboardChartCard}" Margin="0,8,0,0" Visibility="Collapsed"><StackPanel><TextBlock Text="SOP 产品周期" Style="{StaticResource DashboardChartTitle}" /><TextBlock x:Name="SopSummaryText" TextWrapping="Wrap" /><TextBlock x:Name="SopFailureText" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,5,0,0" /></StackPanel></Border>
+    </Grid>
+</UserControl>

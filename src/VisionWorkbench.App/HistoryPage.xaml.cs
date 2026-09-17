@@ -24,6 +24,7 @@ public partial class HistoryPage : UserControl
     public HistoryPage()
     {
         InitializeComponent();
+        DashboardView.Visibility = Visibility.Collapsed;
         Loaded += async (_, _) =>
         {
             if (!EnsureHistoryEnabled())
@@ -223,6 +224,22 @@ public partial class HistoryPage : UserControl
             + $"插件: {record.PluginVersion ?? "—"}\n"
             + $"判定: {record.FinalResultJson}"
             + FormatWorkflow(record);
+    }
+
+    private void Dashboard_Click(object sender, RoutedEventArgs e)
+    {
+        HistoryFilterBar.Visibility = Visibility.Collapsed;
+        RecordsGrid.Visibility = Visibility.Collapsed;
+        DetailsView.Visibility = Visibility.Collapsed;
+        DashboardView.Visibility = Visibility.Visible;
+    }
+
+    private void Dashboard_BackRequested(object? sender, EventArgs e)
+    {
+        DashboardView.Visibility = Visibility.Collapsed;
+        HistoryFilterBar.Visibility = Visibility.Visible;
+        RecordsGrid.Visibility = Visibility.Visible;
+        DetailsView.Visibility = Visibility.Visible;
     }
 
     private static string FormatWorkflow(InspectionRecordEntity record)

@@ -13,7 +13,7 @@
         </Grid.RowDefinitions>
 
         <!-- 筛选 -->
-        <ScrollViewer Grid.Row="0" Margin="0,0,0,6"
+        <ScrollViewer x:Name="HistoryFilterBar" Grid.Row="0" Margin="0,0,0,6"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
             <WrapPanel>
@@ -42,6 +42,7 @@
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                     <Button Content="查询" Click="Query_Click" Margin="0,0,8,0" />
+                    <Button Content="数据看板" Click="Dashboard_Click" Margin="0,0,8,0" Padding="14,4" />
                     <Button Content="导出 CSV" Click="ExportCsv_Click" Margin="0,0,8,0" />
                     <Button x:Name="ClearAllButton" Content="清理历史记录" Click="ClearAll_Click"
                             Padding="14,4" />
@@ -65,8 +66,11 @@
             </DataGrid.Columns>
         </DataGrid>
 
+        <local:HistoryDashboardControl x:Name="DashboardView" Grid.Row="1" Grid.RowSpan="2"
+                                       Visibility="Collapsed" BackRequested="Dashboard_BackRequested" />
+
         <!-- 详情 + 分页 -->
-        <Grid Grid.Row="2" Margin="0,6,0,0">
+        <Grid x:Name="DetailsView" Grid.Row="2" Margin="0,6,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
