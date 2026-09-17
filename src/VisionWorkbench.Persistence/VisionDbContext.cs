@@ -176,10 +176,32 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
             Directory.CreateDirectory(dir);
         }
         using var db = new VisionDbContextFactory(dbPath).CreateDbContext();
-        db.Database.EnsureCreated();
+        // EnsureCreated 只适用于全新数据库。旧数据库如果缺少后来新增的表，
+        // EnsureCreated 会尝试重放整套模型建表语句，可能与已有索引重名而启动失败。
+        // 已存在用户表时直接执行下面的幂等升级脚本，避免重建旧模型并保留业务数据。
+        if (!HasUserTables(db))
+        {
+            db.Database.EnsureCreated();
+        }
         UpgradeSchema(db);
         db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
         return new VisionDbContextFactory(dbPath);
+    }
+
+    private static bool HasUserTables(VisionDbContext db)
+    {
+        var connection = db.Database.GetDbConnection();
+        connection.Open();
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%');";
+            return Convert.ToInt64(command.ExecuteScalar()) == 1;
+        }
+        finally
+        {
+            connection.Close();
+        }
     }
 
     private static void UpgradeSchema(VisionDbContext db)
