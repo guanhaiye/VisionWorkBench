@@ -49,18 +49,14 @@ public partial class HistoryPage : UserControl
         picker.ApplyTemplate();
         if (picker.Template.FindName("PART_TextBox", picker) is DatePickerTextBox textBox)
         {
-            // 日期只能通过日历按钮选择，禁用文本输入和键盘改值；日历本身仍可正常操作。
-            textBox.IsReadOnly = true;
-            textBox.Focusable = false;
-            textBox.Cursor = Cursors.Arrow;
-            textBox.PreviewKeyDown -= DatePickerTextBox_PreviewKeyDown;
-            textBox.PreviewKeyDown += DatePickerTextBox_PreviewKeyDown;
+            // 同时支持直接输入和日历选择；DatePicker 负责校验并同步 SelectedDate。
+            textBox.IsReadOnly = false;
+            textBox.Focusable = true;
+            textBox.Cursor = Cursors.IBeam;
             textBox.ContextMenu = CreateDateContextMenu(picker);
         }
         picker.ContextMenu = CreateDateContextMenu(picker);
     }
-
-    private static void DatePickerTextBox_PreviewKeyDown(object sender, KeyEventArgs e) => e.Handled = true;
 
     private static ContextMenu CreateDateContextMenu(DatePicker picker)
     {
