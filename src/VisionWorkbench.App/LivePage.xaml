@@ -118,7 +118,7 @@
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemContainerStyle>
-                    <Style TargetType="{x:Type ContentPresenter}">
+                    <Style TargetType="{x:Type local:LiveTaskPanel}">
                         <Setter Property="HorizontalAlignment" Value="Stretch" />
                         <Setter Property="VerticalAlignment" Value="Stretch" />
                     </Style>
