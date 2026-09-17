@@ -378,43 +378,60 @@ public partial class LivePage : UserControl
         }
 
         var layout = (LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "grid";
-        var columns = 1;
-        var rows = 1;
-        FrameworkElementFactory factory;
-        switch (layout)
+        var count = Math.Max(1, _panels.Count);
+        var (rows, columns) = layout switch
         {
-            case "vertical":
-                factory = new FrameworkElementFactory(typeof(StackPanel));
-                factory.SetValue(StackPanel.OrientationProperty, Orientation.Vertical);
-                rows = Math.Max(1, _panels.Count);
-                break;
-            case "horizontal":
-                factory = new FrameworkElementFactory(typeof(StackPanel));
-                factory.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-                break;
-            default:
-                factory = new FrameworkElementFactory(typeof(UniformGrid));
-                // 单个任务占满工作区，多个任务仅在空间足够时分成两列，避免窄窗口中控件互相挤压。
-                columns = _panels.Count > 1 && PanelsViewport.ActualWidth >= 1100 ? 2 : 1;
-                rows = Math.Max(1, (int)Math.Ceiling(_panels.Count / (double)columns));
-                factory.SetValue(UniformGrid.ColumnsProperty, columns);
-                break;
+            "vertical" => (count, 1),
+            "horizontal" => (1, count),
+            _ => GetGridSize(count),
+        };
+
+        // ItemsControl 默认使用 StackPanel。这里始终配置 XAML 中的 UniformGrid，
+        // 让“田字格 / 纵向 / 横向”只改变行列数，不再依赖运行时替换 ItemsPanel 模板。
+        PanelsHost.ApplyTemplate();
+        if (FindVisualChild<UniformGrid>(PanelsHost) is { } uniformGrid)
+        {
+            uniformGrid.Rows = rows;
+            uniformGrid.Columns = columns;
         }
 
-        PanelsHost.ItemsPanel = new ItemsPanelTemplate(factory);
-        // 页面首次显示时容器可能尚未完成测量。此时不能写入 1px 的固定高度，
-        // 否则后续没有 SizeChanged 事件时，整个任务面板会保持不可见。
-        var panelHeight = PanelsViewport.ActualHeight > 1
-            ? PanelsViewport.ActualHeight / rows
-            : double.NaN;
-        var panelWidth = layout == "horizontal" && PanelsViewport.ActualWidth > 1
-            ? PanelsViewport.ActualWidth / Math.Max(1, _panels.Count)
-            : double.NaN;
         foreach (var panel in _panels)
         {
-            panel.Height = panelHeight;
-            panel.Width = panelWidth;
+            // 由 UniformGrid 负责测量和排列，清除之前版本留下的固定尺寸。
+            panel.ClearValue(FrameworkElement.HeightProperty);
+            panel.ClearValue(FrameworkElement.WidthProperty);
         }
+    }
+
+    private static (int Rows, int Columns) GetGridSize(int count)
+    {
+        var columns = count switch
+        {
+            <= 1 => 1,
+            2 => 2,
+            _ => (int)Math.Ceiling(Math.Sqrt(count)),
+        };
+        var rows = (int)Math.Ceiling(count / (double)columns);
+        return (Math.Max(1, rows), Math.Max(1, columns));
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualChild<T>(child) is { } descendant)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     private void UpdateWorkspaceStatus()

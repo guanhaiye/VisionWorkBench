@@ -111,8 +111,14 @@
                           VerticalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch"
                           VerticalContentAlignment="Stretch">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <!-- 统一使用同一个可配置的网格容器，避免 ItemsControl 默认的纵向 StackPanel 覆盖“田字格”设置。 -->
+                        <UniformGrid />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemContainerStyle>
-                    <Style TargetType="{x:Type local:LiveTaskPanel}">
+                    <Style TargetType="{x:Type ContentPresenter}">
                         <Setter Property="HorizontalAlignment" Value="Stretch" />
                         <Setter Property="VerticalAlignment" Value="Stretch" />
                     </Style>
