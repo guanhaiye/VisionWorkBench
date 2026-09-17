@@ -159,6 +159,7 @@ public partial class LivePage : UserControl
         panel.SettingsChanged += Panel_SettingsChanged;
         panel.SetRuntimeMode(_runtimeMode);
         _panels.Add(panel);
+        RefreshPanelNumbers();
         PanelsHost.Items.Add(panel);
         ApplyLayout();
         Dispatcher.BeginInvoke(
@@ -223,9 +224,18 @@ public partial class LivePage : UserControl
         panel.SettingsChanged -= Panel_SettingsChanged;
         await panel.ShutdownAsync();
         _panels.Remove(panel);
+        RefreshPanelNumbers();
         PanelsHost.Items.Remove(panel);
         SaveWorkspaceSettings();
         UpdateWorkspaceStatus();
+    }
+
+    private void RefreshPanelNumbers()
+    {
+        for (var index = 0; index < _panels.Count; index++)
+        {
+            _panels[index].SetPanelNumber(index + 1);
+        }
     }
 
     private async void RefreshTasks_Click(object sender, RoutedEventArgs e)

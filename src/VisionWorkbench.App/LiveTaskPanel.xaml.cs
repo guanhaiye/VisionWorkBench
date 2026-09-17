@@ -133,6 +133,11 @@ public partial class LiveTaskPanel : UserControl
 
     public NormalizedRect? RoiOverride => _roiOverride;
 
+    public void SetPanelNumber(int number)
+    {
+        TaskLabel.Text = $"任务 {Math.Max(1, number)}：";
+    }
+
     public void SetRuntimeMode(bool enabled)
     {
         ControlsPanel.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
