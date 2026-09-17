@@ -196,7 +196,7 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            ThemedMessageBox.Show("操作员模式不能修改任务配置，请切换到工程师或专家模式。", "权限限制");
+            ThemedMessageBox.Show("当前角色无权修改任务配置，请切换到工程师、专家或超级管理员。", "权限限制");
             return;
         }
         TaskList.SelectedItem = null;
@@ -239,7 +239,7 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            ThemedMessageBox.Show("操作员模式不能删除任务。", "权限限制");
+            ThemedMessageBox.Show("当前角色无权删除任务。", "权限限制");
             return;
         }
         if (TaskList.SelectedItem is not TaskRow row)
@@ -259,7 +259,7 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            ThemedMessageBox.Show("操作员模式不能保存任务配置。", "权限限制");
+            ThemedMessageBox.Show("当前角色无权保存任务配置。", "权限限制");
             return;
         }
         if (!double.TryParse(RoiXText.Text, out var roiX) || !double.TryParse(RoiYText.Text, out var roiY)
@@ -1216,7 +1216,7 @@ public partial class TasksPage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            ThemedMessageBox.Show("当前角色无权导入模型，请切换到工程师或专家模式。", "权限限制");
+            ThemedMessageBox.Show("当前角色无权导入模型，请切换到工程师、专家或超级管理员。", "权限限制");
             return;
         }
         var plugin = SelectedPlugin();

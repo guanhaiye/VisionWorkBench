@@ -4,5 +4,6 @@ namespace VisionWorkbench.App;
 public static class RolePolicy
 {
     public static string Current => AppServices.Instance.Settings.CurrentRole?.Trim().ToLowerInvariant() ?? "operator";
-    public static bool CanEditRecipe => Current is "engineer" or "expert";
+    // 超级管理员在数据库中统一使用 admin 角色，必须拥有完整的配置编辑权限。
+    public static bool CanEditRecipe => Current is "admin" or "engineer" or "expert";
 }

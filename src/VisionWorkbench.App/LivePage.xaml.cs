@@ -235,7 +235,7 @@ public partial class LivePage : UserControl
     {
         if (!RolePolicy.CanEditRecipe)
         {
-            ThemedMessageBox.Show("操作员模式不能删除任务。", "权限限制");
+            ThemedMessageBox.Show("当前角色无权删除任务。", "权限限制");
             return;
         }
         if (DeleteTaskCombo.SelectedItem is not LiveTaskItem task)
