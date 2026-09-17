@@ -43,7 +43,7 @@
                    Visibility="Collapsed"
                    Text="相机 FPS: 0 | 算法 FPS: 0 | 后端：未连接" />
 
-        <WrapPanel Grid.Row="0" Margin="0,0,0,6">
+        <WrapPanel x:Name="ControlsPanel" Grid.Row="0" Margin="0,0,0,6">
             <TextBlock Text="任务：" VerticalAlignment="Center" Margin="0,0,0,4" />
             <ComboBox x:Name="TaskCombo" MinWidth="140" Width="220"
                       DisplayMemberPath="Name" Margin="6,0,4,0" SelectionChanged="TaskCombo_SelectionChanged" />

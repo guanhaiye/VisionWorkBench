@@ -133,6 +133,11 @@ public partial class LiveTaskPanel : UserControl
 
     public NormalizedRect? RoiOverride => _roiOverride;
 
+    public void SetRuntimeMode(bool enabled)
+    {
+        ControlsPanel.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     public void SelectTask(long taskId)
     {
         TaskCombo.SelectedItem = _availableTasks.FirstOrDefault(task => task.Id == taskId);

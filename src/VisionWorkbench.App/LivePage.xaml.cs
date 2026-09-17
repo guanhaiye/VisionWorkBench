@@ -144,6 +144,10 @@ public partial class LivePage : UserControl
         {
             shell.SetLiveRuntimeMode(enabled);
         }
+        foreach (var panel in _panels)
+        {
+            panel.SetRuntimeMode(enabled);
+        }
         WorkspaceStatusText.Text = enabled
             ? "已进入运行模式，左侧工具栏已隐藏。可在“设置”中退出运行模式。"
             : "已退出运行模式，左侧工具栏已恢复。";
@@ -155,6 +159,7 @@ public partial class LivePage : UserControl
         panel.RemoveRequested += Panel_RemoveRequested;
         panel.TaskSelectionChanged += Panel_TaskSelectionChanged;
         panel.SettingsChanged += Panel_SettingsChanged;
+        panel.SetRuntimeMode(_runtimeMode);
         _panels.Add(panel);
         PanelsHost.Items.Add(panel);
         ApplyLayout();
