@@ -14,7 +14,7 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,8"><Button Content="返回明细" Click="Back_Click" Padding="12,4" DockPanel.Dock="Right" /><TextBlock Text="历史数据看板" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" /></DockPanel>
         <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" Padding="8" Margin="0,0,0,8">
             <WrapPanel>
-                <TextBlock Text="任务：" VerticalAlignment="Center" /><ComboBox x:Name="TaskFilter" Width="190" DisplayMemberPath="Name" Margin="0,0,12,4">
+                <TextBlock Text="任务：" VerticalAlignment="Center" /><ComboBox x:Name="TaskFilter" Width="190" Margin="0,0,12,4">
                     <ComboBox.ItemTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding Name}" />
