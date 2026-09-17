@@ -120,6 +120,9 @@ public partial class LiveTaskPanel : UserControl
     public LiveTaskPanel(IReadOnlyList<LiveTaskItem> tasks)
     {
         InitializeComponent();
+        // ContextMenu 位于独立的 Popup 视觉树中，显式保存所属面板，
+        // 避免右键菜单操作时误关联到其他实时检测面板。
+        RemoveContextMenuItem.Tag = this;
         SetAvailableTasks(tasks);
         _statusTimer.Tick += (_, _) => UpdateStatus();
         _statusTimer.Start();
@@ -298,6 +301,17 @@ public partial class LiveTaskPanel : UserControl
     }
 
     private void Remove_Click(object sender, RoutedEventArgs e)
+        => RequestRemove();
+
+    private void RemoveFromContextMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: LiveTaskPanel panel } && ReferenceEquals(panel, this))
+        {
+            panel.RequestRemove();
+        }
+    }
+
+    private void RequestRemove()
         => RemoveRequested?.Invoke(this, EventArgs.Empty);
 
     private void TaskCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)

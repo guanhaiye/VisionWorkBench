@@ -224,8 +224,12 @@ public partial class LivePage : UserControl
         panel.SettingsChanged -= Panel_SettingsChanged;
         await panel.ShutdownAsync();
         _panels.Remove(panel);
-        RefreshPanelNumbers();
         PanelsHost.Items.Remove(panel);
+        RefreshPanelNumbers();
+        ApplyLayout();
+        await Dispatcher.InvokeAsync(
+            new Action(ApplyLayout),
+            System.Windows.Threading.DispatcherPriority.Loaded);
         SaveWorkspaceSettings();
         UpdateWorkspaceStatus();
     }

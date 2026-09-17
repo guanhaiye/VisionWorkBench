@@ -100,7 +100,9 @@
                           Margin="6,0,0,0">
                 <ScrollViewer.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="删除任务" Click="Remove_Click" />
+                        <MenuItem x:Name="RemoveContextMenuItem"
+                                  Header="删除任务"
+                                  Click="RemoveFromContextMenu_Click" />
                     </ContextMenu>
                 </ScrollViewer.ContextMenu>
                 <StackPanel>
