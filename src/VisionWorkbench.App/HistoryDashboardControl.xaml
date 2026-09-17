@@ -14,7 +14,13 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,8"><Button Content="返回明细" Click="Back_Click" Padding="12,4" DockPanel.Dock="Right" /><TextBlock Text="历史数据看板" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" /></DockPanel>
         <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" Padding="8" Margin="0,0,0,8">
             <WrapPanel>
-                <TextBlock Text="任务：" VerticalAlignment="Center" /><ComboBox x:Name="TaskFilter" Width="190" DisplayMemberPath="Name" Margin="0,0,12,4" />
+                <TextBlock Text="任务：" VerticalAlignment="Center" /><ComboBox x:Name="TaskFilter" Width="190" DisplayMemberPath="Name" Margin="0,0,12,4">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
                 <TextBlock Text="状态：" VerticalAlignment="Center" /><ComboBox x:Name="StatusFilter" Width="130" Margin="0,0,12,4"><ComboBoxItem Content="全部" IsSelected="True" /><ComboBoxItem Content="ok" /><ComboBoxItem Content="ng" /><ComboBoxItem Content="review_required" /><ComboBoxItem Content="processing" /><ComboBoxItem Content="error" /></ComboBox>
                 <TextBlock Text="时间：" VerticalAlignment="Center" /><ComboBox x:Name="RangeFilter" Width="120" SelectionChanged="RangeFilter_SelectionChanged" Margin="0,0,8,4"><ComboBoxItem Content="今天" Tag="today" /><ComboBoxItem Content="近7天" Tag="7" /><ComboBoxItem Content="近30天" Tag="30" IsSelected="True" /><ComboBoxItem Content="自定义" Tag="custom" /></ComboBox>
                 <DatePicker x:Name="FromDate" Width="145" Margin="0,0,6,4" /><TextBlock Text="至" VerticalAlignment="Center" Margin="0,0,6,4" /><DatePicker x:Name="ToDate" Width="145" Margin="0,0,10,4" />

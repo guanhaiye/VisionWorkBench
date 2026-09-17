@@ -10,7 +10,10 @@ namespace VisionWorkbench.App;
 
 public partial class HistoryDashboardControl : UserControl
 {
-    private sealed record TaskFilterItem(long? Id, string Name);
+    private sealed record TaskFilterItem(long? Id, string Name)
+    {
+        public override string ToString() => Name;
+    }
     private DashboardReport? _report;
     private CancellationTokenSource? _queryCts;
 

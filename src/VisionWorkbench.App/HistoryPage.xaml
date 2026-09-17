@@ -19,7 +19,13 @@
             <WrapPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
                     <TextBlock Text="任务：" VerticalAlignment="Center" />
-                    <ComboBox x:Name="TaskFilter" Width="180" DisplayMemberPath="Name" />
+                    <ComboBox x:Name="TaskFilter" Width="180" DisplayMemberPath="Name">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
                     <TextBlock Text="状态：" VerticalAlignment="Center" />
