@@ -77,8 +77,7 @@ public partial class LivePage : UserControl
             if (_panels.Count == 0)
             {
                 var restoredTaskIds = (AppServices.Instance.Settings.LiveTaskIds ?? [])
-                    .Where(id => items.Any(item => item.Id == id))
-                    .Distinct()
+                    .Where(id => id is null || items.Any(item => item.Id == id.Value))
                     .ToArray();
                 if (restoredTaskIds.Length == 0)
                 {
@@ -88,7 +87,10 @@ public partial class LivePage : UserControl
                 {
                     foreach (var taskId in restoredTaskIds)
                     {
-                        AddTaskPanel(taskId);
+                        if (taskId is null || items.Any(item => item.Id == taskId.Value))
+                        {
+                            AddTaskPanel(taskId);
+                        }
                     }
                 }
             }
@@ -321,10 +323,9 @@ public partial class LivePage : UserControl
     {
         var settings = AppServices.Instance.Settings;
         settings.LiveLayout = (LayoutCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "grid";
+        // 按面板顺序保存；null 表示该面板尚未选择任务，避免重启后丢失空面板。
         settings.LiveTaskIds = _panels
-            .Select(panel => panel.TaskId)
-            .Where(id => id > 0)
-            .Distinct()
+            .Select(panel => panel.TaskId > 0 ? panel.TaskId : (long?)null)
             .ToList();
         settings.LiveRois ??= [];
         foreach (var panel in _panels.Where(panel => panel.TaskId > 0 && panel.HasRoiOverride))

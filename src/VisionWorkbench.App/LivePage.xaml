@@ -67,7 +67,7 @@
                         </ComboBox>
 
                         <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Margin="0,14,0,12" />
-                        <TextBlock Text="删除任务" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <TextBlock Text="移除实时任务" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -77,7 +77,7 @@
                                       ItemsSource="{Binding}"
                                       ToolTip="选择要从实时检测工作区移除的任务" />
                             <Button Grid.Column="1"
-                                    Content="删除"
+                                    Content="移除"
                                     Click="DeleteTask_Click"
                                     Margin="8,0,0,0"
                                     Padding="12,5" />

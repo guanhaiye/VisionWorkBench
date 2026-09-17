@@ -63,8 +63,8 @@ public sealed class AppSettings
     public LogPersistenceLevel LogPersistenceLevel { get; set; } = VisionWorkbench.Infrastructure.Logging.LogPersistenceLevel.All;
     /// <summary>实时检测页面的窗口布局。</summary>
     public string LiveLayout { get; set; } = "grid";
-    /// <summary>实时检测页面上次添加的任务面板。</summary>
-    public List<long> LiveTaskIds { get; set; } = [];
+    /// <summary>实时检测页面上次添加的任务面板；null 表示面板尚未选择任务。</summary>
+    public List<long?> LiveTaskIds { get; set; } = [];
     /// <summary>实时检测页面按任务保存的运行时 ROI 覆盖设置。</summary>
     public Dictionary<long, NormalizedRect?> LiveRois { get; set; } = [];
     /// <summary>按 Provider 与设备 ID 保存的工业相机默认参数。</summary>
