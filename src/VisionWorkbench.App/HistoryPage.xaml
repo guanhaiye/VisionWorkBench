@@ -40,11 +40,9 @@
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,12,4">
                     <TextBlock Text="从：" VerticalAlignment="Center" />
-                    <DatePicker x:Name="FromDate" Width="160" Loaded="DatePicker_Loaded"
-                                PreviewMouseRightButtonDown="DatePicker_PreviewMouseRightButtonDown" />
+                    <DatePicker x:Name="FromDate" Width="160" Loaded="DatePicker_Loaded" />
                     <TextBlock Text="到：" VerticalAlignment="Center" Margin="8,0,0,0" />
-                    <DatePicker x:Name="ToDate" Width="160" Loaded="DatePicker_Loaded"
-                                PreviewMouseRightButtonDown="DatePicker_PreviewMouseRightButtonDown" />
+                    <DatePicker x:Name="ToDate" Width="160" Loaded="DatePicker_Loaded" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                     <Button Content="查询" Click="Query_Click" Margin="0,0,8,0" />

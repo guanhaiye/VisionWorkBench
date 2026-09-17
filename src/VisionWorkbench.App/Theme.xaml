@@ -286,8 +286,8 @@
                                                           Grid.Column="0"
                                                           Background="Transparent"
                                                           BorderThickness="0"
-                                                          IsReadOnly="False"
-                                                          Focusable="True"
+                                                          IsReadOnly="True"
+                                                          Focusable="False"
                                                           Foreground="{TemplateBinding Foreground}"
                                                           Padding="9,6"
                                                           VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
