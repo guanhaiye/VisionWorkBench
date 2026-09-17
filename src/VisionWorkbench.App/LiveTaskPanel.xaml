@@ -98,6 +98,11 @@
                           VerticalScrollBarVisibility="Disabled"
                           HorizontalScrollBarVisibility="Disabled"
                           Margin="6,0,0,0">
+                <ScrollViewer.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="删除任务" Click="Remove_Click" />
+                    </ContextMenu>
+                </ScrollViewer.ContextMenu>
                 <StackPanel>
                     <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed">
                         <StackPanel>

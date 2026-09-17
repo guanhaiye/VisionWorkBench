@@ -66,25 +66,6 @@
                             <ComboBoxItem Content="横向排列" Tag="horizontal" />
                         </ComboBox>
 
-                        <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Margin="0,14,0,12" />
-                        <TextBlock Text="移除实时任务" FontWeight="SemiBold" Margin="0,0,0,6" />
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="78" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox x:Name="DeleteTaskCombo"
-                                      ItemsSource="{Binding}"
-                                      ToolTip="选择要从实时检测工作区移除的任务" />
-                            <Button Grid.Column="1"
-                                    Content="移除"
-                                    Click="DeleteTask_Click"
-                                    Margin="8,0,0,0"
-                                    Padding="12,5" />
-                        </Grid>
-                        <TextBlock Text="只移除实时检测面板，不会删除任务配置。"
-                                   Foreground="{DynamicResource MutedTextBrush}"
-                                   FontSize="11" Margin="2,5,0,0" />
                     </StackPanel>
                 </Border>
             </Popup>

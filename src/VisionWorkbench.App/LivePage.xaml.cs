@@ -67,8 +67,6 @@ public partial class LivePage : UserControl
                 .Select(t => new LiveTaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
                 .ToArray();
             _availableTasks = items;
-            DeleteTaskCombo.ItemsSource = _availableTasks;
-            RefreshDeleteTaskOptions();
             foreach (var panel in _panels)
             {
                 panel.SetAvailableTasks(_availableTasks);
@@ -170,7 +168,6 @@ public partial class LivePage : UserControl
         {
             panel.SelectTask(id);
         }
-        RefreshDeleteTaskOptions(taskId);
         SaveWorkspaceSettings();
         UpdateWorkspaceStatus();
     }
@@ -194,7 +191,6 @@ public partial class LivePage : UserControl
 
         RestorePanelRoi(panel);
         SaveWorkspaceSettings();
-        RefreshDeleteTaskOptions(panel.TaskId);
         UpdateWorkspaceStatus();
     }
 
@@ -229,82 +225,12 @@ public partial class LivePage : UserControl
         _panels.Remove(panel);
         PanelsHost.Items.Remove(panel);
         SaveWorkspaceSettings();
-        RefreshDeleteTaskOptions();
         UpdateWorkspaceStatus();
     }
 
     private async void RefreshTasks_Click(object sender, RoutedEventArgs e)
     {
         await LoadTasksAsync();
-    }
-
-    private async void DeleteTask_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeleteTaskCombo.SelectedItem is not LiveTaskItem task)
-        {
-            ThemedMessageBox.Show("请先选择要从实时检测工作区移除的任务。", "移除实时任务",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        WorkspaceSettingsPopup.IsOpen = false;
-        var confirmation = new ConfirmDialog(
-            "确认移除实时任务",
-            $"确定要从实时检测工作区移除任务“{task.Name}”吗？\n只会关闭关联的实时检测面板，不会删除任务配置。")
-        {
-            Owner = Window.GetWindow(this)
-        };
-        if (confirmation.ShowDialog() != true)
-        {
-            return;
-        }
-
-        try
-        {
-            var matchingPanels = _panels.Where(panel => panel.TaskId == task.Id).ToArray();
-            foreach (var panel in matchingPanels)
-            {
-                panel.RemoveRequested -= Panel_RemoveRequested;
-                panel.TaskSelectionChanged -= Panel_TaskSelectionChanged;
-                panel.SettingsChanged -= Panel_SettingsChanged;
-                await panel.ShutdownAsync();
-                _panels.Remove(panel);
-                PanelsHost.Items.Remove(panel);
-            }
-
-            AppServices.Instance.Settings.LiveRois?.Remove(task.Id);
-            DeleteTaskCombo.SelectedItem = null;
-            SaveWorkspaceSettings();
-            RefreshDeleteTaskOptions();
-            ApplyLayout();
-            WorkspaceStatusText.Text = $"任务“{task.Name}”已从实时检测工作区移除。";
-            ThemedMessageBox.Show("实时任务已移除，任务配置未删除。", "移除实时任务");
-        }
-        catch (Exception ex)
-        {
-            ThemedMessageBox.Show($"删除失败：{ex.Message}", "删除任务",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    private void RefreshDeleteTaskOptions(long? preferredTaskId = null)
-    {
-        if (DeleteTaskCombo is null)
-        {
-            return;
-        }
-
-        var selectedId = preferredTaskId ?? (DeleteTaskCombo.SelectedItem as LiveTaskItem)?.Id;
-        var activeTaskIds = _panels
-            .Where(panel => panel.TaskId > 0)
-            .Select(panel => panel.TaskId)
-            .Distinct()
-            .ToHashSet();
-        var options = _availableTasks.Where(item => activeTaskIds.Contains(item.Id)).ToArray();
-        DeleteTaskCombo.ItemsSource = options;
-        DeleteTaskCombo.SelectedItem = selectedId is { } id
-            ? options.FirstOrDefault(item => item.Id == id)
-            : null;
     }
 
     private void LayoutCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
