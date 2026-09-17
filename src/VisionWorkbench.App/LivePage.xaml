@@ -86,8 +86,11 @@
         <Grid x:Name="PanelsViewport" Grid.Row="2"
               SizeChanged="PanelsViewport_SizeChanged"
               HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch">
+              VerticalAlignment="Stretch"
+              ClipToBounds="True">
             <ItemsControl x:Name="PanelsHost"
+                          Width="{Binding ActualWidth, ElementName=PanelsViewport}"
+                          Height="{Binding ActualHeight, ElementName=PanelsViewport}"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch"
