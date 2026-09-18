@@ -70,15 +70,18 @@
             <Border Grid.Column="0" Background="#111111">
                 <local:ImageViewer x:Name="PreviewViewer" WheelZoomEnabled="False">
                     <Grid x:Name="PreviewSurface"
-                          MinWidth="1" MinHeight="1"
-                          HorizontalAlignment="Left" VerticalAlignment="Top"
-                          SizeChanged="PreviewSurface_SizeChanged"
-                          PreviewMouseLeftButtonDown="PreviewSurface_MouseLeftButtonDown"
-                          PreviewMouseMove="PreviewSurface_MouseMove"
-                          PreviewMouseLeftButtonUp="PreviewSurface_MouseLeftButtonUp">
-                        <Image x:Name="PreviewImage" Stretch="Uniform" />
-                        <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False" />
-                        <Canvas x:Name="RoiCanvas" IsHitTestVisible="False" />
+                           MinWidth="1" MinHeight="1"
+                           HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                           SizeChanged="PreviewSurface_SizeChanged"
+                           PreviewMouseLeftButtonDown="PreviewSurface_MouseLeftButtonDown"
+                           PreviewMouseMove="PreviewSurface_MouseMove"
+                           PreviewMouseLeftButtonUp="PreviewSurface_MouseLeftButtonUp">
+                        <Image x:Name="PreviewImage" Stretch="Uniform"
+                               HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                        <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False"
+                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                        <Canvas x:Name="RoiCanvas" IsHitTestVisible="False"
+                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
                         <TextBlock x:Name="OfflineProgressText"
                                    Panel.ZIndex="10"
                                    HorizontalAlignment="Left"
