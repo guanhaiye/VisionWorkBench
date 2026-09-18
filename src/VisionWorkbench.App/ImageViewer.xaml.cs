@@ -13,7 +13,7 @@ public class ImageViewer : ContentControl
 {
     private ScrollViewer? _viewer;
     private Grid? _scrollContent;
-    private ContentPresenter? _contentHost;
+    private ContentControl? _contentHost;
     private ScaleTransform? _contentScale;
     private double _baseWidth;
     private double _baseHeight;
@@ -45,7 +45,7 @@ public class ImageViewer : ContentControl
 
         _viewer = Template.FindName("Viewer", this) as ScrollViewer;
         _scrollContent = Template.FindName("ScrollContent", this) as Grid;
-        _contentHost = Template.FindName("ContentHost", this) as ContentPresenter;
+        _contentHost = Template.FindName("ContentHost", this) as ContentControl;
         if (_contentHost is not null)
         {
             // Freezables stored in a shared ControlTemplate can be frozen by WPF.
@@ -126,14 +126,18 @@ public class ImageViewer : ContentControl
         scrollContent.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
         scrollContent.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
 
-        var contentHost = new FrameworkElementFactory(typeof(ContentPresenter));
+        var contentHost = new FrameworkElementFactory(typeof(ContentControl));
         contentHost.Name = "ContentHost";
         contentHost.SetValue(FrameworkElement.WidthProperty, 1d);
         contentHost.SetValue(FrameworkElement.HeightProperty, 1d);
         contentHost.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
         contentHost.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Stretch);
-        contentHost.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(ContentProperty));
-        contentHost.SetValue(ContentPresenter.ContentTemplateProperty, new TemplateBindingExtension(ContentTemplateProperty));
+        // 内容宿主必须填满视口，避免检测开始后画面退回左上角的原始尺寸；
+        // 预览画布必须填满视口，内部 Image 再通过 Stretch=Uniform 保持原图比例。
+        contentHost.SetValue(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch);
+        contentHost.SetValue(Control.VerticalContentAlignmentProperty, VerticalAlignment.Stretch);
+        contentHost.SetValue(ContentControl.ContentProperty, new TemplateBindingExtension(ContentProperty));
+        contentHost.SetValue(ContentControl.ContentTemplateProperty, new TemplateBindingExtension(ContentTemplateProperty));
         contentHost.SetValue(UIElement.RenderTransformOriginProperty, new Point(0, 0));
 
         contentHost.SetValue(UIElement.RenderTransformProperty, new ScaleTransform(1, 1));
