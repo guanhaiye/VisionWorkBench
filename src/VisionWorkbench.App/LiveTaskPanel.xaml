@@ -95,8 +95,9 @@
             </Border>
 
             <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1"
-                          VerticalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled"
                           HorizontalScrollBarVisibility="Hidden"
+                          CanContentScroll="False"
                           Margin="6,0,0,0">
                 <ScrollViewer.ContextMenu>
                     <ContextMenu>
@@ -105,8 +106,15 @@
                                   Click="RemoveFromContextMenu_Click" />
                     </ContextMenu>
                 </ScrollViewer.ContextMenu>
-                <StackPanel>
-                    <Border x:Name="SopCard" Style="{StaticResource InfoCard}" Visibility="Collapsed">
+                <Grid x:Name="DetailsGrid">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Border x:Name="SopCard" Grid.Row="0" Style="{StaticResource InfoCard}" Visibility="Collapsed">
                         <StackPanel>
                             <UniformGrid Columns="4" Margin="0,0,0,8">
                                 <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="7" Padding="7" Margin="0,0,3,0">
@@ -229,7 +237,7 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="DecisionCard" Style="{StaticResource InfoCard}">
+                    <Border x:Name="DecisionCard" Grid.Row="1" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="当前判定" Style="{StaticResource CardTitle}" />
                             <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="8" Margin="0,0,0,8">
@@ -241,7 +249,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="ResultCard" Style="{StaticResource InfoCard}">
+                    <Border x:Name="ResultCard" Grid.Row="2" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="检测结果" Style="{StaticResource CardTitle}" />
                             <Grid>
@@ -262,7 +270,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="StatsCard" Style="{StaticResource InfoCard}">
+                    <Border x:Name="StatsCard" Grid.Row="3" Style="{StaticResource InfoCard}">
                         <StackPanel>
                             <TextBlock Text="累计统计" Style="{StaticResource CardTitle}" />
                             <Grid>
@@ -289,21 +297,26 @@
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="LogCard" Style="{StaticResource InfoCard}">
-                        <StackPanel>
+                    <Border x:Name="LogCard" Grid.Row="4" Style="{StaticResource InfoCard}"
+                            VerticalAlignment="Stretch">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
                             <TextBlock Text="检测日志（最近 100 条）" Style="{StaticResource CardTitle}" />
-                            <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="6" Padding="8">
-                                <ScrollViewer x:Name="DetectionLogScrollViewer" Height="150"
-                                              VerticalScrollBarVisibility="Hidden"
+                            <Border Grid.Row="1" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="6" Padding="8">
+                                <ScrollViewer x:Name="DetectionLogScrollViewer"
+                                              VerticalScrollBarVisibility="Disabled"
                                               HorizontalScrollBarVisibility="Hidden">
                                     <TextBlock x:Name="DetectionListText" Text="暂无检测记录" TextWrapping="Wrap"
                                                FontSize="11" Foreground="{DynamicResource MutedTextBrush}" />
                                 </ScrollViewer>
                             </Border>
-                        </StackPanel>
+                        </Grid>
                     </Border>
 
-                </StackPanel>
+                </Grid>
             </ScrollViewer>
         </Grid>
 
