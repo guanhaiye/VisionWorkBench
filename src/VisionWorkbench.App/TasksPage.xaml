@@ -8,7 +8,8 @@
     <Grid Margin="8">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="260" />
-            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="2*" MinWidth="560" />
+            <ColumnDefinition Width="1*" MinWidth="330" />
         </Grid.ColumnDefinitions>
 
         <!-- 左：任务列表 -->
@@ -497,5 +498,50 @@
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
+
+        <!-- 测试区：读取单张图片并使用当前选中任务的配置执行一次测试。 -->
+        <Border Grid.Column="2" Margin="8,0,0,0"
+                Padding="10"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="ReadTestImageButton" Content="读取图片"
+                            Click="ReadTestImage_Click" Padding="12,5" />
+                    <Button x:Name="RunTaskTestButton" Content="测试"
+                            Click="RunTaskTest_Click" Padding="16,5" Margin="8,0,0,0"
+                            IsEnabled="False" />
+                </StackPanel>
+                <Border Grid.Row="1" Margin="0,10,0,8"
+                        Background="#111111"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1">
+                    <Grid x:Name="TaskTestPreviewSurface"
+                          SizeChanged="TaskTestPreviewSurface_SizeChanged">
+                        <Image x:Name="TaskTestImage" Stretch="Uniform" />
+                        <Canvas x:Name="TaskTestOverlayCanvas" IsHitTestVisible="False" />
+                        <TextBlock x:Name="TaskTestStatusText"
+                                   Text="请先读取测试图片"
+                                   Foreground="White"
+                                   Background="#99000000"
+                                   Padding="8"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+                <TextBlock x:Name="TaskTestResultText" Grid.Row="2"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           Text="未执行测试"
+                           TextWrapping="Wrap" />
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

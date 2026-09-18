@@ -40,6 +40,9 @@ public partial class TasksPage : UserControl
     private bool _roiDrawing;
     private Point _roiDragStart;
     private NormalizedRect? _draftRoi;
+    private string? _taskTestImagePath;
+    private AlgorithmOutput? _taskTestOutput;
+    private bool _taskTestRunning;
 
     private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId)
     {
@@ -91,6 +94,212 @@ public partial class TasksPage : UserControl
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => Refresh();
 
+    private void ReadTestImage_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "图像文件|*.jpg;*.jpeg;*.png;*.bmp;*.webp|所有文件|*.*",
+            Multiselect = false,
+            Title = "选择测试图片",
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var bitmap = LoadTestBitmap(dialog.FileName);
+            _taskTestImagePath = dialog.FileName;
+            _taskTestOutput = null;
+            TaskTestImage.Source = bitmap;
+            TaskTestOverlayCanvas.Children.Clear();
+            TaskTestStatusText.Text = $"已读取：{Path.GetFileName(dialog.FileName)}";
+            TaskTestStatusText.Visibility = Visibility.Visible;
+            TaskTestResultText.Text = "图片已加载，点击“测试”执行当前任务。";
+            UpdateTaskTestAvailability();
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"读取图片失败：{ex.Message}", "测试区", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private async void RunTaskTest_Click(object sender, RoutedEventArgs e)
+    {
+        if (_taskTestRunning || _editingId is not { } taskId || string.IsNullOrWhiteSpace(_taskTestImagePath))
+        {
+            return;
+        }
+
+        var found = await AppServices.Instance.Recipes.FindAsync(taskId);
+        if (found is not { } pair)
+        {
+            ThemedMessageBox.Show("请先选择有效任务。", "测试区", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        _taskTestRunning = true;
+        UpdateTaskTestAvailability();
+        TaskTestStatusText.Text = "正在测试，请稍候…";
+        TaskTestStatusText.Visibility = Visibility.Visible;
+        TaskTestResultText.Text = "正在启动算法插件…";
+        try
+        {
+            var recipe = pair.Recipe;
+            await using var session = await AppServices.Instance.AlgorithmManager
+                .CreateSessionAsync(recipe.PluginId, CancellationToken.None);
+            await session.InitializeAsync(new VisionWorkbench.Algorithms.AlgorithmInitialization
+            {
+                Settings = DetectionRunService.BuildAlgorithmSettings(recipe),
+                ExecutionProvider = recipe.ExecutionProvider,
+            }, CancellationToken.None);
+            await session.StartAsync(new VisionWorkbench.Algorithms.AlgorithmStartOptions
+            {
+                Mode = "snapshot",
+                Roi = recipe.Roi,
+            }, CancellationToken.None);
+
+            var started = DateTimeOffset.UtcNow;
+            var output = await session.SubmitAsync(new AlgorithmInput
+            {
+                InputId = $"task-test-{taskId}-{Guid.NewGuid():N}",
+                ImagePath = _taskTestImagePath,
+                FrameSequence = 1,
+                CapturedAt = started,
+                Roi = recipe.Roi,
+            }, CancellationToken.None);
+            var decision = RuleEngine.Evaluate(output, recipe.Rules, recipe.Roi, recipe.RoiPolicy);
+            _taskTestOutput = output with { Decision = decision };
+            TaskTestStatusText.Visibility = Visibility.Collapsed;
+            TaskTestResultText.Text = $"测试完成：{decision.Status}；数量：{output.GetCount()}；耗时：{output.Performance?.TotalMs ?? 0:0.#} ms";
+            DrawTaskTestOverlay();
+            await session.StopAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _taskTestOutput = null;
+            TaskTestOverlayCanvas.Children.Clear();
+            TaskTestStatusText.Text = "测试失败";
+            TaskTestStatusText.Visibility = Visibility.Visible;
+            TaskTestResultText.Text = $"测试失败：{ex.Message}";
+            ThemedMessageBox.Show($"测试失败：\n{ex.Message}", "任务测试", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _taskTestRunning = false;
+            UpdateTaskTestAvailability();
+        }
+    }
+
+    private void TaskTestPreviewSurface_SizeChanged(object sender, SizeChangedEventArgs e) => DrawTaskTestOverlay();
+
+    private void UpdateTaskTestAvailability()
+    {
+        if (RunTaskTestButton is null)
+        {
+            return;
+        }
+        RunTaskTestButton.IsEnabled = !_taskTestRunning
+            && _editingId is not null
+            && !string.IsNullOrWhiteSpace(_taskTestImagePath);
+    }
+
+    private void ClearTaskTestPreview()
+    {
+        _taskTestImagePath = null;
+        _taskTestOutput = null;
+        TaskTestImage.Source = null;
+        TaskTestOverlayCanvas.Children.Clear();
+        TaskTestStatusText.Text = "请先读取测试图片";
+        TaskTestStatusText.Visibility = Visibility.Visible;
+        TaskTestResultText.Text = "未执行测试";
+        UpdateTaskTestAvailability();
+    }
+
+    private static BitmapImage LoadTestBitmap(string path)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.UriSource = new Uri(path, UriKind.Absolute);
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
+
+    private void DrawTaskTestOverlay()
+    {
+        TaskTestOverlayCanvas.Children.Clear();
+        if (_taskTestOutput is not { } output || TaskTestImage.Source is null)
+        {
+            return;
+        }
+
+        var canvasWidth = TaskTestOverlayCanvas.ActualWidth;
+        var canvasHeight = TaskTestOverlayCanvas.ActualHeight;
+        var sourceWidth = TaskTestImage.Source.Width;
+        var sourceHeight = TaskTestImage.Source.Height;
+        if (canvasWidth <= 0 || canvasHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0)
+        {
+            return;
+        }
+
+        var scale = Math.Min(canvasWidth / sourceWidth, canvasHeight / sourceHeight);
+        var drawWidth = sourceWidth * scale;
+        var drawHeight = sourceHeight * scale;
+        var offsetX = (canvasWidth - drawWidth) / 2;
+        var offsetY = (canvasHeight - drawHeight) / 2;
+
+        foreach (var segmentation in output.Segmentations)
+        {
+            foreach (var contour in segmentation.Contours.Where(points => points.Count >= 3))
+            {
+                var polygon = new System.Windows.Shapes.Polygon
+                {
+                    Points = new PointCollection(contour.Select(point => new Point(
+                        offsetX + point.X * drawWidth,
+                        offsetY + point.Y * drawHeight))),
+                    Fill = new SolidColorBrush(Color.FromArgb(60, 0, 210, 255)),
+                    Stroke = Brushes.Cyan,
+                    StrokeThickness = 2,
+                };
+                TaskTestOverlayCanvas.Children.Add(polygon);
+            }
+        }
+
+        foreach (var detection in output.Detections)
+        {
+            var rect = new Rect(
+                offsetX + detection.Box.X * drawWidth,
+                offsetY + detection.Box.Y * drawHeight,
+                detection.Box.Width * drawWidth,
+                detection.Box.Height * drawHeight);
+            var box = new Rectangle
+            {
+                Width = Math.Max(1, rect.Width),
+                Height = Math.Max(1, rect.Height),
+                Stroke = Brushes.Lime,
+                StrokeThickness = 2,
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(box, rect.X);
+            Canvas.SetTop(box, rect.Y);
+            TaskTestOverlayCanvas.Children.Add(box);
+
+            var label = new TextBlock
+            {
+                Text = $"{detection.ClassName} {detection.Confidence:0.00}",
+                Foreground = Brushes.Lime,
+                Background = Brushes.Black,
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(label, rect.X);
+            Canvas.SetTop(label, Math.Max(0, rect.Y - 18));
+            TaskTestOverlayCanvas.Children.Add(label);
+        }
+    }
+
     private async void Refresh()
     {
         try
@@ -123,8 +332,10 @@ public partial class TasksPage : UserControl
     {
         if (TaskList.SelectedItem is not TaskRow row)
         {
+            ClearTaskTestPreview();
             return;
         }
+        ClearTaskTestPreview();
         var found = await AppServices.Instance.Recipes.FindAsync(row.Id);
         if (found is not { } pair)
         {
@@ -209,6 +420,7 @@ public partial class TasksPage : UserControl
         }
         TaskList.SelectedItem = null;
         _editingId = null;
+        ClearTaskTestPreview();
         StationCodeText.Text = NextStationCode();
         NameText.Text = NextTaskName();
         DescriptionText.Text = "";
