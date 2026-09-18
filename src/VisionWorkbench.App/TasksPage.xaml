@@ -230,21 +230,43 @@
                     </StackPanel>
                 </GroupBox>
                 <GroupBox Header="ROI（归一化 0~1；全部 0 表示整幅图）">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="X" VerticalAlignment="Center" />
-                        <TextBox x:Name="RoiXText" Width="56" Text="0" Margin="4,0,12,0" />
-                        <TextBlock Text="Y" VerticalAlignment="Center" />
-                        <TextBox x:Name="RoiYText" Width="56" Text="0" Margin="4,0,12,0" />
-                        <TextBlock Text="W" VerticalAlignment="Center" />
-                        <TextBox x:Name="RoiWText" Width="56" Text="0" Margin="4,0,12,0" />
-                        <TextBlock Text="H" VerticalAlignment="Center" />
-                        <TextBox x:Name="RoiHText" Width="56" Text="0" Margin="4,0,12,0" />
-                        <TextBlock Text="边界策略" VerticalAlignment="Center" Margin="12,0,4,0" />
-                        <ComboBox x:Name="RoiPolicyCombo" Width="130">
-                            <ComboBoxItem Content="中心点在内" Tag="CenterInside" IsSelected="True" />
-                            <ComboBoxItem Content="完整框在内" Tag="FullInside" />
-                            <ComboBoxItem Content="任意重叠" Tag="AnyOverlap" />
-                        </ComboBox>
+                    <StackPanel>
+                        <WrapPanel>
+                            <TextBlock Text="X" VerticalAlignment="Center" />
+                            <TextBox x:Name="RoiXText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBlock Text="Y" VerticalAlignment="Center" />
+                            <TextBox x:Name="RoiYText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBlock Text="W" VerticalAlignment="Center" />
+                            <TextBox x:Name="RoiWText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBlock Text="H" VerticalAlignment="Center" />
+                            <TextBox x:Name="RoiHText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBlock Text="边界策略" VerticalAlignment="Center" Margin="12,0,4,0" />
+                            <ComboBox x:Name="RoiPolicyCombo" Width="130">
+                                <ComboBoxItem Content="中心点在内" Tag="CenterInside" IsSelected="True" />
+                                <ComboBoxItem Content="完整框在内" Tag="FullInside" />
+                                <ComboBoxItem Content="任意重叠" Tag="AnyOverlap" />
+                            </ComboBox>
+                        </WrapPanel>
+                        <Border Background="#111" BorderBrush="#555" BorderThickness="1" Height="260" Margin="0,10,0,6">
+                            <Grid x:Name="RoiPreviewSurface"
+                                  MouseLeftButtonDown="RoiPreviewSurface_MouseLeftButtonDown"
+                                  MouseMove="RoiPreviewSurface_MouseMove"
+                                  MouseLeftButtonUp="RoiPreviewSurface_MouseLeftButtonUp"
+                                  SizeChanged="RoiPreviewSurface_SizeChanged">
+                                <Image x:Name="RoiPreviewImage" Stretch="Uniform" />
+                                <Canvas x:Name="RoiCanvas" IsHitTestVisible="False" />
+                                <TextBlock x:Name="RoiPreviewStatusText" Text="请选择输入源或相机预览后，在此区域拖动鼠标绘制 ROI"
+                                           Foreground="White" Background="#99000000" Padding="8"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextWrapping="Wrap" />
+                            </Grid>
+                        </Border>
+                        <WrapPanel>
+                            <Button x:Name="RoiDrawButton" Content="绘制 ROI" Click="RoiDraw_Click" Padding="12,5" />
+                            <Button x:Name="RoiClearButton" Content="清除 ROI" Click="RoiClear_Click" Margin="8,0,0,0" Padding="12,5" IsEnabled="False" />
+                            <TextBlock Text="拖动鼠标框选区域，坐标会自动同步到上方。" Foreground="{DynamicResource MutedTextBrush}"
+                                       VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap" />
+                        </WrapPanel>
                     </StackPanel>
                 </GroupBox>
                 <GroupBox Header="判定规则（RUL-001~005）">

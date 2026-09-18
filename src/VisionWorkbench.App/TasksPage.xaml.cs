@@ -8,9 +8,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Rectangle = System.Windows.Shapes.Rectangle;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Application;
+using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Domain;
 
 namespace VisionWorkbench.App;
@@ -33,6 +37,9 @@ public partial class TasksPage : UserControl
     private string _postProcessScript = "";
     private bool _syncingSemanticPlugin;
     private IReadOnlyList<SopDefinition> _sopDefinitions = [];
+    private bool _roiDrawing;
+    private Point _roiDragStart;
+    private NormalizedRect? _draftRoi;
 
     private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId)
     {
@@ -166,6 +173,7 @@ public partial class TasksPage : UserControl
         {
             RoiPolicyCombo.SelectedItem = item;
         }
+        UpdateRoiDrawingState(recipe.Roi);
         SelectMode(recipe.CountingMode);
         LineAxText.Text = (recipe.CountingLine?.A.X ?? 0.5).ToString("0.###");
         LineAyText.Text = (recipe.CountingLine?.A.Y ?? 0.1).ToString("0.###");
@@ -220,6 +228,7 @@ public partial class TasksPage : UserControl
         LoadYoloSettings();
         RoiXText.Text = RoiYText.Text = RoiWText.Text = RoiHText.Text = "0";
         RoiPolicyCombo.SelectedIndex = 0;
+        UpdateRoiDrawingState(null);
         SelectMode(CountingMode.Snapshot);
         LineAxText.Text = "0.5";
         LineAyText.Text = "0.1";
@@ -1094,7 +1103,10 @@ public partial class TasksPage : UserControl
                     return;
                 }
                 _cameraPreview.Render(CameraPreviewImage, args.Frame, maxFps: 15);
+                _cameraPreview.Render(RoiPreviewImage, args.Frame, maxFps: 15, force: true);
                 CameraPreviewStatusText.Visibility = Visibility.Collapsed;
+                SetRoiPreviewStatus(null);
+                RenderRoi();
             });
             CameraParameterSet? hikParameters = null;
             if (IsHikvisionInputSource(providerId))
@@ -1284,15 +1296,256 @@ public partial class TasksPage : UserControl
         var directory = DeviceText.Text.Trim();
         if (!Directory.Exists(directory))
         {
+            ClearRoiPreview("请选择有效的图片目录，或切换到相机输入源");
+        }
+        if (!Directory.Exists(directory))
+        {
             DevicePreviewText.Text = "目录不存在，请选择有效的图片目录";
             return;
         }
         var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { ".jpg", ".jpeg", ".png", ".bmp" };
+        LoadRoiFolderPreview(directory, extensions);
         var count = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
             .Count(file => extensions.Contains(Path.GetExtension(file)));
         DevicePreviewText.Text = $"目录有效：{count} 张图片（仅读取当前目录，不递归子目录）";
     }
+
+    private void SetRoiPreviewStatus(string? message)
+    {
+        if (RoiPreviewStatusText is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            RoiPreviewStatusText.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            RoiPreviewStatusText.Text = message;
+            RoiPreviewStatusText.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void ClearRoiPreview(string message)
+    {
+        RoiPreviewImage.Source = null;
+        RoiCanvas.Children.Clear();
+        SetRoiPreviewStatus(message);
+    }
+
+    private void LoadRoiFolderPreview(string directory, HashSet<string> extensions)
+    {
+        var file = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
+            .Where(path => extensions.Contains(Path.GetExtension(path)))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (file is null)
+        {
+            ClearRoiPreview("当前图片目录没有可预览的图片");
+            return;
+        }
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new System.Uri(file, System.UriKind.Absolute);
+            bitmap.EndInit();
+            bitmap.Freeze();
+            RoiPreviewImage.Source = bitmap;
+            SetRoiPreviewStatus(null);
+            RenderRoi();
+        }
+        catch (Exception ex)
+        {
+            ClearRoiPreview($"图片预览失败：{ex.Message}");
+        }
+    }
+
+    private void UpdateRoiDrawingState(NormalizedRect? roi)
+    {
+        _roiDrawing = false;
+        _draftRoi = null;
+        RoiDrawButton.Content = "绘制 ROI";
+        RoiClearButton.IsEnabled = roi is not null;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(RenderRoi));
+    }
+
+    private void RoiDraw_Click(object sender, RoutedEventArgs e)
+    {
+        if (RoiPreviewImage.Source is null)
+        {
+            ThemedMessageBox.Show("请先选择有效的图片目录或打开相机预览，再绘制 ROI。", "ROI 绘制");
+            return;
+        }
+
+        _roiDrawing = !_roiDrawing;
+        _draftRoi = null;
+        RoiDrawButton.Content = _roiDrawing ? "取消绘制" : "绘制 ROI";
+        SetRoiPreviewStatus(_roiDrawing ? "请在预览画面上按住鼠标左键拖动框选 ROI" : null);
+        RenderRoi();
+    }
+
+    private void RoiClear_Click(object sender, RoutedEventArgs e)
+    {
+        _roiDrawing = false;
+        _draftRoi = null;
+        RoiXText.Text = RoiYText.Text = RoiWText.Text = RoiHText.Text = "0";
+        RoiDrawButton.Content = "绘制 ROI";
+        RoiClearButton.IsEnabled = false;
+        SetRoiPreviewStatus(null);
+        RenderRoi();
+    }
+
+    private void RoiPreviewSurface_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_roiDrawing || RoiPreviewImage.Source is null)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(RoiPreviewSurface);
+        if (!TryGetRoiNormalizedPoint(point, false, out _roiDragStart))
+        {
+            return;
+        }
+
+        _draftRoi = new NormalizedRect { X = _roiDragStart.X, Y = _roiDragStart.Y, Width = 0, Height = 0 };
+        RoiPreviewSurface.CaptureMouse();
+        RenderRoi();
+        e.Handled = true;
+    }
+
+    private void RoiPreviewSurface_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_roiDrawing || !RoiPreviewSurface.IsMouseCaptured || RoiPreviewImage.Source is null)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(RoiPreviewSurface);
+        if (TryGetRoiNormalizedPoint(point, true, out var end))
+        {
+            _draftRoi = CreateRoiRect(_roiDragStart, end);
+            RenderRoi();
+        }
+        e.Handled = true;
+    }
+
+    private void RoiPreviewSurface_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_roiDrawing || !RoiPreviewSurface.IsMouseCaptured)
+        {
+            return;
+        }
+
+        RoiPreviewSurface.ReleaseMouseCapture();
+        if (_draftRoi is { Width: > 0.005, Height: > 0.005 } roi)
+        {
+            RoiXText.Text = roi.X.ToString("0.###", CultureInfo.InvariantCulture);
+            RoiYText.Text = roi.Y.ToString("0.###", CultureInfo.InvariantCulture);
+            RoiWText.Text = roi.Width.ToString("0.###", CultureInfo.InvariantCulture);
+            RoiHText.Text = roi.Height.ToString("0.###", CultureInfo.InvariantCulture);
+            RoiClearButton.IsEnabled = true;
+            _roiDrawing = false;
+            RoiDrawButton.Content = "重新绘制 ROI";
+            SetRoiPreviewStatus(null);
+        }
+        else
+        {
+            _draftRoi = null;
+            SetRoiPreviewStatus("框选区域过小，请重新拖动绘制 ROI");
+        }
+
+        RenderRoi();
+        e.Handled = true;
+    }
+
+    private bool TryGetRoiNormalizedPoint(Point point, bool clampToImage, out Point normalized)
+    {
+        normalized = default;
+        if (RoiPreviewImage.Source is not BitmapSource source
+            || RoiPreviewSurface.ActualWidth <= 0 || RoiPreviewSurface.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var scale = Math.Min(RoiPreviewSurface.ActualWidth / source.PixelWidth,
+            RoiPreviewSurface.ActualHeight / source.PixelHeight);
+        var drawWidth = source.PixelWidth * scale;
+        var drawHeight = source.PixelHeight * scale;
+        var offsetX = (RoiPreviewSurface.ActualWidth - drawWidth) / 2;
+        var offsetY = (RoiPreviewSurface.ActualHeight - drawHeight) / 2;
+        var x = (point.X - offsetX) / drawWidth;
+        var y = (point.Y - offsetY) / drawHeight;
+        if (!clampToImage && (x < 0 || x > 1 || y < 0 || y > 1))
+        {
+            return false;
+        }
+
+        normalized = new Point(Math.Clamp(x, 0, 1), Math.Clamp(y, 0, 1));
+        return true;
+    }
+
+    private static NormalizedRect CreateRoiRect(Point start, Point end) => new()
+    {
+        X = Math.Min(start.X, end.X),
+        Y = Math.Min(start.Y, end.Y),
+        Width = Math.Abs(end.X - start.X),
+        Height = Math.Abs(end.Y - start.Y),
+    };
+
+    private void RenderRoi()
+    {
+        if (RoiCanvas is null)
+        {
+            return;
+        }
+
+        RoiCanvas.Children.Clear();
+        if (RoiPreviewImage.Source is not BitmapSource source
+            || RoiCanvas.ActualWidth <= 0 || RoiCanvas.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        var x = double.TryParse(RoiXText.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var roiX) ? roiX : 0;
+        var y = double.TryParse(RoiYText.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var roiY) ? roiY : 0;
+        var width = double.TryParse(RoiWText.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var roiW) ? roiW : 0;
+        var height = double.TryParse(RoiHText.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var roiH) ? roiH : 0;
+        var roi = _draftRoi ?? (width > 0 && height > 0
+            ? new NormalizedRect { X = roiX, Y = roiY, Width = roiW, Height = roiH }
+            : null);
+        if (roi is null)
+        {
+            return;
+        }
+
+        var scale = Math.Min(RoiCanvas.ActualWidth / source.PixelWidth, RoiCanvas.ActualHeight / source.PixelHeight);
+        var drawWidth = source.PixelWidth * scale;
+        var drawHeight = source.PixelHeight * scale;
+        var offsetX = (RoiCanvas.ActualWidth - drawWidth) / 2;
+        var offsetY = (RoiCanvas.ActualHeight - drawHeight) / 2;
+        var rectangle = new Rectangle
+        {
+            Width = Math.Max(1, roi.Width * drawWidth),
+            Height = Math.Max(1, roi.Height * drawHeight),
+            Stroke = _roiDrawing ? Brushes.Gold : Brushes.DodgerBlue,
+            StrokeThickness = 2,
+            StrokeDashArray = [6, 3],
+            Fill = new SolidColorBrush(Color.FromArgb(32, 30, 144, 255)),
+            IsHitTestVisible = false,
+        };
+        Canvas.SetLeft(rectangle, offsetX + roi.X * drawWidth);
+        Canvas.SetTop(rectangle, offsetY + roi.Y * drawHeight);
+        RoiCanvas.Children.Add(rectangle);
+    }
+
+    private void RoiPreviewSurface_SizeChanged(object sender, SizeChangedEventArgs e) => RenderRoi();
 
     private CameraParameterSet? BuildHikvisionParameters()
     {
