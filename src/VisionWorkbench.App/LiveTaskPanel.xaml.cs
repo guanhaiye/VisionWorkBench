@@ -157,8 +157,6 @@ public partial class LiveTaskPanel : UserControl
         _draftRoi = null;
         _roiOverrideSet = hasOverride;
         _roiOverride = roi;
-        RoiButton.Content = roi is null ? "绘制检测区域" : "重新绘制区域";
-        ClearRoiButton.IsEnabled = roi is not null;
         RenderRoi();
     }
 
@@ -320,8 +318,6 @@ public partial class LiveTaskPanel : UserControl
         _roiOverrideSet = false;
         _roiOverride = null;
         _draftRoi = null;
-        RoiButton.Content = "绘制检测区域";
-        ClearRoiButton.IsEnabled = false;
         RenderRoi();
         SetSopLayout(false);
         ResetStatistics();
@@ -622,7 +618,6 @@ public partial class LiveTaskPanel : UserControl
     {
         _roiDrawing = !_roiDrawing;
         _draftRoi = null;
-        RoiButton.Content = _roiDrawing ? "取消绘制" : "绘制检测区域";
         StatusText.Text = _roiDrawing
             ? "请在预览图像内拖拽绘制检测区域"
             : "已取消检测区域绘制";
@@ -635,8 +630,6 @@ public partial class LiveTaskPanel : UserControl
         _roiOverrideSet = true;
         _roiOverride = null;
         _draftRoi = null;
-        RoiButton.Content = "绘制检测区域";
-        ClearRoiButton.IsEnabled = false;
             ApplyRoiToActiveRun();
             StatusText.Text = "已清除检测区域，将检测全图";
             SettingsChanged?.Invoke(this, EventArgs.Empty);
@@ -1189,8 +1182,6 @@ public partial class LiveTaskPanel : UserControl
             _roiOverrideSet = true;
             _roiOverride = roi;
             _roiDrawing = false;
-            RoiButton.Content = "重新绘制区域";
-            ClearRoiButton.IsEnabled = true;
             ApplyRoiToActiveRun();
             StatusText.Text = "检测区域已设置，区域外不参与检测";
             SettingsChanged?.Invoke(this, EventArgs.Empty);

@@ -55,8 +55,6 @@
             <Button x:Name="StopButton" Content="结束批次" Click="Stop_Click" IsEnabled="False" Padding="10,3" />
             <Button x:Name="ResetCountButton" Content="清零" Click="ResetCount_Click" Padding="10,3" />
             <Button x:Name="RemoveButton" Content="移除任务" Click="Remove_Click" Margin="8,0,0,0" Padding="10,3" />
-            <Button x:Name="RoiButton" Content="绘制检测区域" Click="Roi_Click" Margin="4,0,0,0" Padding="10,3" />
-            <Button x:Name="ClearRoiButton" Content="清除区域" Click="ClearRoi_Click" IsEnabled="False" Margin="4,0,0,0" Padding="10,3" />
         </WrapPanel>
 
         <Grid x:Name="WorkspaceContentGrid" Grid.Row="1"
