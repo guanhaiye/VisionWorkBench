@@ -97,6 +97,10 @@ public class ImageViewer : ContentControl
 
         _contentScale.ScaleX = 1;
         _contentScale.ScaleY = 1;
+        // Content/source changes can happen after the viewer's first measure pass.
+        // Refresh the viewport before capturing the fit size, otherwise the old
+        // (often image-sized) extent can leave the preview stuck in the top-left.
+        _viewer.UpdateLayout();
         UpdateContentSize(resetBase: true);
         _viewer.UpdateLayout();
         _viewer.ScrollToHorizontalOffset(0);

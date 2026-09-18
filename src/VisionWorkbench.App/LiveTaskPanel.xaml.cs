@@ -94,6 +94,8 @@ public partial class LiveTaskPanel : UserControl
     private bool _singleFrameBusy;
     private bool _startInProgress;
     private bool _overlayRedrawPending;
+    private bool _fitPreviewOnNextFrame = true;
+    private bool _previewFitPending;
     // 结果返回前允许显示预览；首个结果返回后，只显示已经完成推理的帧，
     // 避免下一帧预览覆盖上一帧的检测结果。
     private long _lastRenderedResultSequence = -1;
@@ -713,6 +715,7 @@ public partial class LiveTaskPanel : UserControl
         _lastRenderedResultSequence = -1;
         _lastRenderedPreviewSequence = -1;
         _lastOutput = null;
+        _fitPreviewOnNextFrame = true;
         ClearDetectionLog();
         if (singleFrame)
         {
@@ -1070,6 +1073,7 @@ public partial class LiveTaskPanel : UserControl
                 return;
             }
             _preview.Render(PreviewImage, frame);
+            FitPreviewAfterSourceLoaded();
             _lastRenderedPreviewSequence = frame.Sequence;
             if (_offlineImageTotal > 0)
             {
@@ -1089,6 +1093,33 @@ public partial class LiveTaskPanel : UserControl
         _lastOutput = null;
         _lastRenderedResultSequence = -1;
         _lastRenderedPreviewSequence = -1;
+        _fitPreviewOnNextFrame = true;
+    }
+
+    private void FitPreviewAfterSourceLoaded()
+    {
+        if (!_fitPreviewOnNextFrame || _previewFitPending || PreviewImage.Source is null)
+        {
+            return;
+        }
+
+        _previewFitPending = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+        {
+            _previewFitPending = false;
+            if (!_fitPreviewOnNextFrame || PreviewImage.Source is null)
+            {
+                return;
+            }
+
+            PreviewViewer.FitToWindow();
+            _fitPreviewOnNextFrame = false;
+            RenderRoi();
+            if (_lastOutput is not null)
+            {
+                DrawOverlay(_lastOutput);
+            }
+        }));
     }
 
     private void ClearDetectionLog()
@@ -1346,6 +1377,7 @@ public partial class LiveTaskPanel : UserControl
             if (e.Frame is not null)
             {
                 _preview.Render(PreviewImage, e.Frame, force: true);
+                FitPreviewAfterSourceLoaded();
                 if (e.Sop is not null)
                 {
                     _lastSopRoundImage = CloneImageSource(PreviewImage.Source);
