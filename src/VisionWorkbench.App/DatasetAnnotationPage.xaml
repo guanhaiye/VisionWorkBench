@@ -120,8 +120,6 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                    <RowDefinition x:Name="AnnotationInfoHeaderRow" Height="Auto" />
-                    <RowDefinition x:Name="AnnotationInfoListRow" Height="Auto" />
                 </Grid.RowDefinitions>
                 <ScrollViewer x:Name="AnnotationToolsPanel" Grid.Row="0" Grid.ColumnSpan="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="92" Margin="0,0,0,6">
                     <WrapPanel>
@@ -220,11 +218,16 @@
                         </StackPanel>
                     </Border>
                 </Expander>
-                <TextBlock Grid.Row="2" Grid.Column="1" Text="当前图片标注" FontWeight="Bold" Margin="6,6,0,0" />
-                <Grid Grid.Row="3" Grid.Column="1" Margin="6,4,0,0">
+                <Grid Grid.Row="1" Grid.Column="1" Margin="6,0,0,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="当前图片标注" FontWeight="Bold" Margin="0,0,0,6" />
+                    <Grid Grid.Row="1" Margin="0,0,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition x:Name="AnnotationInfoHeaderRow" Height="Auto" />
+                        <RowDefinition x:Name="AnnotationInfoListRow" Height="*" />
                     </Grid.RowDefinitions>
                     <Border Grid.Row="0" Background="{DynamicResource InputBrush}"
                             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,1,1,0"
@@ -271,6 +274,7 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                    </Grid>
                 </Grid>
             </Grid>
         </Grid>
