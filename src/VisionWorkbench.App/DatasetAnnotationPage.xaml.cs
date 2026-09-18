@@ -34,6 +34,9 @@ public partial class DatasetAnnotationPage : UserControl
     private Rectangle? _draft;
     private bool _dragging;
     private bool _sam1ClickMode;
+    private bool _yoloeRunning;
+    private readonly DispatcherTimer _yoloeSpinnerTimer;
+    private int _yoloeSpinnerFrame;
     private bool _manualDrawMode = true;
     private bool _eraserMode;
     private bool _eraserDragging;
@@ -117,6 +120,13 @@ public partial class DatasetAnnotationPage : UserControl
         Sam1Button.Visibility = IsSegmentationPlatform
             ? Visibility.Visible
             : Visibility.Collapsed;
+        _yoloeSpinnerTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
+        _yoloeSpinnerTimer.Tick += (_, _) =>
+        {
+            if (!_yoloeRunning) return;
+            var frames = new[] { "⟳", "◴", "◷", "◶" };
+            YoloeButton.Content = $"{frames[_yoloeSpinnerFrame++ % frames.Length]} 处理中...";
+        };
         // Submit the latest hover position at roughly one display frame instead of
         // waiting for the pointer to become stationary.
         _sam1HoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
@@ -1376,7 +1386,8 @@ public partial class DatasetAnnotationPage : UserControl
             var obj = _annotation.Objects[i];
             var hasPolygon = obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3;
             var semanticPolygon = _dataset?.TaskType == "semantic_segmentation" && hasPolygon;
-            if (!semanticPolygon && _showBoundingBoxes)
+            var contourOnly = _dataset?.TaskType == "detection" && GetYoloeOutputMode() == "contours";
+            if (!semanticPolygon && !contourOnly && _showBoundingBoxes)
             {
                 var rectangle = new Rectangle
                 {
@@ -1770,6 +1781,13 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationScrollViewer.WheelZoomEnabled = !_eraserMode;
         DatasetTaskTypeText.Text = $"标注类型：{typeName}";
         YoloeButton.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
+        YoloeOutputModeLabel.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
+        YoloeOutputModeCombo.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
+        YoloeButton.IsEnabled = !_yoloeRunning;
+        if (!_yoloeRunning)
+        {
+            YoloeButton.Content = "智能标注";
+        }
         ManualDrawButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         EraserButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         Sam1Button.Visibility = IsSegmentationPlatform
@@ -1792,19 +1810,32 @@ public partial class DatasetAnnotationPage : UserControl
 
     private async void YoloeCurrent_Click(object sender, RoutedEventArgs e)
     {
-        if (_dataset?.TaskType != "detection") return;
+        if (_dataset?.TaskType != "detection" || _yoloeRunning) return;
         if (!TryBuildYoloeMemoryRequest(out var prompts, out var reference)) return;
         var target = _image!;
+        var outputMode = GetYoloeOutputMode();
+        _yoloeRunning = true;
+        _yoloeSpinnerFrame = 0;
+        YoloeButton.IsEnabled = false;
+        YoloeButton.Content = "⟳ 处理中...";
+        _yoloeSpinnerTimer.Start();
         try
         {
             StatusText.Text = "YOLOE 正在根据当前框提示识别当前图片，请稍候……";
             var results = await AppServices.Instance.SmartAnnotations.RunYoloEAsync(
-                reference.FullPath, prompts, [target.FullPath]);
-            ApplySmartResults(results, "当前图片");
+                reference.FullPath, prompts, [target.FullPath], outputMode: outputMode);
+            ApplySmartResults(results, "当前图片", outputMode);
         }
         catch (Exception ex)
         {
             StatusText.Text = $"YOLOE 自动标注失败：{ex.Message}";
+        }
+        finally
+        {
+            _yoloeSpinnerTimer.Stop();
+            _yoloeRunning = false;
+            YoloeButton.IsEnabled = true;
+            YoloeButton.Content = "智能标注";
         }
     }
 
@@ -1823,8 +1854,9 @@ public partial class DatasetAnnotationPage : UserControl
         {
             StatusText.Text = $"YOLOE 正在传播到 {targets.Count} 张后续图片，请稍候……";
             var results = await AppServices.Instance.SmartAnnotations.RunYoloEAsync(
-                reference.FullPath, prompts, targets.Select(x => x.FullPath).ToArray());
-            ApplySmartResults(results, $"{targets.Count} 张后续图片");
+                reference.FullPath, prompts, targets.Select(x => x.FullPath).ToArray(),
+                outputMode: GetYoloeOutputMode());
+            ApplySmartResults(results, $"{targets.Count} 张后续图片", GetYoloeOutputMode());
         }
         catch (Exception ex)
         {
@@ -2245,7 +2277,10 @@ public partial class DatasetAnnotationPage : UserControl
         return true;
     }
 
-    private void ApplySmartResults(IReadOnlyList<SmartAnnotationImageResult> results, string scope)
+    private string GetYoloeOutputMode() =>
+        (YoloeOutputModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "both";
+
+    private void ApplySmartResults(IReadOnlyList<SmartAnnotationImageResult> results, string scope, string outputMode = "both")
     {
         if (_dataset is null) return;
         var images = ImageList.Items.OfType<DatasetImageItem>().ToList();
@@ -2257,6 +2292,8 @@ public partial class DatasetAnnotationPage : UserControl
             var annotation = AppServices.Instance.Datasets.LoadAnnotation(_dataset, image.RelativePath);
             annotation.Objects = result.Objects
                 .Where(x => x.Width > 0 && x.Height > 0)
+                .Where(x => outputMode != "contours" || x.Polygon.Count >= 3)
+                .Select(x => NormalizeYoloeObject(x, outputMode))
                 .Select(ToDatasetObject)
                 .ToList();
             AppServices.Instance.Datasets.SaveAnnotation(_dataset, annotation);
@@ -2271,6 +2308,40 @@ public partial class DatasetAnnotationPage : UserControl
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(_dataset);
         UpdateImageListEmptyState();
         StatusText.Text = $"YOLOE 已完成 {scope}：写入 {written} 张图片的自动标注；后续修改也会自动保存。";
+    }
+
+    private static SmartAnnotationObjectResult NormalizeYoloeObject(SmartAnnotationObjectResult source, string outputMode)
+    {
+        if (outputMode == "boxes")
+        {
+            return new SmartAnnotationObjectResult
+            {
+                ClassName = source.ClassName,
+                Shape = "bbox",
+                X = source.X,
+                Y = source.Y,
+                Width = source.Width,
+                Height = source.Height,
+                Score = source.Score,
+            };
+        }
+
+        if (outputMode == "contours" && source.Polygon.Count >= 3)
+        {
+            return new SmartAnnotationObjectResult
+            {
+                ClassName = source.ClassName,
+                Shape = "polygon",
+                X = source.X,
+                Y = source.Y,
+                Width = source.Width,
+                Height = source.Height,
+                Polygon = source.Polygon.ToList(),
+                Score = source.Score,
+            };
+        }
+
+        return source;
     }
 
     private static DatasetAnnotationObject ToDatasetObject(SmartAnnotationObjectResult source) => new()

@@ -112,6 +112,7 @@ public sealed class SmartAnnotationService
         IReadOnlyList<YoloEPrompt> prompts,
         IReadOnlyList<string> targetImages,
         double confidence = 0.25,
+        string outputMode = "both",
         CancellationToken cancellationToken = default)
     {
         await _yoloeGate.WaitAsync(cancellationToken);
@@ -124,6 +125,7 @@ public sealed class SmartAnnotationService
                 Prompts = prompts,
                 Targets = targetImages,
                 Confidence = confidence,
+                OutputMode = outputMode,
             }, cancellationToken);
             if (!string.IsNullOrWhiteSpace(response.Error))
                 throw new InvalidOperationException(response.Error);
@@ -429,6 +431,7 @@ public sealed class SmartAnnotationService
         public IReadOnlyList<YoloEPrompt> Prompts { get; set; } = [];
         public IReadOnlyList<string> Targets { get; set; } = [];
         public double Confidence { get; set; } = 0.25;
+        public string OutputMode { get; set; } = "both";
     }
 
     private sealed class YoloEWarmupRequest

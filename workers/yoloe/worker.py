@@ -80,6 +80,9 @@ def main(payload: dict) -> dict:
     reference = Path(payload.get("referenceImage", ""))
     targets = [Path(path) for path in payload.get("targets", [])]
     prompts = payload.get("prompts", [])
+    output_mode = str(payload.get("outputMode", "both")).strip().lower()
+    if output_mode not in {"boxes", "contours", "both"}:
+        output_mode = "both"
     model_path = ensure_model_path(model_path)
     default_model_name = "yoloe-11s-seg.pt"
     if not model_path.is_file() and model_path.name == default_model_name:
@@ -151,9 +154,16 @@ def main(payload: dict) -> dict:
             width = max(0.0, min(1.0, (right - left) / image_width))
             height = max(0.0, min(1.0, (bottom - top) / image_height))
             polygon = polygon_from_mask(mask_values[index]) if index < len(mask_values) else []
+            if output_mode == "contours" and len(polygon) < 3:
+                continue
+            if output_mode == "boxes":
+                shape = "bbox"
+                polygon = []
+            else:
+                shape = "polygon" if len(polygon) >= 3 else "bbox"
             objects.append({
                 "className": prompt["className"],
-                "shape": "polygon" if len(polygon) >= 3 else "bbox",
+                "shape": shape,
                 "x": x,
                 "y": y,
                 "width": width,

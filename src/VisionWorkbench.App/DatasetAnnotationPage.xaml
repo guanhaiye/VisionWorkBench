@@ -126,6 +126,12 @@
                     <TextBlock Text="标注类别：" VerticalAlignment="Center" />
                     <ComboBox x:Name="ClassCombo" Width="150" />
                     <Button x:Name="YoloeButton" Content="智能标注" Click="YoloeCurrent_Click" Margin="8,0,0,0" Visibility="Collapsed" />
+                    <TextBlock x:Name="YoloeOutputModeLabel" Text="输出：" VerticalAlignment="Center" Margin="8,0,0,0" Visibility="Collapsed" />
+                    <ComboBox x:Name="YoloeOutputModeCombo" Width="170" Margin="4,0,0,0" SelectedIndex="2" Visibility="Collapsed">
+                        <ComboBoxItem Content="仅输出框" Tag="boxes" />
+                        <ComboBoxItem Content="仅输出分割轮廓" Tag="contours" />
+                        <ComboBoxItem Content="框和轮廓都输出" Tag="both" />
+                    </ComboBox>
                     <Button x:Name="ManualDrawButton" Content="手动绘制" Click="ManualDraw_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="EraserButton" Content="橡皮擦" Click="Eraser_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="Sam1Button" Content="智能标注" Click="Sam1ClickMode_Click" Margin="8,0,0,0" Visibility="Collapsed" />
