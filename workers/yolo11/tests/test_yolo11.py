@@ -11,7 +11,13 @@ import numpy as np
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_DIR))
 
-from yolo11 import Yolo11Engine, Yolo11Settings, _mask_contours, _normalized_box  # noqa: E402
+from yolo11 import (
+    Yolo11Engine,
+    Yolo11Settings,
+    _mask_contours,
+    _normalized_box,
+    read_model_image_size,
+)  # noqa: E402
 
 
 def _engine(tmp_path: Path, task: str) -> Yolo11Engine:
@@ -49,6 +55,16 @@ def test_settings_validate_and_resolve_model_path(tmp_path: Path):
     assert settings.task == "semantic"
     assert settings.model_path == tmp_path / "weights.pt"
     assert settings.confidence == 0.4
+
+
+def test_engine_metadata_overrides_default_image_size(tmp_path: Path):
+    engine_path = tmp_path / "best.engine"
+    engine_path.write_bytes(b"engine-placeholder")
+    engine_path.with_suffix(".engine.meta.json").write_text(
+        '{"imageSize": 512}', encoding="utf-8"
+    )
+
+    assert read_model_image_size(engine_path, SimpleNamespace(), 640) == 512
 
 
 def test_cuda_selection_reports_unavailable_runtime():

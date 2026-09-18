@@ -13,6 +13,7 @@ PyTorch。模型权重不随仓库提交，需在插件配置中指定本地权�
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -115,6 +116,30 @@ def _is_behavior_model_path(path: Path) -> bool:
     return any(part.lower() == "behavior-models" for part in path.parts)
 
 
+def read_model_image_size(model_path: Path, model: Any, default: int = 640) -> int:
+    """读取模型实际输入尺寸，优先使用 TensorRT 导出时写入的元数据。"""
+    if model_path.suffix.lower() == ".engine":
+        metadata_path = model_path.with_suffix(".engine.meta.json")
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            value = metadata.get("imageSize")
+            if isinstance(value, (int, float)) and int(value) >= 32:
+                return int(value)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    for source in (
+        getattr(model, "overrides", None),
+        getattr(getattr(model, "model", None), "args", None),
+    ):
+        value = source.get("imgsz") if isinstance(source, dict) else None
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+        if isinstance(value, (int, float)) and int(value) >= 32:
+            return int(value)
+    return default
+
+
 def _is_legacy_behavior_model_path(path: Path, plugin_dir: Path) -> bool:
     # 旧版本曾把行为训练的 best.pt 复制到插件 models 目录。
     return (
@@ -155,6 +180,11 @@ class Yolo11Engine:
             raise ValueError("semantic 模式需要 YOLO11-seg 或兼容 semantic_mask 的模型")
         if self.settings.task == "pose" and model_task not in {"pose", ""}:
             raise ValueError("pose 模式必须使用 YOLO11-pose 模型")
+
+        # TensorRT Engine 通常是固定输入尺寸。任务配置的默认 640 不能覆盖
+        # 训练/导出时记录的实际尺寸，否则例如 512 Engine 会拒绝 640 输入。
+        self.settings.image_size = read_model_image_size(
+            self.settings.model_path, self.model, self.settings.image_size)
 
         # 把 CUDA 上下文、模型迁移和 Ultralytics 首次编译开销放到初始化阶段，
         # 避免连续检测的第一帧承担冷启动延迟。
