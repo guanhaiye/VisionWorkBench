@@ -95,7 +95,7 @@
             </Border>
 
             <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1"
-                          VerticalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           Margin="6,0,0,0">
                 <ScrollViewer.ContextMenu>

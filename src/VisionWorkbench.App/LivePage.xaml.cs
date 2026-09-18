@@ -348,14 +348,28 @@ public partial class LivePage : UserControl
         }
     }
 
-    private static (int Rows, int Columns) GetGridSize(int count)
+    private (int Rows, int Columns) GetGridSize(int count)
     {
+        if (count == 3
+            && PanelsViewport.ActualWidth > 1
+            && PanelsViewport.ActualHeight > 1
+            && PanelsViewport.ActualWidth / PanelsViewport.ActualHeight >= 1.45)
+        {
+            // 宽屏下三个任务一行显示，避免 2×2 布局留下大块空白并挤压第二行面板。
+            return (1, 3);
+        }
+
+        var aspect = PanelsViewport.ActualWidth > 1 && PanelsViewport.ActualHeight > 1
+            ? PanelsViewport.ActualWidth / PanelsViewport.ActualHeight
+            : 1d;
         var columns = count switch
         {
             <= 1 => 1,
             2 => 2,
-            _ => (int)Math.Ceiling(Math.Sqrt(count)),
+            4 => 2,
+            _ => (int)Math.Ceiling(Math.Sqrt(count * aspect)),
         };
+        columns = Math.Clamp(columns, 1, count);
         var rows = (int)Math.Ceiling(count / (double)columns);
         return (Math.Max(1, rows), Math.Max(1, columns));
     }
