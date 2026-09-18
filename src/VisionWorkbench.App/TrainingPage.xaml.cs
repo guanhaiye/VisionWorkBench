@@ -72,13 +72,27 @@ public partial class TrainingPage : UserControl
             .Where(dataset => _taskTypeFilter is null || dataset.TaskType.Equals(_taskTypeFilter, StringComparison.OrdinalIgnoreCase))
             .ToList();
         DatasetCombo.ItemsSource = datasets;
-        if (datasets.Count > 0) DatasetCombo.SelectedIndex = 0;
-        else SetTaskTypeUi(null);
+        if (datasets.Count == 0)
+        {
+            SetTaskTypeUi(null);
+            return;
+        }
+
+        var preferredId = AppServices.Instance.Settings.LastTrainingDatasetId;
+        var preferredIndex = datasets.FindIndex(dataset =>
+            string.Equals(dataset.Id, preferredId, StringComparison.OrdinalIgnoreCase));
+        DatasetCombo.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
     }
 
     private void DatasetCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         _dataset = DatasetCombo.SelectedItem as DatasetDefinition;
+        if (_dataset is not null &&
+            !string.Equals(AppServices.Instance.Settings.LastTrainingDatasetId, _dataset.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            AppServices.Instance.Settings.LastTrainingDatasetId = _dataset.Id;
+            AppServices.Instance.SaveUserSettings();
+        }
         SetTaskTypeUi(_dataset);
         RefreshDatasetSplitSummary();
         RefreshModels();

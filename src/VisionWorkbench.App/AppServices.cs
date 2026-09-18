@@ -30,6 +30,8 @@ public sealed class AppSettings
     public string ConfigDirectory => Path.Combine(DataDirectory, "Config");
     /// <summary>标注平台新建数据集的独立存储根目录，默认使用 E 盘。</summary>
     public string DatasetDirectory { get; set; } = @"E:\";
+    /// <summary>训练平台上次选择的数据集，重启后恢复该数据集以继续显示对应的模型节点。</summary>
+    public string? LastTrainingDatasetId { get; set; }
     public string? PluginsRoot { get; set; }
     public string? PythonExecutable { get; set; }
     public string? YoloeModelPath { get; set; }
