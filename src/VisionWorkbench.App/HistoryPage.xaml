@@ -9,7 +9,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="240" />
+            <RowDefinition Height="2*" MinHeight="480" />
         </Grid.RowDefinitions>
 
         <!-- 筛选 -->
@@ -75,12 +75,12 @@
 
         <!-- 详情 + 分页 -->
         <Grid x:Name="DetailsView" Grid.Row="2" Margin="0,6,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="300" />
-            </Grid.ColumnDefinitions>
-            <Border Grid.Column="0" Background="#111" Margin="0,0,4,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="1.4*" />
+                <RowDefinition Height="1.4*" />
+                <RowDefinition Height="1*" />
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Background="#111" Margin="0,0,0,4">
                 <local:ImageViewer x:Name="OriginalImageViewer" Background="#111111">
                     <Grid MinWidth="1" MinHeight="1">
                         <Image x:Name="OriginalImage" Stretch="Uniform" />
@@ -88,7 +88,7 @@
                     </Grid>
                 </local:ImageViewer>
             </Border>
-            <Border Grid.Column="1" Background="#111" Margin="0,0,4,0">
+            <Border Grid.Row="1" Background="#111" Margin="0,0,0,4">
                 <local:ImageViewer x:Name="ResultImageViewer" Background="#111111">
                     <Grid MinWidth="1" MinHeight="1">
                         <Image x:Name="AnnotatedImage" Stretch="Uniform" />
@@ -96,18 +96,14 @@
                     </Grid>
                 </local:ImageViewer>
             </Border>
-            <DockPanel Grid.Column="2">
-                <StackPanel DockPanel.Dock="Top" Height="190">
-                    <ScrollViewer Height="190"
-                                  VerticalScrollBarVisibility="Visible"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  CanContentScroll="False"
-                                  Margin="0,8,0,0">
-                        <TextBlock x:Name="DetailText" TextWrapping="Wrap" FontSize="12"
-                                   Foreground="{DynamicResource TextBrush}" />
-                    </ScrollViewer>
-                </StackPanel>
-            </DockPanel>
+            <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="8">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False">
+                    <TextBlock x:Name="DetailText" TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource TextBrush}" />
+                </ScrollViewer>
+            </Border>
         </Grid>
     </Grid>
 </UserControl>
