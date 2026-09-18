@@ -95,8 +95,8 @@
             </Border>
 
             <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Hidden"
+                          HorizontalScrollBarVisibility="Hidden"
                           Margin="6,0,0,0">
                 <ScrollViewer.ContextMenu>
                     <ContextMenu>
@@ -186,8 +186,8 @@
                                         <TextBlock Text="当前产品步骤" Style="{StaticResource CardTitle}" />
                                     </DockPanel>
                                     <ScrollViewer x:Name="SopStepsScrollViewer" MaxHeight="420"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Disabled"
+                                                  VerticalScrollBarVisibility="Hidden"
+                                                  HorizontalScrollBarVisibility="Hidden"
                                                   CanContentScroll="False">
                                         <ItemsControl x:Name="SopStepsItems">
                                             <ItemsControl.ItemTemplate>
@@ -294,7 +294,8 @@
                             <TextBlock Text="检测日志（最近 100 条）" Style="{StaticResource CardTitle}" />
                             <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="6" Padding="8">
                                 <ScrollViewer x:Name="DetectionLogScrollViewer" Height="150"
-                                              VerticalScrollBarVisibility="Auto">
+                                              VerticalScrollBarVisibility="Hidden"
+                                              HorizontalScrollBarVisibility="Hidden">
                                     <TextBlock x:Name="DetectionListText" Text="暂无检测记录" TextWrapping="Wrap"
                                                FontSize="11" Foreground="{DynamicResource MutedTextBrush}" />
                                 </ScrollViewer>
