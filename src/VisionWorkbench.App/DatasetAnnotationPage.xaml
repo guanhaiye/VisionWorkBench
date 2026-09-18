@@ -254,7 +254,7 @@
                              PreviewMouseLeftButtonDown="AnnotationList_PreviewMouseLeftButtonDown"
                              PreviewMouseRightButtonDown="AnnotationList_PreviewMouseRightButtonDown"
                              HorizontalContentAlignment="Stretch"
-                             MaxHeight="150"
+                             VerticalContentAlignment="Top"
                              ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListBox.ItemTemplate>
                             <DataTemplate>

@@ -158,7 +158,7 @@ public partial class DatasetAnnotationPage : UserControl
         _showBoundingBoxes = BoundingBoxCheckBox.IsChecked == true;
         _showContours = ContourCheckBox.IsChecked == true;
         AnnotationInfoHeaderRow.Height = GridLength.Auto;
-        AnnotationInfoListRow.Height = GridLength.Auto;
+        AnnotationInfoListRow.Height = new GridLength(1, GridUnitType.Star);
         RenderAnnotations();
     }
 
