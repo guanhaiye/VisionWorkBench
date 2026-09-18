@@ -113,13 +113,17 @@
             </Grid>
 
             <Grid Grid.Column="3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="270" MinWidth="220" />
+                </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition x:Name="AnnotationInfoHeaderRow" Height="Auto" />
                     <RowDefinition x:Name="AnnotationInfoListRow" Height="Auto" />
                 </Grid.RowDefinitions>
-                <ScrollViewer x:Name="AnnotationToolsPanel" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="92" Margin="0,0,0,6">
+                <ScrollViewer x:Name="AnnotationToolsPanel" Grid.Row="0" Grid.ColumnSpan="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="92" Margin="0,0,0,6">
                     <WrapPanel>
                     <TextBlock Text="标注类别：" VerticalAlignment="Center" />
                     <ComboBox x:Name="ClassCombo" Width="150" />
@@ -131,7 +135,7 @@
                     <TextBlock x:Name="FinishShortcutHint" Text="S：结束本次标注" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="{DynamicResource MutedTextBrush}" Visibility="Collapsed" />
                     </WrapPanel>
                 </ScrollViewer>
-                <local:ImageViewer x:Name="AnnotationScrollViewer" Grid.Row="1"
+                <local:ImageViewer x:Name="AnnotationScrollViewer" Grid.Row="1" Grid.RowSpan="3" Grid.Column="0"
                              Background="#202020"
                              SizeChanged="AnnotationScrollViewer_SizeChanged">
                     <Border x:Name="AnnotationSurface" Background="#202020" BorderBrush="#888" BorderThickness="1">
@@ -149,7 +153,7 @@
                     </Grid>
                     </Border>
                 </local:ImageViewer>
-                <Expander x:Name="PanelOptionsExpander" Grid.Row="1"
+                <Expander x:Name="PanelOptionsExpander" Grid.Row="1" Grid.RowSpan="3" Grid.Column="0"
                           HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0"
                           ExpandDirection="Right" IsExpanded="False"
                           Panel.ZIndex="20">
@@ -216,8 +220,8 @@
                         </StackPanel>
                     </Border>
                 </Expander>
-                <TextBlock Grid.Row="2" Text="当前图片标注" FontWeight="Bold" Margin="0,6,0,0" />
-                <Grid Grid.Row="3" Margin="0,4,0,0">
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="当前图片标注" FontWeight="Bold" Margin="6,6,0,0" />
+                <Grid Grid.Row="3" Grid.Column="1" Margin="6,4,0,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
