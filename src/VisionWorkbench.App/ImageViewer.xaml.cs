@@ -25,6 +25,10 @@ public class ImageViewer : ContentControl
     public ImageViewer()
     {
         ClipToBounds = true;
+        // ContentControl 默认按内容期望尺寸对齐，会让预览内容停留在左上角。
+        // 预览画布必须填满可用视口，内部 Image 再通过 Uniform 保持原图比例。
+        HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        VerticalContentAlignment = VerticalAlignment.Stretch;
         Template = CreateTemplate();
     }
 
@@ -126,8 +130,8 @@ public class ImageViewer : ContentControl
         contentHost.Name = "ContentHost";
         contentHost.SetValue(FrameworkElement.WidthProperty, 1d);
         contentHost.SetValue(FrameworkElement.HeightProperty, 1d);
-        contentHost.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
-        contentHost.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
+        contentHost.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+        contentHost.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Stretch);
         contentHost.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(ContentProperty));
         contentHost.SetValue(ContentPresenter.ContentTemplateProperty, new TemplateBindingExtension(ContentTemplateProperty));
         contentHost.SetValue(UIElement.RenderTransformOriginProperty, new Point(0, 0));
