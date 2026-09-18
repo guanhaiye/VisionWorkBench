@@ -97,7 +97,9 @@
 
             <ScrollViewer x:Name="DetailsScrollViewer" Grid.Column="1"
                           VerticalScrollBarVisibility="Disabled"
-                          HorizontalScrollBarVisibility="Hidden"
+                          HorizontalScrollBarVisibility="Disabled"
+                          HorizontalContentAlignment="Stretch"
+                          VerticalContentAlignment="Stretch"
                           CanContentScroll="False"
                           Margin="6,0,0,0">
                 <ScrollViewer.ContextMenu>
@@ -107,7 +109,10 @@
                                   Click="RemoveFromContextMenu_Click" />
                     </ContextMenu>
                 </ScrollViewer.ContextMenu>
-                <Grid x:Name="DetailsGrid">
+                <Grid x:Name="DetailsGrid"
+                      Width="{Binding ActualWidth, ElementName=DetailsScrollViewer}"
+                      MinWidth="0"
+                      HorizontalAlignment="Left">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -243,7 +248,9 @@
                             <TextBlock Text="当前判定" Style="{StaticResource CardTitle}" />
                             <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="8" Margin="0,0,0,8">
                                 <TextBlock x:Name="DecisionText" Text="-" FontSize="30" FontWeight="Bold"
-                                           HorizontalAlignment="Center" Foreground="{DynamicResource AccentBrush}" />
+                                           HorizontalAlignment="Stretch" TextAlignment="Center"
+                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource AccentBrush}" />
                             </Border>
                             <TextBlock x:Name="SummaryText" TextWrapping="Wrap" FontSize="12"
                                        Foreground="{DynamicResource MutedTextBrush}" />
