@@ -8,12 +8,15 @@
     <Grid Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="1*" MinHeight="220" MaxHeight="420" />
-            <RowDefinition Height="2*" MinHeight="480" />
+            <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="360" MinWidth="280" />
+            <ColumnDefinition Width="*" MinWidth="520" />
+        </Grid.ColumnDefinitions>
 
         <!-- 筛选 -->
-        <ScrollViewer x:Name="HistoryFilterBar" Grid.Row="0" Margin="0,0,0,6"
+        <ScrollViewer x:Name="HistoryFilterBar" Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,6"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
             <WrapPanel>
@@ -54,7 +57,8 @@
             </WrapPanel>
         </ScrollViewer>
 
-        <DataGrid x:Name="RecordsGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
+        <DataGrid x:Name="RecordsGrid" Grid.Row="1" Grid.Column="0" Margin="0,0,6,0"
+                  AutoGenerateColumns="False" IsReadOnly="True"
                   SelectionChanged="RecordsGrid_SelectionChanged"
                   HorizontalScrollBarVisibility="Auto">
             <DataGrid.Columns>
@@ -70,17 +74,20 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <local:HistoryDashboardControl x:Name="DashboardView" Grid.Row="1" Grid.RowSpan="2"
+        <local:HistoryDashboardControl x:Name="DashboardView" Grid.Row="1" Grid.ColumnSpan="2"
                                        Visibility="Collapsed" BackRequested="Dashboard_BackRequested" />
 
         <!-- 详情 + 分页 -->
-        <Grid x:Name="DetailsView" Grid.Row="2" Margin="0,6,0,0">
+        <Grid x:Name="DetailsView" Grid.Row="1" Grid.Column="1" Margin="0,0,0,0">
             <Grid.RowDefinitions>
-                <RowDefinition Height="1.4*" />
-                <RowDefinition Height="1.4*" />
-                <RowDefinition Height="1*" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="190" />
             </Grid.RowDefinitions>
-            <Border Grid.Row="0" Background="#111" Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Row="0" Grid.Column="0" Background="#111" Margin="0,0,4,4">
                 <local:ImageViewer x:Name="OriginalImageViewer" Background="#111111">
                     <Grid MinWidth="1" MinHeight="1">
                         <Image x:Name="OriginalImage" Stretch="Uniform" />
@@ -88,7 +95,7 @@
                     </Grid>
                 </local:ImageViewer>
             </Border>
-            <Border Grid.Row="1" Background="#111" Margin="0,0,0,4">
+            <Border Grid.Row="0" Grid.Column="1" Background="#111" Margin="0,0,0,4">
                 <local:ImageViewer x:Name="ResultImageViewer" Background="#111111">
                     <Grid MinWidth="1" MinHeight="1">
                         <Image x:Name="AnnotatedImage" Stretch="Uniform" />
@@ -96,7 +103,7 @@
                     </Grid>
                 </local:ImageViewer>
             </Border>
-            <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="8">
+            <Border Grid.Row="1" Grid.ColumnSpan="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="8">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False">
