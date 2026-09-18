@@ -185,7 +185,13 @@ public partial class LivePage : UserControl
             && other.TaskId == panel.TaskId);
         if (duplicate)
         {
+            var duplicateTaskName = panel.SelectedTaskName;
             panel.ClearTaskSelection();
+            ThemedMessageBox.Show(
+                $"任务“{duplicateTaskName}”已经被其他实时检测面板选择，不能重复选择。\n请为当前面板选择其他任务。",
+                "任务已被选择",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
             WorkspaceStatusText.Text = $"任务 {panel.SelectedTaskName} 已经被其他检测面板使用，请选择其他任务。";
             return;
         }
