@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using VbFileSystem = Microsoft.VisualBasic.FileIO.FileSystem;
@@ -615,7 +616,7 @@ public partial class TrainingPage : UserControl
                 BaseModel = (ModelCombo.SelectedItem as ModelOption)?.ModelPath ?? "",
                 Epochs = 100,
                 BatchSize = 2,
-                ImageSize = 640,
+                ImageSize = 0,
                 Device = "auto",
                 ExportTensorRt = true,
             };
@@ -646,10 +647,10 @@ public partial class TrainingPage : UserControl
         ModelNodeList.SelectedItem = draft;
         _updatingModelNodes = false;
         var epochs = draft?.Epochs > 0 ? draft.Epochs : 100;
-        var imageSize = draft?.ImageSize > 0 ? draft.ImageSize : 640;
+        var imageSize = draft?.ImageSize ?? 0;
         var batchSize = draft?.BatchSize > 0 ? draft.BatchSize : 2;
         EpochsText.Text = epochs.ToString();
-        ImageSizeText.Text = imageSize.ToString();
+        SetImageSizeOption(imageSize);
         SetBatchSizeOptions([1, 2, 4, 8], batchSize);
         DeviceCombo.SelectedItem = DeviceCombo.Items.OfType<ComboBoxItem>()
             .FirstOrDefault(item => string.Equals(item.Tag as string, draft?.Device ?? "auto", StringComparison.OrdinalIgnoreCase))
@@ -691,7 +692,7 @@ public partial class TrainingPage : UserControl
         node.BaseModel = (ModelCombo.SelectedItem as ModelOption)?.ModelPath ?? node.BaseModel;
         node.Epochs = int.TryParse(EpochsText.Text, out var epochs) && epochs > 0 ? epochs : node.Epochs;
         node.BatchSize = BatchSizeCombo.SelectedItem is int batchSize ? batchSize : node.BatchSize;
-        node.ImageSize = int.TryParse(ImageSizeText.Text, out var imageSize) && imageSize > 0 ? imageSize : node.ImageSize;
+        node.ImageSize = GetSelectedImageSize();
         node.Device = (DeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? node.Device;
         node.ExportTensorRt = ExportTensorRtCheckBox.IsChecked == true;
         node.LossPoints = _lossPoints
@@ -713,7 +714,7 @@ public partial class TrainingPage : UserControl
         _selectedModelNode = node;
         _isNewModel = false;
         EpochsText.Text = node.Epochs > 0 ? node.Epochs.ToString() : "—";
-        ImageSizeText.Text = node.ImageSize > 0 ? node.ImageSize.ToString() : "—";
+        SetImageSizeOption(node.ImageSize);
         if (node.BatchSize > 0) SetBatchSizeOptions([node.BatchSize], node.BatchSize);
         if (!string.IsNullOrWhiteSpace(node.Device))
         {
@@ -752,7 +753,7 @@ public partial class TrainingPage : UserControl
     private void SetModelEditorState(bool editable)
     {
         EpochsText.IsReadOnly = !editable;
-        ImageSizeText.IsReadOnly = !editable;
+        ImageSizeCombo.IsEnabled = editable;
         BatchSizeCombo.IsEnabled = editable;
         DeviceCombo.IsEnabled = editable;
         ModelCombo.IsEnabled = editable;
@@ -856,14 +857,14 @@ public partial class TrainingPage : UserControl
 
     private void DeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => _ = RefreshBatchOptionsAsync();
 
-    private void ImageSizeText_LostFocus(object sender, RoutedEventArgs e) => _ = RefreshBatchOptionsAsync();
+    private void ImageSizeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => _ = RefreshBatchOptionsAsync();
 
     private async Task RefreshBatchOptionsAsync()
     {
         if (BatchSizeCombo is null) return;
         var requestId = Interlocked.Increment(ref _batchOptionsRequestId);
         var previous = BatchSizeCombo.SelectedItem is int value ? value : 2;
-        var imageSize = int.TryParse(ImageSizeText.Text, out var parsedSize) && parsedSize > 0 ? parsedSize : 640;
+        var imageSize = ResolveTrainingImageSize(GetSelectedImageSize());
         var device = (DeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
         Yolo11GpuMemory gpu;
         try
@@ -928,6 +929,71 @@ public partial class TrainingPage : UserControl
             BatchSizeCombo.SelectedIndex = 0;
     }
 
+    private int GetSelectedImageSize()
+    {
+        if (ImageSizeCombo.SelectedItem is ComboBoxItem item &&
+            int.TryParse(item.Tag as string, NumberStyles.Integer, CultureInfo.InvariantCulture, out var size) &&
+            size is 512 or 1024)
+        {
+            return size;
+        }
+        return 0;
+    }
+
+    private void SetImageSizeOption(int imageSize)
+    {
+        var tag = imageSize is 512 or 1024 ? imageSize.ToString(CultureInfo.InvariantCulture) : "original";
+        ImageSizeCombo.SelectedItem = ImageSizeCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, tag, StringComparison.OrdinalIgnoreCase));
+        if (ImageSizeCombo.SelectedItem is null && ImageSizeCombo.Items.Count > 0)
+            ImageSizeCombo.SelectedIndex = 0;
+    }
+
+    private bool TryGetTrainingImageSize(out int selectedImageSize, out int effectiveImageSize)
+    {
+        selectedImageSize = GetSelectedImageSize();
+        effectiveImageSize = ResolveTrainingImageSize(selectedImageSize);
+        if (effectiveImageSize > 0) return true;
+
+        ThemedMessageBox.Show("无法确定训练输入图像尺寸，请先选择有效的图像尺寸。", "训练参数",
+            MessageBoxButton.OK, MessageBoxImage.Warning);
+        return false;
+    }
+
+    private int ResolveTrainingImageSize(int selectedImageSize)
+    {
+        if (selectedImageSize > 0) return selectedImageSize;
+        if (_dataset is not null)
+        {
+            var source = AppServices.Instance.Datasets.ListImages(_dataset)
+                .FirstOrDefault(image => image.Split is "train" or "val" && File.Exists(image.FullPath));
+            if (source is not null)
+            {
+                try
+                {
+                    using var stream = File.OpenRead(source.FullPath);
+                    var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat,
+                        BitmapCacheOption.OnLoad);
+                    var side = Math.Max(decoder.Frames[0].PixelWidth, decoder.Frames[0].PixelHeight);
+                    if (side > 0)
+                        return Math.Max(32, (int)Math.Ceiling(side / 32d) * 32);
+                }
+                catch
+                {
+                    // The worker will report an actionable image-read error if the source is invalid.
+                }
+            }
+        }
+        return 640;
+    }
+
+    private static string FormatImageSize(int imageSize) => imageSize switch
+    {
+        512 => "512",
+        1024 => "1024",
+        _ => "原图大小",
+    };
+
     private int EstimateMaxBatch(Yolo11GpuMemory gpu, string device, int imageSize)
     {
         if (device == "cpu" || !gpu.Available) return 8;
@@ -970,7 +1036,7 @@ public partial class TrainingPage : UserControl
             return;
         }
         if (!TryParsePositive(EpochsText.Text, "学习次数", out var epochs) ||
-            !TryParsePositive(ImageSizeText.Text, "图像尺寸", out var imageSize)) return;
+            !TryGetTrainingImageSize(out var selectedImageSize, out var imageSize)) return;
         if (BatchSizeCombo.SelectedItem is not int batchSize)
         {
             ThemedMessageBox.Show("请选择批大小。", "训练参数", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -988,7 +1054,9 @@ public partial class TrainingPage : UserControl
             ResetChart();
             TrainingStatusText.Text = "正在整理数据集……";
             AddLog($"任务：{TaskTypeText.Text}；模型：{model.DisplayName}");
-            var dataYaml = await Task.Run(() => AppServices.Instance.Datasets.ExportYolo(_dataset, trainingDataDirectory));
+            AddLog($"训练图像尺寸：{FormatImageSize(selectedImageSize)}；训练输入尺寸：{imageSize}px");
+            var dataYaml = await Task.Run(() => AppServices.Instance.Datasets.ExportYolo(
+                _dataset, trainingDataDirectory, selectedImageSize));
             AddLog($"训练数据已生成：{dataYaml}");
             if (model.IsExisting) AddLog("将加载已有模型，并在该模型基础上继续学习。");
 
@@ -1032,7 +1100,7 @@ public partial class TrainingPage : UserControl
                 CompletedAt = DateTime.Now,
                 Epochs = epochs,
                 BatchSize = batchSize,
-                ImageSize = imageSize,
+                ImageSize = selectedImageSize,
                 Device = device,
                 ExportTensorRt = ExportTensorRtCheckBox.IsChecked == true,
                 LossPoints = _lossPoints.Select(point => new LossPoint { Epoch = point.Epoch, Loss = point.Loss }).ToList(),
@@ -1071,7 +1139,7 @@ public partial class TrainingPage : UserControl
             return;
         }
         if (!TryParsePositive(EpochsText.Text, "训练轮数", out var epochs) ||
-            !TryParsePositive(ImageSizeText.Text, "图像尺寸", out var imageSize)) return;
+            !TryGetTrainingImageSize(out var selectedImageSize, out var imageSize)) return;
         if (BatchSizeCombo.SelectedItem is not int batchSize)
         {
             ThemedMessageBox.Show("请选择批大小。", "训练参数", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -1089,7 +1157,9 @@ public partial class TrainingPage : UserControl
             ResetChart();
             TrainingStatusText.Text = "正在整理语义分割标注…";
             AddLog($"任务：语义分割（ATU5 / FPN）；模型：{model.DisplayName}");
-            var manifestPath = await Task.Run(() => AppServices.Instance.Datasets.ExportSemantic(_dataset, trainingDataDirectory));
+            AddLog($"训练图像尺寸：{FormatImageSize(selectedImageSize)}；训练输入尺寸：{imageSize}px");
+            var manifestPath = await Task.Run(() => AppServices.Instance.Datasets.ExportSemantic(
+                _dataset, trainingDataDirectory, selectedImageSize));
             AddLog($"语义分割训练清单已生成：{manifestPath}");
             _trainingCancellation = new CancellationTokenSource();
             StartButton.Content = "暂停训练";
@@ -1122,7 +1192,7 @@ public partial class TrainingPage : UserControl
                 CompletedAt = DateTime.Now,
                 Epochs = epochs,
                 BatchSize = batchSize,
-                ImageSize = imageSize,
+                ImageSize = selectedImageSize,
                 Device = device,
                 ExportTensorRt = ExportTensorRtCheckBox.IsChecked == true,
                 LossPoints = _lossPoints.Select(point => new LossPoint { Epoch = point.Epoch, Loss = point.Loss }).ToList(),
@@ -1280,7 +1350,7 @@ public partial class TrainingPage : UserControl
         ModelNodeList.IsHitTestVisible = !running;
         ModelCombo.IsEnabled = !running;
         BatchSizeCombo.IsEnabled = !running;
-        ImageSizeText.IsEnabled = !running;
+        ImageSizeCombo.IsEnabled = !running;
         DeviceCombo.IsEnabled = !running;
         SetModelEditorState(!running && _isNewModel);
         if (running) _ = RefreshGpuMemoryTextAsync();

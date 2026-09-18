@@ -92,8 +92,13 @@
                             <ComboBox x:Name="BatchSizeCombo" Grid.Row="2" Grid.Column="1" SelectedIndex="0" Margin="0,5" MinHeight="38"
                                       HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
                             <TextBlock Text="图像尺寸" Grid.Row="3" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
-                            <TextBox x:Name="ImageSizeText" Grid.Row="3" Grid.Column="1" Text="640" Margin="0,5" MinHeight="38"
-                                     HorizontalAlignment="Stretch" TextAlignment="Center" VerticalContentAlignment="Center" LostFocus="ImageSizeText_LostFocus" />
+                            <ComboBox x:Name="ImageSizeCombo" Grid.Row="3" Grid.Column="1" SelectedIndex="0"
+                                      SelectionChanged="ImageSizeCombo_SelectionChanged" Margin="0,5" MinHeight="38"
+                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                                <ComboBoxItem Content="原图大小" Tag="original" HorizontalContentAlignment="Center" />
+                                <ComboBoxItem Content="512" Tag="512" HorizontalContentAlignment="Center" />
+                                <ComboBoxItem Content="1024" Tag="1024" HorizontalContentAlignment="Center" />
+                            </ComboBox>
                             <TextBlock Text="计算设备" Grid.Row="4" Margin="0,0,12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextAlignment="Left" />
                             <ComboBox x:Name="DeviceCombo" Grid.Row="4" Grid.Column="1" SelectedIndex="0" SelectionChanged="DeviceCombo_SelectionChanged"
                                       Margin="0,5" MinHeight="38" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">

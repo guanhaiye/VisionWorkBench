@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using OpenCvSharp;
 using VisionWorkbench.Contracts.Results;
 
 namespace VisionWorkbench.Application;
@@ -213,7 +214,7 @@ public sealed class DatasetCatalogService
         File.WriteAllText(path, JsonSerializer.Serialize(annotation, JsonOptions), Encoding.UTF8);
     }
 
-    public string ExportYolo(DatasetDefinition dataset, string outputDirectory)
+    public string ExportYolo(DatasetDefinition dataset, string outputDirectory, int targetImageSize = 0)
     {
         if (dataset.Classes.Count == 0) throw new InvalidOperationException("请先配置至少一个类别");
         if (string.Equals(dataset.TaskType, "pose", StringComparison.OrdinalIgnoreCase) && dataset.KeypointNames.Count == 0)
@@ -247,7 +248,7 @@ public sealed class DatasetCatalogService
             var imageDestination = Path.Combine(output, "images", split, relativeName);
             var labelDestination = Path.Combine(output, "labels", split,
                 Path.ChangeExtension(relativeName, ".txt"));
-            File.Copy(image.FullPath, imageDestination, true);
+            ExportTrainingImage(image.FullPath, imageDestination, targetImageSize);
             var annotation = LoadAnnotation(dataset, image.RelativePath);
             var lines = annotation.Objects.Select(obj => ToYoloLine(obj, dataset.Classes, dataset.TaskType, dataset.KeypointNames)).OfType<string>();
             File.WriteAllLines(labelDestination, lines);
@@ -270,7 +271,7 @@ public sealed class DatasetCatalogService
     }
 
     /// <summary>导出 ATU5/FPN 语义分割 Worker 使用的像素掩膜清单。</summary>
-    public string ExportSemantic(DatasetDefinition dataset, string outputDirectory)
+    public string ExportSemantic(DatasetDefinition dataset, string outputDirectory, int targetImageSize = 0)
     {
         if (dataset.Classes.Count == 0) throw new InvalidOperationException("请先配置至少一个类别");
         var images = ListImages(dataset).Where(x => x.Split is "train" or "val" && x.HasAnnotation).ToArray();
@@ -278,12 +279,14 @@ public sealed class DatasetCatalogService
 
         var output = Path.GetFullPath(outputDirectory);
         Directory.CreateDirectory(output);
+        Directory.CreateDirectory(Path.Combine(output, "images", "train"));
+        Directory.CreateDirectory(Path.Combine(output, "images", "val"));
         var manifest = new
         {
             classes = dataset.Classes,
             items = images.Select(image => new
             {
-                imagePath = image.FullPath,
+                imagePath = ExportSemanticImage(image, output, targetImageSize),
                 split = image.Split,
                 objects = LoadAnnotation(dataset, image.RelativePath).Objects,
             }),
@@ -291,6 +294,33 @@ public sealed class DatasetCatalogService
         var manifestPath = Path.Combine(output, "semantic-manifest.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), Encoding.UTF8);
         return manifestPath;
+    }
+
+    private static string ExportSemanticImage(DatasetImageItem image, string outputDirectory, int targetImageSize)
+    {
+        var relativeName = image.RelativePath.Replace('/', '_').Replace('\\', '_');
+        var destination = Path.Combine(outputDirectory, "images", image.Split, relativeName);
+        ExportTrainingImage(image.FullPath, destination, targetImageSize);
+        return destination;
+    }
+
+    private static void ExportTrainingImage(string sourcePath, string destinationPath, int targetImageSize)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        if (targetImageSize <= 0)
+        {
+            File.Copy(sourcePath, destinationPath, true);
+            return;
+        }
+
+        using var source = Cv2.ImRead(sourcePath, ImreadModes.Color);
+        if (source.Empty())
+            throw new InvalidOperationException($"无法读取训练图片：{sourcePath}");
+        using var resized = new Mat();
+        Cv2.Resize(source, resized, new OpenCvSharp.Size(targetImageSize, targetImageSize),
+            0, 0, InterpolationFlags.Area);
+        if (!Cv2.ImWrite(destinationPath, resized))
+            throw new InvalidOperationException($"无法写入训练图片：{destinationPath}");
     }
 
     private static string? ToYoloLine(DatasetAnnotationObject obj, IReadOnlyList<string> classes,
