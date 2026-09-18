@@ -86,7 +86,10 @@ def train(request: dict[str, Any]) -> None:
     total_epochs = epochs
 
     def on_fit_epoch_end(trainer: Any) -> None:
-        epoch = int(getattr(trainer, "epoch", 0)) + 1
+        # Ultralytics versions differ on whether trainer.epoch is zero- or
+        # one-based at this callback. Keep the public progress range exactly
+        # within the configured 1..epochs interval.
+        epoch = min(total_epochs, max(1, int(getattr(trainer, "epoch", 0)) + 1))
         loss_items = getattr(trainer, "tloss", None)
         if loss_items is None:
             loss_items = getattr(trainer, "loss_items", None)

@@ -1315,8 +1315,14 @@ public partial class TrainingPage : UserControl
         {
             if (progress.TrainLoss is { } loss)
             {
-                _lossPoints.Add((progress.Epoch, loss));
-                CurrentLossText.Text = $"Epoch {progress.Epoch}/{progress.TotalEpochs}  Loss: {loss:0.0000}";
+                var totalEpochs = progress.TotalEpochs > 0 ? progress.TotalEpochs : GetLossChartMaxEpoch();
+                var epoch = Math.Clamp(progress.Epoch, 1, Math.Max(1, totalEpochs));
+                var existingIndex = _lossPoints.FindIndex(point => point.Epoch == epoch);
+                if (existingIndex >= 0)
+                    _lossPoints[existingIndex] = (epoch, loss);
+                else
+                    _lossPoints.Add((epoch, loss));
+                CurrentLossText.Text = $"Epoch {epoch}/{totalEpochs}  Loss: {loss:0.0000}";
                 DrawLossCurve();
                 _ = RefreshGpuMemoryTextAsync();
             }
@@ -1392,7 +1398,7 @@ public partial class TrainingPage : UserControl
         LossCanvas.Children.Add(new Line { X1 = left, Y1 = top, X2 = left, Y2 = height - bottom, Stroke = axisBrush });
         LossCanvas.Children.Add(new Line { X1 = left, Y1 = height - bottom, X2 = width - right, Y2 = height - bottom, Stroke = axisBrush });
 
-        var maxEpoch = Math.Max(1, _lossPoints.Count == 0 ? 1 : _lossPoints.Max(point => point.Epoch));
+        var maxEpoch = GetLossChartMaxEpoch();
         const int epochTickCount = 4;
         var tickBrush = ThemeBrush("MutedTextBrush", Colors.Gray);
         for (var index = 0; index <= epochTickCount; index++)
@@ -1505,7 +1511,7 @@ public partial class TrainingPage : UserControl
             return;
         }
 
-        var maxEpoch = Math.Max(1, _lossPoints.Max(point => point.Epoch));
+        var maxEpoch = GetLossChartMaxEpoch();
         var epochAtCursor = 1 + (position.X - plotLeft) * Math.Max(1, maxEpoch - 1)
             / Math.Max(1, plotRight - plotLeft);
         var point = _lossPoints
@@ -1521,6 +1527,8 @@ public partial class TrainingPage : UserControl
         var pointX = plotLeft + (point.Epoch - 1) * Math.Max(1, plotRight - plotLeft)
             / Math.Max(1, maxEpoch - 1);
         var value = point.Loss;
+        var pointY = _lossChartTop + (_lossChartMax - value) * _lossChartHeight
+            / Math.Max(0.000001, _lossChartMax - _lossChartMin);
         _lossHoverLine ??= new Line
         {
             Stroke = ThemeBrush("AccentBrush", Colors.DodgerBlue),
@@ -1546,8 +1554,18 @@ public partial class TrainingPage : UserControl
         };
         if (!_lossHoverLabel.IsVisible) LossCanvas.Children.Add(_lossHoverLabel);
         _lossHoverLabel.Text = $"Epoch {point.Epoch}\nLoss: {value.ToString(_lossChartFormat, CultureInfo.InvariantCulture)}";
-        Canvas.SetLeft(_lossHoverLabel, Math.Max(0, LossCanvas.ActualWidth - _lossHoverLabel.Width - 4));
-        Canvas.SetTop(_lossHoverLabel, Math.Clamp(position.Y - 12, 0, Math.Max(0, LossCanvas.ActualHeight - 24)));
+        var labelLeft = pointX - _lossHoverLabel.Width / 2;
+        var labelTop = pointY - 42;
+        if (labelTop < _lossChartTop) labelTop = pointY + 8;
+        Canvas.SetLeft(_lossHoverLabel, Math.Clamp(labelLeft, 0, Math.Max(0, LossCanvas.ActualWidth - _lossHoverLabel.Width)));
+        Canvas.SetTop(_lossHoverLabel, Math.Clamp(labelTop, 0, Math.Max(0, LossCanvas.ActualHeight - 42)));
+    }
+
+    private int GetLossChartMaxEpoch()
+    {
+        if (_selectedModelNode?.Epochs > 0) return _selectedModelNode.Epochs;
+        if (int.TryParse(EpochsText.Text, out var configured) && configured > 0) return configured;
+        return Math.Max(1, _lossPoints.Count == 0 ? 1 : _lossPoints.Max(point => point.Epoch));
     }
 
     private void LossCanvas_MouseLeave(object sender, MouseEventArgs e) => HideLossHover();
