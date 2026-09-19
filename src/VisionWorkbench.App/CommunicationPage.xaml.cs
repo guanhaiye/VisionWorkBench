@@ -47,11 +47,24 @@ public partial class CommunicationPage : UserControl
     {
         _profiles = _profileStore.Load();
         ProjectCombo.ItemsSource = _profiles;
+        ProjectList.ItemsSource = _profiles;
         if (_profiles.Count > 0) ProjectCombo.SelectedIndex = 0;
+        if (_profiles.Count > 0) ProjectList.SelectedIndex = 0;
         _allTasks = await AppServices.Instance.Tasks.ListAsync();
         RefreshBoundTasks();
     }
-    private void Project_Changed(object sender, SelectionChangedEventArgs e) => LoadConfig();
+    private void Project_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ProjectCombo.SelectedItem is ProjectCommunicationConfig profile)
+            ProjectList.SelectedItem = profile;
+        LoadConfig();
+    }
+    private void ProjectList_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ProjectList.SelectedItem is not ProjectCommunicationConfig profile) return;
+        ProjectCombo.SelectedItem = profile;
+        LoadConfig();
+    }
     private void Load_Click(object sender, RoutedEventArgs e) => LoadConfig();
     private void LoadConfig()
     {
@@ -93,7 +106,10 @@ public partial class CommunicationPage : UserControl
         _profiles.Add(profile);
         ProjectCombo.ItemsSource = null;
         ProjectCombo.ItemsSource = _profiles;
+        ProjectList.ItemsSource = null;
+        ProjectList.ItemsSource = _profiles;
         ProjectCombo.SelectedItem = profile;
+        ProjectList.SelectedItem = profile;
         _profileStore.Save(_profiles);
         StateText.Text = $"已创建 TCP/IP 项目：{profile.Name}";
     }
@@ -113,7 +129,10 @@ public partial class CommunicationPage : UserControl
         _profileStore.Save(_profiles);
         ProjectCombo.ItemsSource = null;
         ProjectCombo.ItemsSource = _profiles;
+        ProjectList.ItemsSource = null;
+        ProjectList.ItemsSource = _profiles;
         ProjectCombo.SelectedIndex = 0;
+        ProjectList.SelectedIndex = 0;
         StateText.Text = $"已删除 TCP/IP 项目：{profile.Name}";
     }
 
