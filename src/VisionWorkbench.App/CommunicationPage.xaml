@@ -100,10 +100,16 @@
                             <Separator Margin="0,8"/>
                             <TextBlock Text="检测任务"/>
                         <ComboBox x:Name="TriggerTaskCombo" MinHeight="44" MaxHeight="120"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                                   SelectionChanged="TriggerTask_Changed">
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock>
+                                        <TextBlock TextWrapping="Wrap" TextTrimming="None">
                                             <Run Text="[" />
                                             <Run Text="{Binding StationCode}" />
                                             <Run Text="] " />
