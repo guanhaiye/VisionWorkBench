@@ -38,12 +38,12 @@
             <Grid Grid.Column="0" Margin="0,0,12,0">
                 <GroupBox Header="TCP/IP 项目列表">
                     <StackPanel Margin="8">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="新建项目" Click="NewProject_Click" Width="112" />
+                            <Button Content="删除项目" Click="DeleteProject_Click" Width="112" Margin="8,0,0,0" />
+                        </StackPanel>
                         <ListBox x:Name="ProjectList" DisplayMemberPath="Name"
                                  SelectionChanged="ProjectList_Changed" />
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <Button Content="新建项目" Click="NewProject_Click" MinWidth="120" HorizontalAlignment="Stretch" />
-                            <Button Content="删除项目" Click="DeleteProject_Click" MinWidth="120" HorizontalAlignment="Stretch" Margin="8,0,0,0" />
-                        </StackPanel>
                     </StackPanel>
                 </GroupBox>
             </Grid>
