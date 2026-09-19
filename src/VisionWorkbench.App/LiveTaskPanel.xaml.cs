@@ -330,9 +330,16 @@ public partial class LiveTaskPanel : UserControl
 
     private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_run is null || _run.State is DetectionRunState.Idle or DetectionRunState.Stopped or DetectionRunState.Faulted)
+        {
+            StatusText.Text = "TCP触发：正在自动启动检测任务…";
+            await StartRunAsync(singleFrame: false);
+        }
+
         if (_run is null || _run.State is not (DetectionRunState.Running or DetectionRunState.Paused))
         {
-            throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”尚未启动，请先点击开始检测。");
+            throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”启动失败，无法执行 TCP 指令。");
         }
 
         if (_singleFrameBusy)
