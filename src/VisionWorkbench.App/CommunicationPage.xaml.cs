@@ -287,7 +287,7 @@ public partial class CommunicationPage : UserControl
         _loadingTriggerEditor = false;
         LoadTriggerEditor(task);
     }
-    private void NewTaskTrigger_Click(object sender, RoutedEventArgs e)
+    private async void NewTaskTrigger_Click(object sender, RoutedEventArgs e)
     {
         var configuredIds = TriggerRulesList.Items.OfType<TriggerRuleRow>()
             .Select(row => row.TaskId)
@@ -295,6 +295,23 @@ public partial class CommunicationPage : UserControl
         var task = _allTasks.FirstOrDefault(item => !configuredIds.Contains(item.Id));
         if (task is null) { ThemedMessageBox.Show("所有检测任务都已配置规则", "TCP/IP 设置"); return; }
         _pendingTriggerTaskIds.Add(task.Id);
+        var defaultConfig = new TaskTcpTriggerConfig
+        {
+            Enabled = true,
+            TcpProjectCode = _config.ProjectCode,
+            MatchMode = MessageMatchMode.ExactText,
+            MatchValue = $"START_{task.StationCode}",
+        };
+        task.TriggerJson = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
+        try
+        {
+            await AppServices.Instance.Tasks.SaveAsync(task);
+            _pendingTriggerTaskIds.Remove(task.Id);
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show(ex.Message, "保存任务规则失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
         RefreshTriggerRules();
         TriggerRulesList.SelectedItem = null;
         _loadingTriggerEditor = true;
@@ -306,7 +323,7 @@ public partial class CommunicationPage : UserControl
         TriggerEnabledCheck.IsChecked = true;
         TriggerMatchModeCombo.SelectedIndex = 0;
         TriggerMatchValueText.Text = $"START_{task.StationCode}";
-        TriggerResponseTemplateText.Text = new TaskTcpTriggerConfig().ResponseTemplate;
+        TriggerResponseTemplateText.Text = defaultConfig.ResponseTemplate;
         TaskNameText.Text = task.Name;
         SetTriggerEditorEnabled(true);
     }
