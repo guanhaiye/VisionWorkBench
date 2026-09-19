@@ -36,38 +36,44 @@
                 <Grid Grid.Row="1" Margin="0,12,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="360" MinWidth="340"/><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid Grid.Column="0" Margin="0,0,12,0">
-                <GroupBox Header="TCP/IP 项目列表">
-                    <StackPanel Margin="8">
-                        <Grid Margin="0,0,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" Content="新建项目" Click="NewProject_Click"
-                                    HorizontalAlignment="Stretch" Margin="0,0,4,0" />
-                            <Button Grid.Column="1" Content="删除项目" Click="DeleteProject_Click"
-                                    HorizontalAlignment="Stretch" Margin="4,0,0,0" />
-                        </Grid>
-                        <ListBox x:Name="ProjectList"
-                                 MinWidth="0" HorizontalContentAlignment="Stretch"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                 SelectionChanged="ProjectList_Changed">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid MinWidth="0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding Name}" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Status}"
-                                                   Margin="12,0,0,0" Foreground="#7ED6A5" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                    </StackPanel>
-                </GroupBox>
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="220"/></Grid.RowDefinitions>
+                    <GroupBox Header="TCP/IP 项目列表" Grid.Row="0" Margin="0,0,0,12">
+                        <StackPanel Margin="8">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="新建项目" Click="NewProject_Click"
+                                        HorizontalAlignment="Stretch" Margin="0,0,4,0" />
+                                <Button Grid.Column="1" Content="删除项目" Click="DeleteProject_Click"
+                                        HorizontalAlignment="Stretch" Margin="4,0,0,0" />
+                            </Grid>
+                            <ListBox x:Name="ProjectList"
+                                     MinWidth="0" HorizontalContentAlignment="Stretch"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                     SelectionChanged="ProjectList_Changed">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid MinWidth="0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Name}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Status}"
+                                                       Margin="12,0,0,0" Foreground="#7ED6A5" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="连接列表" Grid.Row="1">
+                        <ListBox x:Name="ConnectionsList" Margin="8" DisplayMemberPath="RemoteEndpoint" />
+                    </GroupBox>
+                </Grid>
             </Grid>
             <ScrollViewer x:Name="CommunicationSettingsScrollViewer" Grid.Column="1"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
@@ -158,11 +164,9 @@
                 </StackPanel>
             </ScrollViewer>
             <Grid x:Name="RightContentGrid" Grid.Column="2">
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="340"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Text="连接列表" FontWeight="Bold"/>
-                <ListBox x:Name="ConnectionsList" Grid.Row="1" Margin="0,6,0,10" DisplayMemberPath="RemoteEndpoint"/>
-                <GroupBox Header="通讯日志" Grid.Row="2" Margin="0,0,0,10"><TextBox x:Name="LogText" MinHeight="300" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></GroupBox>
-                <Grid Grid.Row="3">
+                <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <GroupBox Header="通讯日志" Grid.Row="0" Margin="0,0,0,10"><TextBox x:Name="LogText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></GroupBox>
+                <Grid Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
