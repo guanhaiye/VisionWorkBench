@@ -69,7 +69,7 @@ public partial class CommunicationPage : UserControl
         if (preferred is null)
         {
             var projectWithRule = _allTasks
-                .Select(task => TryReadTrigger(task.TriggerJson)?.TcpProjectCode)
+                .SelectMany(task => ReadTriggerConfigs(task.TriggerJson).Keys)
                 .FirstOrDefault(code => _profiles.Any(profile =>
                     string.Equals(profile.ProjectCode, code, StringComparison.OrdinalIgnoreCase)));
             preferred = _profiles.FirstOrDefault(profile =>
@@ -275,12 +275,7 @@ public partial class CommunicationPage : UserControl
     private void LoadTriggerEditor(TaskEntity task)
     {
         TaskTcpTriggerConfig config;
-        try { config = JsonSerializer.Deserialize<TaskTcpTriggerConfig>(task.TriggerJson ?? "") ?? new TaskTcpTriggerConfig(); }
-        catch (JsonException) { config = new TaskTcpTriggerConfig(); }
-        if (!string.Equals(config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
-        {
-            config = new TaskTcpTriggerConfig();
-        }
+        config = TryReadTrigger(task.TriggerJson, _config.ProjectCode) ?? new TaskTcpTriggerConfig();
         TriggerEnabledCheck.IsChecked = config.Enabled;
         TaskNameText.Text = task.Name;
         SelectTag(TriggerMatchModeCombo, config.MatchMode.ToString());
@@ -328,7 +323,7 @@ public partial class CommunicationPage : UserControl
             MatchMode = MessageMatchMode.ExactText,
             MatchValue = $"START_{task.StationCode}",
         };
-        task.TriggerJson = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
+        SetTriggerConfig(task, defaultConfig);
         try
         {
             await AppServices.Instance.Tasks.SaveAsync(task);
@@ -355,7 +350,7 @@ public partial class CommunicationPage : UserControl
     {
         if (TriggerRulesList.SelectedItem is not TriggerRuleRow row) return;
         var task = _triggerTasks.First(item => item.Id == row.TaskId);
-        task.TriggerJson = null;
+        RemoveTriggerConfig(task, _config.ProjectCode);
         await AppServices.Instance.Tasks.SaveAsync(task);
         RefreshBoundTasks();
         StateText.Text = $"已删除任务规则：{task.Name}";
@@ -383,8 +378,7 @@ public partial class CommunicationPage : UserControl
             return;
         }
         if (config.Enabled && _triggerTasks.Any(other => other.Id != task.Id
-            && TryReadTrigger(other.TriggerJson) is { Enabled: true } existing
-            && string.Equals(existing.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase)
+            && TryReadTrigger(other.TriggerJson, _config.ProjectCode) is { Enabled: true } existing
             && existing.MatchMode == config.MatchMode
             && string.Equals(existing.MatchValue, config.MatchValue, StringComparison.Ordinal)))
         {
@@ -392,7 +386,7 @@ public partial class CommunicationPage : UserControl
             return;
         }
         task.Name = string.IsNullOrWhiteSpace(TaskNameText.Text) ? task.Name : TaskNameText.Text.Trim();
-        task.TriggerJson = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+        SetTriggerConfig(task, config);
         await AppServices.Instance.Tasks.SaveAsync(task);
         _allTasks = await AppServices.Instance.Tasks.ListAsync();
         RefreshBoundTasks();
@@ -403,7 +397,7 @@ public partial class CommunicationPage : UserControl
     private void RefreshTriggerRules()
     {
         TriggerRulesList.ItemsSource = _triggerTasks
-            .Select(task => (Task: task, Config: TryReadTrigger(task.TriggerJson)))
+            .Select(task => (Task: task, Config: TryReadTrigger(task.TriggerJson, _config.ProjectCode)))
             .Where(pair => _pendingTriggerTaskIds.Contains(pair.Task.Id)
                 || (pair.Config is { }
                     && string.Equals(pair.Config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase)))
@@ -411,11 +405,61 @@ public partial class CommunicationPage : UserControl
                 $"{pair.Task.Name}  ·  {pair.Config?.MatchMode ?? MessageMatchMode.ExactText}  ·  {pair.Config?.MatchValue ?? "待保存"}"))
             .ToArray();
     }
-    private static TaskTcpTriggerConfig? TryReadTrigger(string? json)
+    private static TaskTcpTriggerConfig? TryReadTrigger(string? json, string? projectCode = null)
     {
-        if (string.IsNullOrWhiteSpace(json)) return null;
-        try { return JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json); }
-        catch (JsonException) { return null; }
+        var configs = ReadTriggerConfigs(json);
+        if (projectCode is not null && configs.TryGetValue(projectCode, out var config))
+            return config;
+        return projectCode is null ? configs.Values.FirstOrDefault() : null;
+    }
+    private static Dictionary<string, TaskTcpTriggerConfig> ReadTriggerConfigs(string? json)
+    {
+        var configs = new Dictionary<string, TaskTcpTriggerConfig>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json)) return configs;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return configs;
+
+            if (document.RootElement.TryGetProperty("TcpProjectCode", out _)
+                || document.RootElement.TryGetProperty("tcpProjectCode", out _))
+            {
+                var single = JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json, options);
+                if (single is not null && !string.IsNullOrWhiteSpace(single.TcpProjectCode))
+                    configs[single.TcpProjectCode] = single;
+                return configs;
+            }
+
+            var map = JsonSerializer.Deserialize<Dictionary<string, TaskTcpTriggerConfig>>(json, options);
+            if (map is null) return configs;
+            foreach (var pair in map)
+            {
+                if (pair.Value is null) continue;
+                pair.Value.TcpProjectCode = string.IsNullOrWhiteSpace(pair.Value.TcpProjectCode)
+                    ? pair.Key
+                    : pair.Value.TcpProjectCode;
+                configs[pair.Key] = pair.Value;
+            }
+        }
+        catch (JsonException) { }
+        return configs;
+    }
+    private void SetTriggerConfig(TaskEntity task, TaskTcpTriggerConfig config)
+    {
+        config.TcpProjectCode = _config.ProjectCode;
+        var configs = ReadTriggerConfigs(task.TriggerJson);
+        configs[_config.ProjectCode] = config;
+        task.TriggerJson = JsonSerializer.Serialize(configs, new JsonSerializerOptions { WriteIndented = true });
+    }
+    private static void RemoveTriggerConfig(TaskEntity task, string projectCode)
+    {
+        var configs = ReadTriggerConfigs(task.TriggerJson);
+        configs.Remove(projectCode);
+        task.TriggerJson = configs.Count == 0
+            ? null
+            : JsonSerializer.Serialize(configs, new JsonSerializerOptions { WriteIndented = true });
     }
     private void SetTriggerEditorEnabled(bool enabled)
     {

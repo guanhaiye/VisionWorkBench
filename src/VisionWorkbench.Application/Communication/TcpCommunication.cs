@@ -559,7 +559,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         }
         var tasks = await _tasks.ListAsync();
         var configured = tasks
-            .Select(task => (Task: task, Trigger: ParseTrigger(task.TriggerJson)))
+            .Select(task => (Task: task, Trigger: ParseTrigger(task.TriggerJson, _config.ProjectCode)))
             .FirstOrDefault(pair => pair.Trigger is { Enabled: true } trigger
                 && IsForCurrentProject(trigger)
                 && Matches(trigger, text));
@@ -619,10 +619,35 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             await SendJsonAsync(connectionId, new { ok = false, code = "execution_failed", requestId, task = task.Name, message = ex.Message });
         }
     }
-    private static TaskTcpTriggerConfig? ParseTrigger(string? json)
+    private static TaskTcpTriggerConfig? ParseTrigger(string? json, string? projectCode)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
-        try { return JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }); }
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (document.RootElement.TryGetProperty("TcpProjectCode", out _)
+                || document.RootElement.TryGetProperty("tcpProjectCode", out _))
+            {
+                var single = JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json, options);
+                return single is not null && (string.IsNullOrWhiteSpace(single.TcpProjectCode)
+                    || string.Equals(single.TcpProjectCode, projectCode, StringComparison.OrdinalIgnoreCase))
+                    ? single
+                    : null;
+            }
+
+            var map = JsonSerializer.Deserialize<Dictionary<string, TaskTcpTriggerConfig>>(json, options);
+            if (map is null || projectCode is null) return null;
+            var pair = map.FirstOrDefault(item => string.Equals(item.Key, projectCode, StringComparison.OrdinalIgnoreCase));
+            if (pair.Value is null) return null;
+            pair.Value.TcpProjectCode = string.IsNullOrWhiteSpace(pair.Value.TcpProjectCode)
+                ? pair.Key
+                : pair.Value.TcpProjectCode;
+            return pair.Value;
+        }
         catch (JsonException) { return null; }
     }
     private static bool Matches(TaskTcpTriggerConfig trigger, string text) => trigger.MatchMode switch
