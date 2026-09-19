@@ -105,6 +105,8 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         if (_activeProjects.TryGetValue(projectCode, out var count) && count == 0
             && _projectIdle.TryGetValue(projectCode, out var idle))
             idle.TrySetResult(true);
+        if (Volatile.Read(ref _activeExecutions) == 0 && !_stoppingProjects.IsEmpty)
+            _ = TrimIdleResourcesAsync();
     }
 
     /// <summary>TCP 项目停止时取消后的执行实例全部退出后回收空闲相机和模型会话。</summary>
@@ -126,8 +128,10 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         try
         {
             if (Volatile.Read(ref _activeExecutions) != 0 || _stoppingProjects.IsEmpty) return;
-            foreach (var pool in _models.Values) await pool.DisposeAsync();
-            foreach (var camera in _cameras.Values) await camera.DisposeAsync();
+            foreach (var pool in _models.Values)
+                try { await pool.DisposeAsync(); } catch { }
+            foreach (var camera in _cameras.Values)
+                try { await camera.DisposeAsync(); } catch { }
             _models.Clear();
             _cameras.Clear();
             _stoppingProjects.Clear();
@@ -153,8 +157,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
     {
         private readonly AppServices _services;
         private readonly Recipe _recipe;
-        private readonly Channel<VideoFrame> _frames = Channel.CreateUnbounded<VideoFrame>(
-            new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
+        private readonly TriggerFrameDistributor _frames = new();
         private readonly SemaphoreSlim _startGate = new(1, 1);
         private readonly CancellationTokenSource _runtimeStop = new();
         private ICameraSession? _camera;
@@ -195,24 +198,14 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             await _camera.StartAsync(cancellationToken);
         }
 
-        private void OnFrame(object? sender, VideoFrameReceivedEventArgs args) => _frames.Writer.TryWrite(args.Frame);
+        private void OnFrame(object? sender, VideoFrameReceivedEventArgs args) => _frames.Publish(args.Frame);
 
         public AssignedFrameCameraSession CreateAssignedSession(DateTimeOffset receivedAt) => new(this, receivedAt);
-
-        private async Task<VideoFrame> TakeFrameAsync(DateTimeOffset receivedAt, CancellationToken cancellationToken)
-        {
-            while (await _frames.Reader.WaitToReadAsync(cancellationToken))
-            {
-                while (_frames.Reader.TryRead(out var frame))
-                    if (frame.Timestamp >= receivedAt) return frame;
-            }
-            throw new InvalidOperationException("共享相机已停止输出帧");
-        }
 
         public async ValueTask DisposeAsync()
         {
             _runtimeStop.Cancel();
-            _frames.Writer.TryComplete();
+            _frames.Complete(new OperationCanceledException("共享相机已停止"));
             if (_startTask is not null)
             {
                 try { await _startTask; } catch { }
@@ -252,7 +245,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             public async Task StartAsync(CancellationToken cancellationToken)
             {
                 _state = CameraSessionState.Streaming;
-                var frame = await owner.TakeFrameAsync(receivedAt, cancellationToken);
+                var frame = await owner._frames.WaitForFrameAsync(receivedAt, cancellationToken);
                 FrameReceived?.Invoke(this, new VideoFrameReceivedEventArgs(frame));
             }
 
