@@ -226,9 +226,10 @@ public partial class CommunicationPage : UserControl
     }
     private async void SaveTaskTrigger_Click(object sender, RoutedEventArgs e)
     {
+        // 该按钮同时保存 TCP/IP 项目参数；任务规则属于可选项。
+        Save_Click(sender, e);
         if (TriggerTaskCombo.SelectedItem is not TaskEntity task)
         {
-            Save_Click(sender, e);
             return;
         }
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
