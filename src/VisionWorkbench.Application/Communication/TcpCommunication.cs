@@ -188,6 +188,7 @@ public sealed class TcpFrameDecoder(ProjectCommunicationConfig config)
 {
     private readonly List<byte> _buffer = [];
     private readonly byte[] _terminator = DecodeTerminator(config.MessageTerminator);
+    public bool HasPendingData => _buffer.Count > 0;
     public IReadOnlyList<byte[]> Append(ReadOnlySpan<byte> data)
     {
         _buffer.AddRange(data.ToArray());
@@ -210,6 +211,14 @@ public sealed class TcpFrameDecoder(ProjectCommunicationConfig config)
             _buffer.RemoveRange(0, frameLength + suffixLength);
         }
         return frames;
+    }
+
+    public IReadOnlyList<byte[]> FlushPending()
+    {
+        if (_buffer.Count == 0) return [];
+        var frame = _buffer.ToArray();
+        _buffer.Clear();
+        return [frame];
     }
 
     private int? FindFrameLength()
@@ -332,6 +341,13 @@ internal sealed class TcpConnectionSession : IAsyncDisposable
                 Info.LastActivityAt = DateTime.UtcNow;
                 RawDataReceived?.Invoke(this, new TcpRawDataReceivedEventArgs(Info, buffer[..read].ToArray()));
                 foreach (var frame in _decoder.Append(buffer.AsSpan(0, read))) FrameReceived?.Invoke(this, new TcpFrameReceivedEventArgs(Info, frame));
+                if (_decoder.HasPendingData && config.FrameMode is TcpFrameMode.Line or TcpFrameMode.Delimiter)
+                {
+                    // 有些设备发送的是一次 TCP 写入的裸指令，不带换行或自定义结束符。
+                    // 等待一个很短的空闲窗口后，将当前缓存作为一帧，避免指令永久停留在拆包缓存中。
+                    await Task.Delay(80, linked.Token);
+                    foreach (var frame in _decoder.FlushPending()) FrameReceived?.Invoke(this, new TcpFrameReceivedEventArgs(Info, frame));
+                }
             }
         }
         catch (OperationCanceledException) { }

@@ -33,4 +33,14 @@ public sealed class TcpCommunicationTests
         var config = new ProjectCommunicationConfig { FrameMode = TcpFrameMode.Delimiter, MessageTerminator = "HEX:0D0A" };
         Assert.Equal("ping\r\n", Encoding.UTF8.GetString(TcpMessageCodec.Encode("ping", config)));
     }
+
+    [Fact]
+    public void LineDecoder_CanFlushBareCommand()
+    {
+        var decoder = new TcpFrameDecoder(new ProjectCommunicationConfig { FrameMode = TcpFrameMode.Line });
+        Assert.Empty(decoder.Append(Encoding.UTF8.GetBytes("START_ST-001")));
+        Assert.True(decoder.HasPendingData);
+        Assert.Equal("START_ST-001", Encoding.UTF8.GetString(decoder.FlushPending().Single()));
+        Assert.False(decoder.HasPendingData);
+    }
 }
