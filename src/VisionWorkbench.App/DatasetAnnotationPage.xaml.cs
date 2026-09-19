@@ -1502,6 +1502,10 @@ public partial class DatasetAnnotationPage : UserControl
             OpenCvSharp.Cv2.Circle(mask, rasterStroke[^1], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.White, -1);
         }
 
+        // 标注对象只有一个外轮廓。画刷画出闭合环或自交区域时，直接提取 External
+        // 会把内部孔洞填满；先把每个孔洞开一条最短通道到画布边缘，再提取外轮廓，
+        // 这样生成的多边形仍然是单轮廓，但不会把孔洞区域变成标注区域。
+        OpenPaintMaskHoles(mask);
         OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
             OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
         var paintedObjects = contours
@@ -1522,6 +1526,44 @@ public partial class DatasetAnnotationPage : UserControl
         RefreshAnnotationList(_annotation.Objects.Count - 1);
         RenderAnnotations();
         StatusText.Text = $"画刷已添加 {paintedObjects.Count} 个分割区域；画刷直径 {_brushDiameter:0} 像素。";
+    }
+
+    private static void OpenPaintMaskHoles(OpenCvSharp.Mat mask)
+    {
+        OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours,
+            out OpenCvSharp.HierarchyIndex[] hierarchy,
+            OpenCvSharp.RetrievalModes.CComp, OpenCvSharp.ContourApproximationModes.ApproxSimple);
+        for (var index = 0; index < contours.Length && index < hierarchy.Length; index++)
+        {
+            if (hierarchy[index].Parent < 0 || contours[index].Length == 0) continue;
+            var (holePoint, edgePoint) = FindNearestImageEdge(contours[index], mask.Width, mask.Height);
+            OpenCvSharp.Cv2.Line(mask, holePoint, edgePoint, OpenCvSharp.Scalar.Black,
+                1, OpenCvSharp.LineTypes.Link8);
+        }
+    }
+
+    private static (OpenCvSharp.Point Hole, OpenCvSharp.Point Edge) FindNearestImageEdge(
+        OpenCvSharp.Point[] contour, int width, int height)
+    {
+        var holePoint = contour[0];
+        var edgePoint = new OpenCvSharp.Point(0, holePoint.Y);
+        var bestDistance = double.MaxValue;
+        foreach (var point in contour)
+        {
+            var distances = new[]
+            {
+                (Distance: (double)point.X, Edge: new OpenCvSharp.Point(0, point.Y)),
+                (Distance: (double)(width - 1 - point.X), Edge: new OpenCvSharp.Point(width - 1, point.Y)),
+                (Distance: (double)point.Y, Edge: new OpenCvSharp.Point(point.X, 0)),
+                (Distance: (double)(height - 1 - point.Y), Edge: new OpenCvSharp.Point(point.X, height - 1)),
+            };
+            var nearest = distances.MinBy(item => item.Distance);
+            if (nearest.Distance >= bestDistance) continue;
+            bestDistance = nearest.Distance;
+            holePoint = point;
+            edgePoint = nearest.Edge;
+        }
+        return (holePoint, edgePoint);
     }
 
     private static DatasetAnnotationObject BuildPolygonFromContour(
