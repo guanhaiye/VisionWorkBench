@@ -362,8 +362,9 @@ public partial class CommunicationPage : UserControl
             return;
         if (TriggerRulesList.SelectedItem is not TriggerRuleRow row)
             return;
-        var task = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
-        if (task is null)
+        var ruleTask = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
+        var task = TriggerTaskCombo.SelectedItem as TaskEntity;
+        if (ruleTask is null || task is null)
             return;
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
         var config = new TaskTcpTriggerConfig
@@ -382,7 +383,13 @@ public partial class CommunicationPage : UserControl
             ThemedMessageBox.Show("启用任务触发时，接收消息不能为空", "TCP/IP 设置");
             return;
         }
-        if (config.Enabled && _triggerTasks.Any(other => other.Id != task.Id
+        if (task.Id != ruleTask.Id
+            && TryReadTrigger(task.TriggerJson, _config.ProjectCode) is not null)
+        {
+            ThemedMessageBox.Show("所选检测任务已经存在当前 TCP/IP 项目的规则，请先删除原规则或选择其他任务", "TCP/IP 设置");
+            return;
+        }
+        if (config.Enabled && _triggerTasks.Any(other => other.Id != task.Id && other.Id != ruleTask.Id
             && TryReadTrigger(other.TriggerJson, _config.ProjectCode) is { Enabled: true } existing
             && existing.MatchMode == config.MatchMode
             && string.Equals(existing.MatchValue, config.MatchValue, StringComparison.Ordinal)))
@@ -394,6 +401,11 @@ public partial class CommunicationPage : UserControl
         {
             SetTriggerConfig(task, config);
             await AppServices.Instance.Tasks.SaveAsync(task);
+            if (task.Id != ruleTask.Id)
+            {
+                RemoveTriggerConfig(ruleTask, _config.ProjectCode);
+                await AppServices.Instance.Tasks.SaveAsync(ruleTask);
+            }
             _allTasks = await AppServices.Instance.Tasks.ListAsync();
             RefreshBoundTasks();
             var savedRow = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);
@@ -402,7 +414,7 @@ public partial class CommunicationPage : UserControl
                 TriggerRulesList.SelectedItem = savedRow;
                 LoadTriggerRule(savedRow);
             }
-            StateText.Text = $"已保存任务触发：{task.Name}";
+            StateText.Text = $"已保存任务规则：{config.RuleName}";
         }
         catch (Exception ex)
         {
