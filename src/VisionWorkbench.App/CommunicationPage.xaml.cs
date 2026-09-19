@@ -13,6 +13,7 @@ public partial class CommunicationPage : UserControl
     private List<ProjectCommunicationConfig> _profiles = [];
     private List<TaskEntity> _allTasks = [];
     private List<TaskEntity> _triggerTasks = [];
+    private readonly HashSet<long> _pendingTriggerTaskIds = [];
     private bool _loadingTriggerEditor;
     private sealed record TriggerRuleRow(long TaskId, string DisplayText);
     public CommunicationPage()
@@ -78,10 +79,8 @@ public partial class CommunicationPage : UserControl
 
     private void RefreshBoundTasks()
     {
-        _triggerTasks = _allTasks
-            .Where(task => TryReadTrigger(task.TriggerJson) is { } trigger
-                && string.Equals(trigger.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        _pendingTriggerTaskIds.Clear();
+        _triggerTasks = _allTasks.ToList();
         TriggerTaskCombo.ItemsSource = _triggerTasks;
         TriggerTaskCombo.SelectedIndex = -1;
         RefreshTriggerRules();
@@ -190,7 +189,10 @@ public partial class CommunicationPage : UserControl
         if (row is not null)
             TriggerRulesList.SelectedItem = row;
         else
+        {
+            TriggerRulesList.SelectedItem = null;
             SetTriggerEditorEnabled(false);
+        }
     }
     private void LoadTriggerEditor(TaskEntity task)
     {
@@ -224,12 +226,12 @@ public partial class CommunicationPage : UserControl
     }
     private void NewTaskTrigger_Click(object sender, RoutedEventArgs e)
     {
-        var configuredIds = _triggerTasks.Select(item => item.Id).ToHashSet();
+        var configuredIds = TriggerRulesList.Items.OfType<TriggerRuleRow>()
+            .Select(row => row.TaskId)
+            .ToHashSet();
         var task = _allTasks.FirstOrDefault(item => !configuredIds.Contains(item.Id));
-        if (task is null) { ThemedMessageBox.Show("请先创建检测任务", "TCP/IP 设置"); return; }
-        _triggerTasks.Add(task);
-        TriggerTaskCombo.ItemsSource = null;
-        TriggerTaskCombo.ItemsSource = _triggerTasks;
+        if (task is null) { ThemedMessageBox.Show("所有检测任务都已配置规则", "TCP/IP 设置"); return; }
+        _pendingTriggerTaskIds.Add(task.Id);
         RefreshTriggerRules();
         TriggerRulesList.SelectedItem = null;
         _loadingTriggerEditor = true;
@@ -298,6 +300,9 @@ public partial class CommunicationPage : UserControl
     {
         TriggerRulesList.ItemsSource = _triggerTasks
             .Select(task => (Task: task, Config: TryReadTrigger(task.TriggerJson)))
+            .Where(pair => _pendingTriggerTaskIds.Contains(pair.Task.Id)
+                || (pair.Config is { }
+                    && string.Equals(pair.Config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase)))
             .Select(pair => new TriggerRuleRow(pair.Task.Id,
                 $"{pair.Task.Name}  ·  {pair.Config?.MatchMode ?? MessageMatchMode.ExactText}  ·  {pair.Config?.MatchValue ?? "待保存"}"))
             .ToArray();
