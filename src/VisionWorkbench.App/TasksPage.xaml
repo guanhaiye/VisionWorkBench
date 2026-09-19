@@ -234,13 +234,13 @@
                     <StackPanel>
                         <WrapPanel>
                             <TextBlock Text="X" VerticalAlignment="Center" />
-                            <TextBox x:Name="RoiXText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBox x:Name="RoiXText" Width="56" Text="0" Margin="4,0,12,0" TextChanged="RoiInput_TextChanged" />
                             <TextBlock Text="Y" VerticalAlignment="Center" />
-                            <TextBox x:Name="RoiYText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBox x:Name="RoiYText" Width="56" Text="0" Margin="4,0,12,0" TextChanged="RoiInput_TextChanged" />
                             <TextBlock Text="W" VerticalAlignment="Center" />
-                            <TextBox x:Name="RoiWText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBox x:Name="RoiWText" Width="56" Text="0" Margin="4,0,12,0" TextChanged="RoiInput_TextChanged" />
                             <TextBlock Text="H" VerticalAlignment="Center" />
-                            <TextBox x:Name="RoiHText" Width="56" Text="0" Margin="4,0,12,0" />
+                            <TextBox x:Name="RoiHText" Width="56" Text="0" Margin="4,0,12,0" TextChanged="RoiInput_TextChanged" />
                             <TextBlock Text="边界策略" VerticalAlignment="Center" Margin="12,0,4,0" />
                             <ComboBox x:Name="RoiPolicyCombo" Width="130">
                                 <ComboBoxItem Content="中心点在内" Tag="CenterInside" IsSelected="True" />
@@ -499,7 +499,7 @@
             </StackPanel>
         </ScrollViewer>
 
-        <!-- 测试区：读取单张图片并使用当前选中任务的配置执行一次测试。 -->
+        <!-- 测试区：读取多张图片，逐张使用当前选中任务的配置执行测试。 -->
         <Border Grid.Column="2" Margin="8,0,0,0"
                 Padding="10"
                 Background="{DynamicResource SurfaceBrush}"
@@ -515,6 +515,12 @@
                 <StackPanel Orientation="Horizontal">
                     <Button x:Name="ReadTestImageButton" Content="读取图片"
                             Click="ReadTestImage_Click" Padding="12,5" />
+                    <Button x:Name="TaskTestPreviousButton" Content="上一张"
+                            Click="TaskTestPrevious_Click" Padding="12,5" Margin="8,0,0,0"
+                            IsEnabled="False" />
+                    <Button x:Name="TaskTestNextButton" Content="下一张"
+                            Click="TaskTestNext_Click" Padding="12,5" Margin="8,0,0,0"
+                            IsEnabled="False" />
                     <Button x:Name="RunTaskTestButton" Content="测试"
                             Click="RunTaskTest_Click" Padding="16,5" Margin="8,0,0,0"
                             IsEnabled="False" />
@@ -527,6 +533,14 @@
                           SizeChanged="TaskTestPreviewSurface_SizeChanged">
                         <Image x:Name="TaskTestImage" Stretch="Uniform" />
                         <Canvas x:Name="TaskTestOverlayCanvas" IsHitTestVisible="False" />
+                        <TextBlock x:Name="TaskTestImageIndexText"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Top"
+                                   Margin="8"
+                                   Foreground="White"
+                                   Background="#99000000"
+                                   Padding="8,4"
+                                   Visibility="Collapsed" />
                         <TextBlock x:Name="TaskTestStatusText"
                                    Text="请先读取测试图片"
                                    Foreground="White"

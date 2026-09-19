@@ -40,7 +40,8 @@ public partial class TasksPage : UserControl
     private bool _roiDrawing;
     private Point _roiDragStart;
     private NormalizedRect? _draftRoi;
-    private string? _taskTestImagePath;
+    private readonly List<string> _taskTestImagePaths = [];
+    private int _taskTestImageIndex = -1;
     private AlgorithmOutput? _taskTestOutput;
     private bool _taskTestRunning;
 
@@ -99,8 +100,8 @@ public partial class TasksPage : UserControl
         var dialog = new OpenFileDialog
         {
             Filter = "图像文件|*.jpg;*.jpeg;*.png;*.bmp;*.webp|所有文件|*.*",
-            Multiselect = false,
-            Title = "选择测试图片",
+            Multiselect = true,
+            Title = "选择测试图片（可多选）",
         };
         if (dialog.ShowDialog() != true)
         {
@@ -109,15 +110,20 @@ public partial class TasksPage : UserControl
 
         try
         {
-            var bitmap = LoadTestBitmap(dialog.FileName);
-            _taskTestImagePath = dialog.FileName;
-            _taskTestOutput = null;
-            TaskTestImage.Source = bitmap;
-            TaskTestOverlayCanvas.Children.Clear();
-            TaskTestStatusText.Text = $"已读取：{Path.GetFileName(dialog.FileName)}";
-            TaskTestStatusText.Visibility = Visibility.Visible;
-            TaskTestResultText.Text = "图片已加载，点击“测试”执行当前任务。";
-            UpdateTaskTestAvailability();
+            var paths = dialog.FileNames
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (paths.Length == 0)
+            {
+                ThemedMessageBox.Show("没有读取到有效的图片文件。", "测试区", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            _taskTestImagePaths.Clear();
+            _taskTestImagePaths.AddRange(paths);
+            _taskTestImageIndex = 0;
+            ShowCurrentTaskTestImage("图片已加载，点击“测试”执行当前任务。");
         }
         catch (Exception ex)
         {
@@ -125,9 +131,62 @@ public partial class TasksPage : UserControl
         }
     }
 
+    private void TaskTestPrevious_Click(object sender, RoutedEventArgs e) => MoveTaskTestImage(-1);
+
+    private void TaskTestNext_Click(object sender, RoutedEventArgs e) => MoveTaskTestImage(1);
+
+    private void MoveTaskTestImage(int offset)
+    {
+        if (_taskTestRunning || _taskTestImagePaths.Count == 0)
+        {
+            return;
+        }
+
+        _taskTestImageIndex = (_taskTestImageIndex + offset) % _taskTestImagePaths.Count;
+        if (_taskTestImageIndex < 0)
+        {
+            _taskTestImageIndex += _taskTestImagePaths.Count;
+        }
+
+        try
+        {
+            ShowCurrentTaskTestImage("图片已切换，点击“测试”执行当前任务。");
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show($"读取图片失败：{ex.Message}", "测试区", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private string? CurrentTaskTestImagePath =>
+        _taskTestImageIndex >= 0 && _taskTestImageIndex < _taskTestImagePaths.Count
+            ? _taskTestImagePaths[_taskTestImageIndex]
+            : null;
+
+    private void ShowCurrentTaskTestImage(string message)
+    {
+        var path = CurrentTaskTestImagePath;
+        if (path is null)
+        {
+            ClearTaskTestPreview();
+            return;
+        }
+
+        _taskTestOutput = null;
+        TaskTestImage.Source = LoadTestBitmap(path);
+        TaskTestStatusText.Text = message;
+        TaskTestStatusText.Visibility = Visibility.Visible;
+        TaskTestResultText.Text = $"已读取 {_taskTestImagePaths.Count} 张图片，当前：{Path.GetFileName(path)}。";
+        TaskTestImageIndexText.Text = $"{_taskTestImageIndex + 1} / {_taskTestImagePaths.Count}";
+        TaskTestImageIndexText.Visibility = Visibility.Visible;
+        UpdateTaskTestAvailability();
+        DrawTaskTestOverlay();
+    }
+
     private async void RunTaskTest_Click(object sender, RoutedEventArgs e)
     {
-        if (_taskTestRunning || _editingId is not { } taskId || string.IsNullOrWhiteSpace(_taskTestImagePath))
+        var imagePath = CurrentTaskTestImagePath;
+        if (_taskTestRunning || _editingId is not { } taskId || string.IsNullOrWhiteSpace(imagePath))
         {
             return;
         }
@@ -183,7 +242,7 @@ public partial class TasksPage : UserControl
             var rawOutput = await session.SubmitAsync(new AlgorithmInput
             {
                 InputId = $"task-test-{taskId}-{Guid.NewGuid():N}",
-                ImagePath = _taskTestImagePath,
+                ImagePath = imagePath,
                 FrameSequence = 1,
                 CapturedAt = started,
                 Roi = recipe.Roi,
@@ -217,15 +276,26 @@ public partial class TasksPage : UserControl
 
     private void TaskTestPreviewSurface_SizeChanged(object sender, SizeChangedEventArgs e) => DrawTaskTestOverlay();
 
+    private void RoiInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (TaskTestImage?.Source is not null)
+        {
+            DrawTaskTestOverlay();
+        }
+    }
+
     private void UpdateTaskTestAvailability()
     {
-        if (RunTaskTestButton is null)
+        if (RunTaskTestButton is null || TaskTestPreviousButton is null || TaskTestNextButton is null)
         {
             return;
         }
+        var hasImage = CurrentTaskTestImagePath is not null;
         RunTaskTestButton.IsEnabled = !_taskTestRunning
             && _editingId is not null
-            && !string.IsNullOrWhiteSpace(_taskTestImagePath);
+            && hasImage;
+        TaskTestPreviousButton.IsEnabled = !_taskTestRunning && _taskTestImagePaths.Count > 1;
+        TaskTestNextButton.IsEnabled = !_taskTestRunning && _taskTestImagePaths.Count > 1;
     }
 
     private bool TryReadCurrentRoi(out NormalizedRect? roi, out string? error)
@@ -273,10 +343,13 @@ public partial class TasksPage : UserControl
 
     private void ClearTaskTestPreview()
     {
-        _taskTestImagePath = null;
+        _taskTestImagePaths.Clear();
+        _taskTestImageIndex = -1;
         _taskTestOutput = null;
         TaskTestImage.Source = null;
         TaskTestOverlayCanvas.Children.Clear();
+        TaskTestImageIndexText.Text = "";
+        TaskTestImageIndexText.Visibility = Visibility.Collapsed;
         TaskTestStatusText.Text = "请先读取测试图片";
         TaskTestStatusText.Visibility = Visibility.Visible;
         TaskTestResultText.Text = "未执行测试";
@@ -297,7 +370,7 @@ public partial class TasksPage : UserControl
     private void DrawTaskTestOverlay()
     {
         TaskTestOverlayCanvas.Children.Clear();
-        if (_taskTestOutput is not { } output || TaskTestImage.Source is null)
+        if (TaskTestImage.Source is null)
         {
             return;
         }
@@ -316,6 +389,29 @@ public partial class TasksPage : UserControl
         var drawHeight = sourceHeight * scale;
         var offsetX = (canvasWidth - drawWidth) / 2;
         var offsetY = (canvasHeight - drawHeight) / 2;
+
+        // 测试区始终显示当前任务 ROI；没有执行测试时也能先确认框选范围。
+        if (TryReadCurrentRoi(out var roi, out _) && roi is { } appliedRoi)
+        {
+            var roiRectangle = new Rectangle
+            {
+                Width = Math.Max(1, appliedRoi.Width * drawWidth),
+                Height = Math.Max(1, appliedRoi.Height * drawHeight),
+                Stroke = Brushes.DodgerBlue,
+                StrokeThickness = 2,
+                StrokeDashArray = [7, 4],
+                Fill = new SolidColorBrush(Color.FromArgb(36, 30, 144, 255)),
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(roiRectangle, offsetX + appliedRoi.X * drawWidth);
+            Canvas.SetTop(roiRectangle, offsetY + appliedRoi.Y * drawHeight);
+            TaskTestOverlayCanvas.Children.Add(roiRectangle);
+        }
+
+        if (_taskTestOutput is not { } output)
+        {
+            return;
+        }
 
         foreach (var segmentation in output.Segmentations)
         {
