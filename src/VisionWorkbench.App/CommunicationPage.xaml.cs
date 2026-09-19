@@ -198,7 +198,7 @@ public partial class CommunicationPage : UserControl
     {
         if (TriggerTaskCombo.SelectedItem is not TaskEntity task)
         {
-            ThemedMessageBox.Show("请先选择检测任务", "TCP/IP 设置");
+            Save_Click(sender, e);
             return;
         }
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
