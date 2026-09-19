@@ -55,7 +55,10 @@
                     </StackPanel>
                 </GroupBox>
             </Grid>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="0,0,12,0">
+            <ScrollViewer x:Name="CommunicationSettingsScrollViewer" Grid.Column="1"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          CanContentScroll="False" PreviewMouseWheel="CommunicationSettingsScrollViewer_PreviewMouseWheel"
+                          Margin="0,0,12,0">
                 <StackPanel>
                     <GroupBox Header="项目通讯">
                         <StackPanel Margin="8">

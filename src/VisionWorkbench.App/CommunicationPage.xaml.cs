@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Persistence;
 
@@ -180,6 +182,48 @@ public partial class CommunicationPage : UserControl
     private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
     private async void Send_Click(object sender, RoutedEventArgs e)
     { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
+    private void CommunicationSettingsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is not ScrollViewer outer || e.Delta == 0)
+            return;
+
+        var inner = FindNearestScrollViewer(e.OriginalSource as DependencyObject);
+        if (inner is not null && !ReferenceEquals(inner, outer) && inner.ScrollableHeight > 0)
+        {
+            var canScrollInner = e.Delta > 0
+                ? inner.VerticalOffset > 0
+                : inner.VerticalOffset < inner.ScrollableHeight;
+            if (canScrollInner)
+            {
+                inner.ScrollToVerticalOffset(Math.Clamp(
+                    inner.VerticalOffset - e.Delta * 0.75,
+                    0,
+                    inner.ScrollableHeight));
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (outer.ScrollableHeight <= 0)
+            return;
+
+        outer.ScrollToVerticalOffset(Math.Clamp(
+            outer.VerticalOffset - e.Delta * 0.75,
+            0,
+            outer.ScrollableHeight));
+        e.Handled = true;
+    }
+    private static ScrollViewer? FindNearestScrollViewer(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is ScrollViewer scrollViewer)
+                return scrollViewer;
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return null;
+    }
     private void Mode_Changed(object sender, SelectionChangedEventArgs e) => UpdateModeVisibility();
     private void TriggerTask_Changed(object sender, SelectionChangedEventArgs e)
     {
