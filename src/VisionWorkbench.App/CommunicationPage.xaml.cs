@@ -54,6 +54,12 @@ public partial class CommunicationPage : UserControl
     {
         if (_profiles.Count == 0)
             await LoadProjectsAsync();
+        if (_runningProjectCode is null
+            && AppServices.Instance.TcpCommunication.State != TcpRuntimeState.Stopped)
+        {
+            _runningProjectCode = _config.ProjectCode;
+            RefreshProjectStatuses();
+        }
     }
 
     private void CommunicationPage_Unloaded(object sender, RoutedEventArgs e)
@@ -156,12 +162,12 @@ public partial class CommunicationPage : UserControl
     {
         ProjectNameText.Text = _config.Name;
         EnabledCheck.IsChecked = _config.Enabled; SelectTag(ModeCombo, _config.WorkMode.ToString()); SelectTag(FrameCombo, _config.FrameMode.ToString()); SelectText(EncodingCombo, _config.Encoding);
-        ListenAddressText.Text = _config.ListenAddress; ListenPortText.Text = _config.ListenPort.ToString(); RemoteAddressText.Text = _config.RemoteAddress; RemotePortText.Text = _config.RemotePort.ToString(); MaxConnectionsText.Text = _config.MaxConnections.ToString(); TerminatorText.Text = _config.MessageTerminator; MaxMessageText.Text = _config.MaxMessageBytes.ToString(); ReceiveTimeoutText.Text = _config.ReceiveTimeoutMs.ToString(); AutoReconnectCheck.IsChecked = _config.AutoReconnect; UpdateModeVisibility();
+        ListenAddressText.Text = _config.ListenAddress; ListenPortText.Text = _config.ListenPort.ToString(); RemoteAddressText.Text = _config.RemoteAddress; RemotePortText.Text = _config.RemotePort.ToString(); MaxConnectionsText.Text = _config.MaxConnections.ToString(); TerminatorText.Text = _config.MessageTerminator; MaxMessageText.Text = _config.MaxMessageBytes.ToString(); ReceiveTimeoutText.Text = _config.ReceiveTimeoutMs.ToString(); AutoReconnectCheck.IsChecked = _config.AutoReconnect; AutoStartCheck.IsChecked = _config.AutoStart; UpdateModeVisibility();
     }
     private void ReadControls()
     {
         _config.Name = string.IsNullOrWhiteSpace(ProjectNameText.Text) ? _config.ProjectCode : ProjectNameText.Text.Trim();
-        _config.Enabled = EnabledCheck.IsChecked == true; _config.WorkMode = Enum.Parse<TcpWorkMode>((ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Disabled"); _config.FrameMode = Enum.Parse<TcpFrameMode>((FrameCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Line"); _config.Encoding = (EncodingCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "utf-8"; _config.ListenAddress = ListenAddressText.Text.Trim(); _config.ListenPort = ParsePort(ListenPortText.Text, 5000); _config.RemoteAddress = RemoteAddressText.Text.Trim(); _config.RemotePort = ParsePort(RemotePortText.Text, 5000); _config.MaxConnections = Math.Clamp(ParseInt(MaxConnectionsText.Text, 10), 1, 100); _config.MessageTerminator = TerminatorText.Text; _config.MaxMessageBytes = Math.Clamp(ParseInt(MaxMessageText.Text, 1024 * 1024), 1024, 16 * 1024 * 1024); _config.ReceiveTimeoutMs = Math.Clamp(ParseInt(ReceiveTimeoutText.Text, 30000), 1000, 300000); _config.AutoReconnect = AutoReconnectCheck.IsChecked == true;
+        _config.Enabled = EnabledCheck.IsChecked == true; _config.WorkMode = Enum.Parse<TcpWorkMode>((ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Disabled"); _config.FrameMode = Enum.Parse<TcpFrameMode>((FrameCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Line"); _config.Encoding = (EncodingCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "utf-8"; _config.ListenAddress = ListenAddressText.Text.Trim(); _config.ListenPort = ParsePort(ListenPortText.Text, 5000); _config.RemoteAddress = RemoteAddressText.Text.Trim(); _config.RemotePort = ParsePort(RemotePortText.Text, 5000); _config.MaxConnections = Math.Clamp(ParseInt(MaxConnectionsText.Text, 10), 1, 100); _config.MessageTerminator = TerminatorText.Text; _config.MaxMessageBytes = Math.Clamp(ParseInt(MaxMessageText.Text, 1024 * 1024), 1024, 16 * 1024 * 1024); _config.ReceiveTimeoutMs = Math.Clamp(ParseInt(ReceiveTimeoutText.Text, 30000), 1000, 300000); _config.AutoReconnect = AutoReconnectCheck.IsChecked == true; _config.AutoStart = AutoStartCheck.IsChecked == true;
     }
     private void NewProject_Click(object sender, RoutedEventArgs e)
     {

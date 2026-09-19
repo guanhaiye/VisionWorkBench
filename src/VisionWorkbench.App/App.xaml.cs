@@ -118,6 +118,7 @@ public partial class App : System.Windows.Application
                 SetForegroundWindow(shellHandle);
             }
             splash?.Close();
+            await StartConfiguredTcpCommunicationAsync();
         }
         catch (Exception ex)
         {
@@ -143,13 +144,17 @@ public partial class App : System.Windows.Application
         e.SetObserved();
     }
 
-    private static void StartConfiguredTcpCommunication()
+    private static async Task StartConfiguredTcpCommunicationAsync()
     {
         try
         {
             var profiles = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory).Load();
-            var config = profiles.FirstOrDefault(x => x.Enabled && x.AutoStart);
-            if (config is not null) _ = AppServices.Instance.TcpCommunication.StartAsync(config);
+            var preferredCode = AppServices.Instance.Settings.LastTcpProjectCode;
+            var config = profiles.FirstOrDefault(x => x.Enabled && x.AutoStart
+                && string.Equals(x.ProjectCode, preferredCode, StringComparison.OrdinalIgnoreCase))
+                ?? profiles.FirstOrDefault(x => x.Enabled && x.AutoStart);
+            if (config is not null)
+                await AppServices.Instance.TcpCommunication.StartAsync(config);
         }
         catch (Exception ex)
         {
