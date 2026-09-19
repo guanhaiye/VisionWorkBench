@@ -132,7 +132,7 @@
                         <ComboBoxItem Content="仅输出分割轮廓" Tag="contours" />
                         <ComboBoxItem Content="框和轮廓都输出" Tag="both" />
                     </ComboBox>
-                    <Button x:Name="ManualDrawButton" Content="手动绘制" Click="ManualDraw_Click" Margin="8,0,0,0" Visibility="Collapsed" />
+                    <Button x:Name="ManualDrawButton" Content="外轮廓绘制" Click="ManualDraw_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="BrushButton" Content="画刷" Click="Brush_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="EraserButton" Content="橡皮擦" Click="Eraser_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="Sam1Button" Content="智能标注" Click="Sam1ClickMode_Click" Margin="8,0,0,0" Visibility="Collapsed" />

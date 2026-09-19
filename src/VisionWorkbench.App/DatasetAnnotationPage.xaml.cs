@@ -1952,7 +1952,7 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void UpdateToolButtons()
     {
-        ManualDrawButton.Content = "手动绘制";
+        ManualDrawButton.Content = "外轮廓绘制";
         BrushButton.Content = "画刷";
         EraserButton.Content = "橡皮擦";
     }
