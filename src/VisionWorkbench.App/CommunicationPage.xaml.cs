@@ -245,7 +245,10 @@ public partial class CommunicationPage : UserControl
         if (TriggerTaskCombo.SelectedItem is not TaskEntity task) return;
         var row = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);
         if (row is not null)
+        {
             TriggerRulesList.SelectedItem = row;
+            LoadTriggerEditor(task);
+        }
         else
         {
             SetTriggerEditorEnabled(false);
