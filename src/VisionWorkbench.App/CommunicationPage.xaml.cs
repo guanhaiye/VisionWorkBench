@@ -359,10 +359,12 @@ public partial class CommunicationPage : UserControl
     {
         if (!TrySaveProjectParameters(refreshSelectors: false))
             return;
-        if (TriggerTaskCombo.SelectedItem is not TaskEntity task)
-        {
+        if (TriggerRulesList.SelectedItem is not TriggerRuleRow row)
             return;
-        }
+        var task = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
+        if (task is null)
+            return;
+        var originalName = task.Name;
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
         var config = new TaskTcpTriggerConfig
         {
@@ -385,14 +387,23 @@ public partial class CommunicationPage : UserControl
             ThemedMessageBox.Show("该触发消息已被其他任务使用，请为每个任务配置唯一消息", "TCP/IP 设置");
             return;
         }
-        task.Name = string.IsNullOrWhiteSpace(TaskNameText.Text) ? task.Name : TaskNameText.Text.Trim();
-        SetTriggerConfig(task, config);
-        await AppServices.Instance.Tasks.SaveAsync(task);
-        _allTasks = await AppServices.Instance.Tasks.ListAsync();
-        RefreshBoundTasks();
-        var savedRow = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(row => row.TaskId == task.Id);
-        if (savedRow is not null) TriggerRulesList.SelectedItem = savedRow;
-        StateText.Text = $"已保存任务触发：{task.Name}";
+        try
+        {
+            task.Name = string.IsNullOrWhiteSpace(TaskNameText.Text) ? task.Name : TaskNameText.Text.Trim();
+            SetTriggerConfig(task, config);
+            await AppServices.Instance.Tasks.SaveAsync(task);
+            _allTasks = await AppServices.Instance.Tasks.ListAsync();
+            RefreshBoundTasks();
+            var savedRow = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);
+            if (savedRow is not null) TriggerRulesList.SelectedItem = savedRow;
+            StateText.Text = $"已保存任务触发：{task.Name}";
+        }
+        catch (Exception ex)
+        {
+            task.Name = originalName;
+            SetTriggerEditorEnabled(true);
+            ThemedMessageBox.Show(ex.Message, "保存任务规则失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
     private void RefreshTriggerRules()
     {
