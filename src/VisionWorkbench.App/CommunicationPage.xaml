@@ -99,9 +99,9 @@
                             </StackPanel>
                             <Separator Margin="0,8"/>
                             <TextBlock Text="检测任务"/>
-                        <ListBox x:Name="TriggerTaskCombo" IsHitTestVisible="False" Focusable="False" MinHeight="44" MaxHeight="120"
+                        <ComboBox x:Name="TriggerTaskCombo" MinHeight="44" MaxHeight="120"
                                   SelectionChanged="TriggerTask_Changed">
-                                <ListBox.ItemTemplate>
+                                <ComboBox.ItemTemplate>
                                     <DataTemplate>
                                         <TextBlock>
                                             <Run Text="[" />
@@ -110,8 +110,8 @@
                                             <Run Text="{Binding Name}" />
                                         </TextBlock>
                                     </DataTemplate>
-                                </ListBox.ItemTemplate>
-                             </ListBox>
+                                </ComboBox.ItemTemplate>
+                             </ComboBox>
                             <CheckBox x:Name="TriggerEnabledCheck" Content="启用 TCP/IP 消息触发任务" Margin="0,8,0,0"/>
                             <TextBlock Text="匹配方式" Margin="0,8,0,0"/>
                             <ComboBox x:Name="TriggerMatchModeCombo">
