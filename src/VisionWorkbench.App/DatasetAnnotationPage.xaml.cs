@@ -1522,10 +1522,50 @@ public partial class DatasetAnnotationPage : UserControl
             paintedObject.ClassName = className;
 
         _annotation.Objects.AddRange(paintedObjects);
+        MergeSameClassPolygons(className, rasterWidth, rasterHeight);
         _brushChanged = true;
         RefreshAnnotationList(_annotation.Objects.Count - 1);
         RenderAnnotations();
         StatusText.Text = $"画刷已添加 {paintedObjects.Count} 个分割区域；画刷直径 {_brushDiameter:0} 像素。";
+    }
+
+    private void MergeSameClassPolygons(string className, int rasterWidth, int rasterHeight)
+    {
+        if (_annotation is null) return;
+        var matchingObjects = _annotation.Objects
+            .Where(item => item.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase)
+                && item.Polygon.Count >= 3
+                && item.ClassName.Equals(className, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (matchingObjects.Count < 2) return;
+
+        using var mask = new OpenCvSharp.Mat(rasterHeight, rasterWidth,
+            OpenCvSharp.MatType.CV_8UC1, OpenCvSharp.Scalar.Black);
+        foreach (var source in matchingObjects)
+        {
+            var polygon = source.Polygon.Select(point => new OpenCvSharp.Point(
+                Math.Clamp((int)Math.Round(point.X * (rasterWidth - 1)), 0, rasterWidth - 1),
+                Math.Clamp((int)Math.Round(point.Y * (rasterHeight - 1)), 0, rasterHeight - 1))).ToArray();
+            OpenCvSharp.Cv2.FillPoly(mask, [polygon], OpenCvSharp.Scalar.White);
+        }
+
+        OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
+            OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
+        var mergedObjects = contours
+            .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
+            .Select(contour => BuildPolygonFromContour(className, contour, rasterWidth, rasterHeight))
+            .ToList();
+        if (mergedObjects.Count >= matchingObjects.Count) return;
+
+        var firstIndex = _annotation.Objects.IndexOf(matchingObjects[0]);
+        foreach (var index in matchingObjects
+                     .Select(item => _annotation.Objects.IndexOf(item))
+                     .Where(index => index >= 0)
+                     .OrderByDescending(index => index))
+        {
+            _annotation.Objects.RemoveAt(index);
+        }
+        _annotation.Objects.InsertRange(firstIndex, mergedObjects);
     }
 
     private static void OpenPaintMaskHoles(OpenCvSharp.Mat mask)
