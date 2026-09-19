@@ -71,7 +71,7 @@
                             </StackPanel>
                             <Separator Margin="0,8"/>
                             <TextBlock Text="检测任务"/>
-                        <ComboBox x:Name="TriggerTaskCombo"
+                        <ComboBox x:Name="TriggerTaskCombo" IsHitTestVisible="False" Focusable="False"
                                   SelectionChanged="TriggerTask_Changed">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>

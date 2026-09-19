@@ -13,6 +13,7 @@ public partial class CommunicationPage : UserControl
     private readonly string _configFile;
     private ProjectCommunicationConfig _config = new();
     private List<ProjectCommunicationConfig> _profiles = [];
+    private List<TaskEntity> _allTasks = [];
     private List<TaskEntity> _triggerTasks = [];
     private bool _loadingTriggerEditor;
     private sealed record TriggerRuleRow(long TaskId, string DisplayText);
@@ -47,10 +48,8 @@ public partial class CommunicationPage : UserControl
         _profiles = _profileStore.Load();
         ProjectCombo.ItemsSource = _profiles;
         if (_profiles.Count > 0) ProjectCombo.SelectedIndex = 0;
-        _triggerTasks = await AppServices.Instance.Tasks.ListAsync();
-        TriggerTaskCombo.ItemsSource = _triggerTasks;
-        RefreshTriggerRules();
-        if (_triggerTasks.Count > 0) TriggerTaskCombo.SelectedIndex = 0;
+        _allTasks = await AppServices.Instance.Tasks.ListAsync();
+        RefreshBoundTasks();
     }
     private void Project_Changed(object sender, SelectionChangedEventArgs e) => LoadConfig();
     private void Load_Click(object sender, RoutedEventArgs e) => LoadConfig();
@@ -62,6 +61,19 @@ public partial class CommunicationPage : UserControl
             ?? TcpCommunicationProfileStore.CreateDefault();
         _config.ProjectCode = code;
         FillControls();
+        RefreshBoundTasks();
+    }
+
+    private void RefreshBoundTasks()
+    {
+        _triggerTasks = _allTasks
+            .Where(task => TryReadTrigger(task.TriggerJson) is { } trigger
+                && !string.IsNullOrWhiteSpace(trigger.TcpProjectCode)
+                && string.Equals(trigger.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        TriggerTaskCombo.ItemsSource = _triggerTasks;
+        TriggerTaskCombo.SelectedIndex = _triggerTasks.Count > 0 ? 0 : -1;
+        RefreshTriggerRules();
     }
     private void FillControls()
     {
@@ -160,7 +172,7 @@ public partial class CommunicationPage : UserControl
         var task = _triggerTasks.First(item => item.Id == row.TaskId);
         task.TriggerJson = null;
         await AppServices.Instance.Tasks.SaveAsync(task);
-        RefreshTriggerRules();
+        RefreshBoundTasks();
         StateText.Text = $"已删除任务规则：{task.Name}";
     }
     private async void SaveTaskTrigger_Click(object sender, RoutedEventArgs e)
