@@ -179,6 +179,21 @@ public sealed class DomainTests
     // ---- CNT-S-010 计数累计与纠错 ----
 
     [Fact]
+    public void Roi_Output_Filters_Detections_And_Updates_Count()
+    {
+        var output = Output(("obj", 0.10, 0.5, 0.9), ("obj", 0.60, 0.5, 0.9)) with
+        {
+            Metrics = [new MetricResult { Name = "count", Value = 2 }],
+        };
+        var roi = new NormalizedRect { X = 0.0, Y = 0.0, Width = 0.3, Height = 1.0 };
+
+        var filtered = RoiFilter.ApplyToOutput(output, roi, RoiBoundaryPolicy.CenterInside);
+
+        Assert.Single(filtered.Detections);
+        Assert.Equal(1, filtered.GetCount());
+    }
+
+    [Fact]
     public void DefectSeverityThreshold_Fails_When_Area_Or_Severity_Exceeds()
     {
         var output = new AlgorithmOutput

@@ -230,12 +230,12 @@ class Yolo11Engine:
     ) -> dict[str, Any]:
         image = _read_image(image_path)
         full_height, full_width = image.shape[:2]
-        roi_bounds = _roi_pixel_bounds(roi, full_width, full_height)
+        # ROI 是宿主侧的业务过滤区域，不在这里裁剪输入图像。
+        # 直接裁剪会破坏目标在完整画面中的上下文；对于本项目的训练模型，
+        # 小 ROI 裁剪后即使原图能检出目标，也可能得到 0 个结果。
+        # 宿主会在完整推理后按 RoiBoundaryPolicy 过滤检测框。
         inference_image = image
-        if roi_bounds is not None:
-            left, top, right, bottom = roi_bounds
-            inference_image = image[top:bottom, left:right]
-        height, width = inference_image.shape[:2]
+        height, width = full_height, full_width
         started = time.perf_counter()
         if self.settings.tracking:
             results = self.model.track(
@@ -254,8 +254,6 @@ class Yolo11Engine:
         output = self._build_output(result, width, height, image_path, sequence)
         output["imageWidth"] = width
         output["imageHeight"] = height
-        if roi_bounds is not None:
-            _restore_output_coordinates(output, roi_bounds, full_width, full_height)
         total_ms = (time.perf_counter() - started) * 1000.0
         output["performance"] = {
             "inferenceMs": round(total_ms, 2),

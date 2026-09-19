@@ -61,6 +61,7 @@ public sealed class ReInferenceService(
             Roi = recipe.Roi,
         }, cancellationToken);
         var decision = RuleEngine.Evaluate(output, recipe.Rules, recipe.Roi, recipe.RoiPolicy);
+        output = RoiFilter.ApplyToOutput(output, recipe.Roi, recipe.RoiPolicy);
         var result = new InspectionRecordEntity
         {
             ProjectId = source.ProjectId,

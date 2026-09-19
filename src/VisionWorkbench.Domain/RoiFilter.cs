@@ -27,4 +27,43 @@ public static class RoiFilter
             _ => true,
         }).ToArray();
     }
+
+    /// <summary>
+    /// 在完整图像推理后应用 ROI，保持检测框坐标仍对应原图。
+    /// ROI 不应直接裁剪模型输入，否则小区域可能丢失模型所需的上下文。
+    /// </summary>
+    public static AlgorithmOutput ApplyToOutput(
+        AlgorithmOutput output,
+        NormalizedRect? roi,
+        RoiBoundaryPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (roi is null)
+        {
+            return output;
+        }
+
+        var detections = Apply(output.Detections, roi, policy);
+        var countMetricFound = false;
+        var metrics = output.Metrics.Select(metric =>
+        {
+            if (!string.Equals(metric.Name, "count", StringComparison.OrdinalIgnoreCase))
+            {
+                return metric;
+            }
+
+            countMetricFound = true;
+            return metric with { Value = detections.Count };
+        }).ToList();
+        if (!countMetricFound)
+        {
+            metrics.Add(new MetricResult { Name = "count", Value = detections.Count });
+        }
+
+        return output with
+        {
+            Detections = detections,
+            Metrics = metrics,
+        };
+    }
 }

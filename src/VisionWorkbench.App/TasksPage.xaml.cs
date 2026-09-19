@@ -180,7 +180,7 @@ public partial class TasksPage : UserControl
             }, CancellationToken.None);
 
             var started = DateTimeOffset.UtcNow;
-            var output = await session.SubmitAsync(new AlgorithmInput
+            var rawOutput = await session.SubmitAsync(new AlgorithmInput
             {
                 InputId = $"task-test-{taskId}-{Guid.NewGuid():N}",
                 ImagePath = _taskTestImagePath,
@@ -188,7 +188,8 @@ public partial class TasksPage : UserControl
                 CapturedAt = started,
                 Roi = recipe.Roi,
             }, CancellationToken.None);
-            var decision = RuleEngine.Evaluate(output, recipe.Rules, recipe.Roi, recipe.RoiPolicy);
+            var decision = RuleEngine.Evaluate(rawOutput, recipe.Rules, recipe.Roi, recipe.RoiPolicy);
+            var output = RoiFilter.ApplyToOutput(rawOutput, recipe.Roi, recipe.RoiPolicy);
             _taskTestOutput = output with { Decision = decision };
             TaskTestStatusText.Visibility = Visibility.Collapsed;
             var roiSummary = recipe.Roi is { } appliedRoi

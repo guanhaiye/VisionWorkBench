@@ -1059,6 +1059,8 @@ public sealed class DetectionRunService : IAsyncDisposable
                 output = postProcess.Output;
                 decision = postProcess.Decision;
             }
+            // 算法在完整画面上推理，ROI 在宿主侧按边界策略过滤，避免小区域裁剪导致漏检。
+            output = RoiFilter.ApplyToOutput(output, activeRecipe.Roi, activeRecipe.RoiPolicy);
             var sopResult = ApplySopEvents(output);
             var sopSnapshot = sopResult.Snapshot;
             var sopRunId = sopResult.RunId;
