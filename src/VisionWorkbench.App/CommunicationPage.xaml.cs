@@ -395,7 +395,11 @@ public partial class CommunicationPage : UserControl
             _allTasks = await AppServices.Instance.Tasks.ListAsync();
             RefreshBoundTasks();
             var savedRow = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);
-            if (savedRow is not null) TriggerRulesList.SelectedItem = savedRow;
+            if (savedRow is not null)
+            {
+                TriggerRulesList.SelectedItem = savedRow;
+                LoadTriggerRule(savedRow);
+            }
             StateText.Text = $"已保存任务触发：{task.Name}";
         }
         catch (Exception ex)
