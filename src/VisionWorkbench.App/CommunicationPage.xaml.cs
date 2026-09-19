@@ -277,7 +277,7 @@ public partial class CommunicationPage : UserControl
         TaskTcpTriggerConfig config;
         config = TryReadTrigger(task.TriggerJson, _config.ProjectCode) ?? new TaskTcpTriggerConfig();
         TriggerEnabledCheck.IsChecked = config.Enabled;
-        TaskNameText.Text = task.Name;
+        TaskNameText.Text = GetTriggerRuleName(task, config);
         SelectTag(TriggerMatchModeCombo, config.MatchMode.ToString());
         TriggerMatchValueText.Text = config.MatchValue;
         TriggerResponseTemplateText.Text = config.ResponseTemplate;
@@ -320,6 +320,7 @@ public partial class CommunicationPage : UserControl
         {
             Enabled = true,
             TcpProjectCode = _config.ProjectCode,
+            RuleName = GetDefaultTriggerRuleName(task),
             MatchMode = MessageMatchMode.ExactText,
             MatchValue = $"START_{task.StationCode}",
         };
@@ -343,7 +344,7 @@ public partial class CommunicationPage : UserControl
         TriggerMatchModeCombo.SelectedIndex = 0;
         TriggerMatchValueText.Text = $"START_{task.StationCode}";
         TriggerResponseTemplateText.Text = defaultConfig.ResponseTemplate;
-        TaskNameText.Text = task.Name;
+        TaskNameText.Text = defaultConfig.RuleName;
         SetTriggerEditorEnabled(true);
     }
     private async void DeleteTaskTrigger_Click(object sender, RoutedEventArgs e)
@@ -364,12 +365,14 @@ public partial class CommunicationPage : UserControl
         var task = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
         if (task is null)
             return;
-        var originalName = task.Name;
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
         var config = new TaskTcpTriggerConfig
         {
             Enabled = TriggerEnabledCheck.IsChecked == true,
             TcpProjectCode = _config.ProjectCode,
+            RuleName = string.IsNullOrWhiteSpace(TaskNameText.Text)
+                ? GetDefaultTriggerRuleName(task)
+                : TaskNameText.Text.Trim(),
             MatchMode = Enum.Parse<MessageMatchMode>(modeText),
             MatchValue = TriggerMatchValueText.Text,
             ResponseTemplate = TriggerResponseTemplateText.Text,
@@ -389,7 +392,6 @@ public partial class CommunicationPage : UserControl
         }
         try
         {
-            task.Name = string.IsNullOrWhiteSpace(TaskNameText.Text) ? task.Name : TaskNameText.Text.Trim();
             SetTriggerConfig(task, config);
             await AppServices.Instance.Tasks.SaveAsync(task);
             _allTasks = await AppServices.Instance.Tasks.ListAsync();
@@ -404,7 +406,6 @@ public partial class CommunicationPage : UserControl
         }
         catch (Exception ex)
         {
-            task.Name = originalName;
             SetTriggerEditorEnabled(true);
             ThemedMessageBox.Show(ex.Message, "保存任务规则失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -417,8 +418,18 @@ public partial class CommunicationPage : UserControl
                 || (pair.Config is { }
                     && string.Equals(pair.Config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase)))
             .Select(pair => new TriggerRuleRow(pair.Task.Id,
-                $"{pair.Task.Name}  ·  {pair.Config?.MatchMode ?? MessageMatchMode.ExactText}  ·  {pair.Config?.MatchValue ?? "待保存"}"))
+                $"{GetTriggerRuleName(pair.Task, pair.Config)}  ·  {pair.Config?.MatchMode ?? MessageMatchMode.ExactText}  ·  {pair.Config?.MatchValue ?? "待保存"}"))
             .ToArray();
+    }
+    private string GetTriggerRuleName(TaskEntity task, TaskTcpTriggerConfig? config)
+    {
+        return string.IsNullOrWhiteSpace(config?.RuleName)
+            ? GetDefaultTriggerRuleName(task)
+            : config.RuleName.Trim();
+    }
+    private string GetDefaultTriggerRuleName(TaskEntity task)
+    {
+        return string.IsNullOrWhiteSpace(_config.Name) ? task.Name : _config.Name.Trim();
     }
     private static TaskTcpTriggerConfig? TryReadTrigger(string? json, string? projectCode = null)
     {

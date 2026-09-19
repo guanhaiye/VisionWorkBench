@@ -23,6 +23,7 @@ public enum OfflineResponsePolicy { Drop, KeepLatest, StoreAndRetry }
 public sealed class TaskTcpTriggerConfig
 {
     public bool Enabled { get; set; }
+    public string? RuleName { get; set; }
     /// <summary>TCP/IP 项目（配置档案）编码。为空时兼容旧任务并使用默认项目。</summary>
     public string? TcpProjectCode { get; set; }
     public MessageMatchMode MatchMode { get; set; } = MessageMatchMode.ExactText;
