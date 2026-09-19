@@ -27,8 +27,22 @@ public partial class CommunicationPage : UserControl
         _profileStore = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory);
         AppServices.Instance.TcpCommunication.LogReceived += Tcp_LogReceived;
         AppServices.Instance.TcpCommunication.StateChanged += Tcp_StateChanged;
-        Loaded += async (_, _) => await LoadProjectsAsync();
-        Unloaded += (_, _) => { AppServices.Instance.TcpCommunication.LogReceived -= Tcp_LogReceived; AppServices.Instance.TcpCommunication.StateChanged -= Tcp_StateChanged; };
+        Loaded += CommunicationPage_Loaded;
+        Unloaded += CommunicationPage_Unloaded;
+    }
+
+    private async void CommunicationPage_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (_profiles.Count == 0)
+            await LoadProjectsAsync();
+    }
+
+    private void CommunicationPage_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (_profiles.Count > 0)
+            TrySaveProjectParameters(refreshSelectors: false);
+        AppServices.Instance.TcpCommunication.LogReceived -= Tcp_LogReceived;
+        AppServices.Instance.TcpCommunication.StateChanged -= Tcp_StateChanged;
     }
 
     private void MoveStateToBottomRight()
@@ -178,7 +192,7 @@ public partial class CommunicationPage : UserControl
         ProjectCombo.SelectedItem = selected;
         ProjectList.SelectedItem = selected;
     }
-    private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式" : "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
+    private async void Start_Click(object sender, RoutedEventArgs e) { try { if (!TrySaveProjectParameters(refreshSelectors: false)) return; await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式" : "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
     private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
     private async void Send_Click(object sender, RoutedEventArgs e)
     { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
