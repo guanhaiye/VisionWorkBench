@@ -190,7 +190,6 @@ public partial class CommunicationPage : UserControl
             TriggerRulesList.SelectedItem = row;
         else
         {
-            TriggerRulesList.SelectedItem = null;
             SetTriggerEditorEnabled(false);
         }
     }
