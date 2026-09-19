@@ -112,6 +112,8 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                              </ComboBox>
+                            <TextBlock Text="任务名称" Margin="0,8,0,0"/>
+                            <TextBox x:Name="TaskNameText" MinHeight="40"/>
                             <CheckBox x:Name="TriggerEnabledCheck" Content="启用 TCP/IP 消息触发任务" Margin="0,8,0,0"/>
                             <TextBlock Text="匹配方式" Margin="0,8,0,0"/>
                             <ComboBox x:Name="TriggerMatchModeCombo">
@@ -124,7 +126,7 @@
                             <TextBlock Text="完成后返回模板" Margin="0,8,0,0"/>
                             <TextBox x:Name="TriggerResponseTemplateText" AcceptsReturn="True" MinHeight="90" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
                             <TextBlock Text="变量：{requestId} {task} {taskCode} {status} {decision} {count} {recordId}" TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"/>
-                            <Button Content="保存规则/参数" Click="SaveTaskTrigger_Click" Margin="0,8,0,0"/>
+                            <Button x:Name="SaveTaskTriggerButton" Content="保存规则/参数" Click="SaveTaskTrigger_Click" Margin="0,8,0,0"/>
                         </StackPanel>
                     </GroupBox>
                 </StackPanel>

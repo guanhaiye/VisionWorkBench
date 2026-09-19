@@ -18,6 +18,7 @@ public partial class CommunicationPage : UserControl
     public CommunicationPage()
     {
         InitializeComponent();
+        SetTriggerEditorEnabled(false);
         MoveStateToBottomRight();
         ManualText.Text = "{\"command\":\"ping\",\"requestId\":\"PING-001\"}";
         _profileStore = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory);
@@ -77,12 +78,14 @@ public partial class CommunicationPage : UserControl
 
     private void RefreshBoundTasks()
     {
-        // Detection tasks are selected and bound here in the TCP/IP page.
-        // Task configuration deliberately has no TCP/IP project selector.
-        _triggerTasks = _allTasks.ToList();
+        _triggerTasks = _allTasks
+            .Where(task => TryReadTrigger(task.TriggerJson) is { } trigger
+                && string.Equals(trigger.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
+            .ToList();
         TriggerTaskCombo.ItemsSource = _triggerTasks;
-        TriggerTaskCombo.SelectedIndex = _triggerTasks.Count > 0 ? 0 : -1;
+        TriggerTaskCombo.SelectedIndex = -1;
         RefreshTriggerRules();
+        SetTriggerEditorEnabled(false);
     }
     private void FillControls()
     {
@@ -136,6 +139,12 @@ public partial class CommunicationPage : UserControl
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (TrySaveProjectParameters())
+            StateText.Text = "配置已保存";
+    }
+
+    private bool TrySaveProjectParameters(bool refreshSelectors = true)
+    {
         try
         {
             ReadControls();
@@ -146,12 +155,14 @@ public partial class CommunicationPage : UserControl
             else
                 _profiles.Add(_config);
             _profileStore.Save(_profiles);
-            RefreshProjectSelectors(_config.ProjectCode);
-            StateText.Text = "配置已保存";
+            if (refreshSelectors)
+                RefreshProjectSelectors(_config.ProjectCode);
+            return true;
         }
         catch (Exception ex)
         {
             ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
     }
 
@@ -175,7 +186,11 @@ public partial class CommunicationPage : UserControl
     {
         if (_loadingTriggerEditor) return;
         if (TriggerTaskCombo.SelectedItem is not TaskEntity task) return;
-        LoadTriggerEditor(task);
+        var row = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);
+        if (row is not null)
+            TriggerRulesList.SelectedItem = row;
+        else
+            SetTriggerEditorEnabled(false);
     }
     private void LoadTriggerEditor(TaskEntity task)
     {
@@ -187,13 +202,19 @@ public partial class CommunicationPage : UserControl
             config = new TaskTcpTriggerConfig();
         }
         TriggerEnabledCheck.IsChecked = config.Enabled;
+        TaskNameText.Text = task.Name;
         SelectTag(TriggerMatchModeCombo, config.MatchMode.ToString());
         TriggerMatchValueText.Text = config.MatchValue;
         TriggerResponseTemplateText.Text = config.ResponseTemplate;
+        SetTriggerEditorEnabled(true);
     }
     private void TriggerRule_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (TriggerRulesList.SelectedItem is not TriggerRuleRow row) return;
+        if (TriggerRulesList.SelectedItem is not TriggerRuleRow row)
+        {
+            SetTriggerEditorEnabled(false);
+            return;
+        }
         var task = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
         if (task is null) return;
         _loadingTriggerEditor = true;
@@ -203,9 +224,12 @@ public partial class CommunicationPage : UserControl
     }
     private void NewTaskTrigger_Click(object sender, RoutedEventArgs e)
     {
-        var configuredIds = TriggerRulesList.Items.OfType<TriggerRuleRow>().Select(row => row.TaskId).ToHashSet();
-        var task = _triggerTasks.FirstOrDefault(item => !configuredIds.Contains(item.Id)) ?? _triggerTasks.FirstOrDefault();
+        var configuredIds = _triggerTasks.Select(item => item.Id).ToHashSet();
+        var task = _allTasks.FirstOrDefault(item => !configuredIds.Contains(item.Id));
         if (task is null) { ThemedMessageBox.Show("请先创建检测任务", "TCP/IP 设置"); return; }
+        _triggerTasks.Add(task);
+        TriggerTaskCombo.ItemsSource = null;
+        TriggerTaskCombo.ItemsSource = _triggerTasks;
         TriggerRulesList.SelectedItem = null;
         _loadingTriggerEditor = true;
         TriggerTaskCombo.SelectedItem = task;
@@ -214,6 +238,8 @@ public partial class CommunicationPage : UserControl
         TriggerMatchModeCombo.SelectedIndex = 0;
         TriggerMatchValueText.Text = $"START_{task.StationCode}";
         TriggerResponseTemplateText.Text = new TaskTcpTriggerConfig().ResponseTemplate;
+        TaskNameText.Text = task.Name;
+        SetTriggerEditorEnabled(true);
     }
     private async void DeleteTaskTrigger_Click(object sender, RoutedEventArgs e)
     {
@@ -226,8 +252,8 @@ public partial class CommunicationPage : UserControl
     }
     private async void SaveTaskTrigger_Click(object sender, RoutedEventArgs e)
     {
-        // 该按钮同时保存 TCP/IP 项目参数；任务规则属于可选项。
-        Save_Click(sender, e);
+        if (!TrySaveProjectParameters(refreshSelectors: false))
+            return;
         if (TriggerTaskCombo.SelectedItem is not TaskEntity task)
         {
             return;
@@ -255,16 +281,20 @@ public partial class CommunicationPage : UserControl
             ThemedMessageBox.Show("该触发消息已被其他任务使用，请为每个任务配置唯一消息", "TCP/IP 设置");
             return;
         }
+        task.Name = string.IsNullOrWhiteSpace(TaskNameText.Text) ? task.Name : TaskNameText.Text.Trim();
         task.TriggerJson = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         await AppServices.Instance.Tasks.SaveAsync(task);
-        RefreshTriggerRules();
+        _allTasks = await AppServices.Instance.Tasks.ListAsync();
+        RefreshBoundTasks();
+        var savedRow = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(row => row.TaskId == task.Id);
+        if (savedRow is not null) TriggerRulesList.SelectedItem = savedRow;
         StateText.Text = $"已保存任务触发：{task.Name}";
     }
     private void RefreshTriggerRules()
     {
         TriggerRulesList.ItemsSource = _triggerTasks
             .Select(task => (Task: task, Config: TryReadTrigger(task.TriggerJson)))
-            .Where(pair => pair.Config is { Enabled: true }
+            .Where(pair => pair.Config is { }
                 && string.Equals(pair.Config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
             .Select(pair => new TriggerRuleRow(pair.Task.Id,
                 $"{pair.Task.Name}  ·  {pair.Config!.MatchMode}  ·  {pair.Config.MatchValue}"))
@@ -275,6 +305,15 @@ public partial class CommunicationPage : UserControl
         if (string.IsNullOrWhiteSpace(json)) return null;
         try { return JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json); }
         catch (JsonException) { return null; }
+    }
+    private void SetTriggerEditorEnabled(bool enabled)
+    {
+        TaskNameText.IsEnabled = enabled;
+        TriggerEnabledCheck.IsEnabled = enabled;
+        TriggerMatchModeCombo.IsEnabled = enabled;
+        TriggerMatchValueText.IsEnabled = enabled;
+        TriggerResponseTemplateText.IsEnabled = enabled;
+        SaveTaskTriggerButton.IsEnabled = enabled;
     }
     private void UpdateModeVisibility() { var tag = (ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(); var server = tag == "Server"; ListenAddressText.IsEnabled = server; ListenPortText.IsEnabled = server; MaxConnectionsText.IsEnabled = server; RemoteAddressText.IsEnabled = tag == "Client"; RemotePortText.IsEnabled = tag == "Client"; }
     private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() => { LogText.AppendText($"[{e.Timestamp:HH:mm:ss}] {e.Level} {e.Direction} {e.Message}{Environment.NewLine}"); LogText.ScrollToEnd(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray(); });
