@@ -524,6 +524,12 @@
                     <Button x:Name="RunTaskTestButton" Content="测试"
                             Click="RunTaskTest_Click" Padding="16,5" Margin="8,0,0,0"
                             IsEnabled="False" />
+                    <CheckBox x:Name="AutoTaskTestCheck" Content="自动测试"
+                              Checked="AutoTaskTestCheck_Checked"
+                              Unchecked="AutoTaskTestCheck_Unchecked"
+                              Margin="12,0,0,0"
+                              VerticalAlignment="Center"
+                              IsEnabled="False" />
                 </StackPanel>
                 <Border Grid.Row="1" Margin="0,10,0,8"
                         Background="#111111"

@@ -95,7 +95,7 @@ public partial class TasksPage : UserControl
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => Refresh();
 
-    private void ReadTestImage_Click(object sender, RoutedEventArgs e)
+    private async void ReadTestImage_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog
         {
@@ -124,6 +124,10 @@ public partial class TasksPage : UserControl
             _taskTestImagePaths.AddRange(paths);
             _taskTestImageIndex = 0;
             ShowCurrentTaskTestImage("图片已加载，点击“测试”执行当前任务。");
+            if (AutoTaskTestCheck.IsChecked == true)
+            {
+                await RunCurrentTaskTestAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -131,11 +135,11 @@ public partial class TasksPage : UserControl
         }
     }
 
-    private void TaskTestPrevious_Click(object sender, RoutedEventArgs e) => MoveTaskTestImage(-1);
+    private async void TaskTestPrevious_Click(object sender, RoutedEventArgs e) => await MoveTaskTestImageAsync(-1);
 
-    private void TaskTestNext_Click(object sender, RoutedEventArgs e) => MoveTaskTestImage(1);
+    private async void TaskTestNext_Click(object sender, RoutedEventArgs e) => await MoveTaskTestImageAsync(1);
 
-    private void MoveTaskTestImage(int offset)
+    private async Task MoveTaskTestImageAsync(int offset)
     {
         if (_taskTestRunning || _taskTestImagePaths.Count == 0)
         {
@@ -151,6 +155,10 @@ public partial class TasksPage : UserControl
         try
         {
             ShowCurrentTaskTestImage("图片已切换，点击“测试”执行当前任务。");
+            if (AutoTaskTestCheck.IsChecked == true)
+            {
+                await RunCurrentTaskTestAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -183,7 +191,24 @@ public partial class TasksPage : UserControl
         DrawTaskTestOverlay();
     }
 
-    private async void RunTaskTest_Click(object sender, RoutedEventArgs e)
+    private async void RunTaskTest_Click(object sender, RoutedEventArgs e) => await RunCurrentTaskTestAsync();
+
+    private async void AutoTaskTestCheck_Checked(object sender, RoutedEventArgs e)
+    {
+        await RunCurrentTaskTestAsync();
+    }
+
+    private void AutoTaskTestCheck_Unchecked(object sender, RoutedEventArgs e)
+    {
+        if (!_taskTestRunning && CurrentTaskTestImagePath is not null)
+        {
+            TaskTestStatusText.Text = "自动测试已关闭，可点击“测试”执行当前图片。";
+            TaskTestStatusText.Visibility = Visibility.Visible;
+        }
+        UpdateTaskTestAvailability();
+    }
+
+    private async Task RunCurrentTaskTestAsync()
     {
         var imagePath = CurrentTaskTestImagePath;
         if (_taskTestRunning || _editingId is not { } taskId || string.IsNullOrWhiteSpace(imagePath))
@@ -286,16 +311,20 @@ public partial class TasksPage : UserControl
 
     private void UpdateTaskTestAvailability()
     {
-        if (RunTaskTestButton is null || TaskTestPreviousButton is null || TaskTestNextButton is null)
+        if (RunTaskTestButton is null || TaskTestPreviousButton is null
+            || TaskTestNextButton is null || AutoTaskTestCheck is null)
         {
             return;
         }
         var hasImage = CurrentTaskTestImagePath is not null;
+        var autoTest = AutoTaskTestCheck.IsChecked == true;
         RunTaskTestButton.IsEnabled = !_taskTestRunning
             && _editingId is not null
-            && hasImage;
+            && hasImage
+            && !autoTest;
         TaskTestPreviousButton.IsEnabled = !_taskTestRunning && _taskTestImagePaths.Count > 1;
         TaskTestNextButton.IsEnabled = !_taskTestRunning && _taskTestImagePaths.Count > 1;
+        AutoTaskTestCheck.IsEnabled = !_taskTestRunning && _editingId is not null && hasImage;
     }
 
     private bool TryReadCurrentRoi(out NormalizedRect? roi, out string? error)
