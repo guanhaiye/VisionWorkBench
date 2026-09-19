@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.ComponentModel;
 using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Persistence;
 
@@ -13,10 +14,29 @@ public partial class CommunicationPage : UserControl
     private readonly TcpCommunicationProfileStore _profileStore;
     private ProjectCommunicationConfig _config = new();
     private List<ProjectCommunicationConfig> _profiles = [];
+    private List<ProjectListRow> _projectListRows = [];
+    private string? _runningProjectCode;
     private List<TaskEntity> _allTasks = [];
     private List<TaskEntity> _triggerTasks = [];
     private readonly HashSet<long> _pendingTriggerTaskIds = [];
     private sealed record TriggerRuleRow(long TaskId, string DisplayText);
+    private sealed class ProjectListRow(ProjectCommunicationConfig profile) : INotifyPropertyChanged
+    {
+        private string _status = "未连接";
+        public ProjectCommunicationConfig Profile { get; } = profile;
+        public string Name => Profile.Name;
+        public string Status
+        {
+            get => _status;
+            set
+            {
+                if (string.Equals(_status, value, StringComparison.Ordinal)) return;
+                _status = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Status)));
+            }
+        }
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
     public CommunicationPage()
     {
         InitializeComponent();
@@ -61,7 +81,7 @@ public partial class CommunicationPage : UserControl
     {
         _profiles = _profileStore.Load();
         ProjectCombo.ItemsSource = _profiles;
-        ProjectList.ItemsSource = _profiles;
+        RefreshProjectListItems();
         _allTasks = await AppServices.Instance.Tasks.ListAsync();
         var preferredCode = AppServices.Instance.Settings.LastTcpProjectCode;
         var preferred = _profiles.FirstOrDefault(profile =>
@@ -79,7 +99,7 @@ public partial class CommunicationPage : UserControl
         if (preferred is not null)
         {
             ProjectCombo.SelectedItem = preferred;
-            ProjectList.SelectedItem = preferred;
+            SelectProjectListItem(preferred.ProjectCode);
             AppServices.Instance.Settings.LastTcpProjectCode = preferred.ProjectCode;
             AppServices.Instance.SaveUserSettings();
         }
@@ -89,14 +109,15 @@ public partial class CommunicationPage : UserControl
     {
         if (ProjectCombo.SelectedItem is ProjectCommunicationConfig profile)
         {
-            ProjectList.SelectedItem = profile;
+            SelectProjectListItem(profile.ProjectCode);
             RememberSelectedProject(profile);
         }
         LoadConfig();
     }
     private void ProjectList_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (ProjectList.SelectedItem is not ProjectCommunicationConfig profile) return;
+        if (ProjectList.SelectedItem is not ProjectListRow row) return;
+        var profile = row.Profile;
         ProjectCombo.SelectedItem = profile;
         RememberSelectedProject(profile);
         LoadConfig();
@@ -112,6 +133,7 @@ public partial class CommunicationPage : UserControl
     private void LoadConfig()
     {
         var selected = ProjectList.SelectedItem as ProjectCommunicationConfig
+            ?? (ProjectList.SelectedItem as ProjectListRow)?.Profile
             ?? ProjectCombo.SelectedItem as ProjectCommunicationConfig;
         var code = selected?.ProjectCode ?? "default";
         _config = _profiles.FirstOrDefault(profile => string.Equals(profile.ProjectCode, code, StringComparison.OrdinalIgnoreCase))
@@ -150,10 +172,9 @@ public partial class CommunicationPage : UserControl
         _profiles.Add(profile);
         ProjectCombo.ItemsSource = null;
         ProjectCombo.ItemsSource = _profiles;
-        ProjectList.ItemsSource = null;
-        ProjectList.ItemsSource = _profiles;
+        RefreshProjectListItems(profile.ProjectCode);
         ProjectCombo.SelectedItem = profile;
-        ProjectList.SelectedItem = profile;
+        SelectProjectListItem(profile.ProjectCode);
         _profileStore.Save(_profiles);
         StateText.Text = $"已创建 TCP/IP 项目：{profile.Name}";
     }
@@ -173,8 +194,7 @@ public partial class CommunicationPage : UserControl
         _profileStore.Save(_profiles);
         ProjectCombo.ItemsSource = null;
         ProjectCombo.ItemsSource = _profiles;
-        ProjectList.ItemsSource = null;
-        ProjectList.ItemsSource = _profiles;
+        RefreshProjectListItems();
         ProjectCombo.SelectedIndex = 0;
         ProjectList.SelectedIndex = 0;
         StateText.Text = $"已删除 TCP/IP 项目：{profile.Name}";
@@ -214,14 +234,78 @@ public partial class CommunicationPage : UserControl
         var selected = _profiles.FirstOrDefault(profile =>
             string.Equals(profile.ProjectCode, selectedProjectCode, StringComparison.OrdinalIgnoreCase));
         ProjectCombo.ItemsSource = null;
-        ProjectList.ItemsSource = null;
         ProjectCombo.ItemsSource = _profiles;
-        ProjectList.ItemsSource = _profiles;
+        RefreshProjectListItems(selectedProjectCode);
         ProjectCombo.SelectedItem = selected;
-        ProjectList.SelectedItem = selected;
+        SelectProjectListItem(selectedProjectCode);
     }
-    private async void Start_Click(object sender, RoutedEventArgs e) { try { if (!TrySaveProjectParameters(refreshSelectors: false)) return; await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式" : "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
-    private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
+    private void RefreshProjectListItems(string? selectedProjectCode = null)
+    {
+        var code = selectedProjectCode
+            ?? (ProjectList.SelectedItem as ProjectListRow)?.Profile.ProjectCode;
+        _projectListRows = _profiles
+            .Select(profile => new ProjectListRow(profile)
+            {
+                Status = GetProjectStatus(profile),
+            })
+            .ToList();
+        ProjectList.ItemsSource = _projectListRows;
+        if (!string.IsNullOrWhiteSpace(code))
+            SelectProjectListItem(code);
+    }
+    private void SelectProjectListItem(string projectCode)
+    {
+        ProjectList.SelectedItem = _projectListRows.FirstOrDefault(row =>
+            string.Equals(row.Profile.ProjectCode, projectCode, StringComparison.OrdinalIgnoreCase));
+    }
+    private string GetProjectStatus(ProjectCommunicationConfig profile)
+    {
+        if (!string.Equals(_runningProjectCode, profile.ProjectCode, StringComparison.OrdinalIgnoreCase))
+            return "未连接";
+        return AppServices.Instance.TcpCommunication.State switch
+        {
+            TcpRuntimeState.Connected => "已连接",
+            TcpRuntimeState.Listening => "监听中",
+            TcpRuntimeState.Connecting => "连接中",
+            TcpRuntimeState.Reconnecting => "重连中",
+            TcpRuntimeState.Starting => "启动中",
+            TcpRuntimeState.Stopping => "停止中",
+            TcpRuntimeState.Faulted => "连接失败",
+            _ => "未连接",
+        };
+    }
+    private void RefreshProjectStatuses()
+    {
+        foreach (var row in _projectListRows)
+            row.Status = GetProjectStatus(row.Profile);
+    }
+    private async void Start_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!TrySaveProjectParameters(refreshSelectors: false)) return;
+            _runningProjectCode = _config.ProjectCode;
+            RefreshProjectStatuses();
+            await AppServices.Instance.TcpCommunication.StartAsync(_config);
+            StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled
+                ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式"
+                : "已启动";
+            RefreshProjectStatuses();
+        }
+        catch (Exception ex)
+        {
+            _runningProjectCode = null;
+            RefreshProjectStatuses();
+            ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+    private async void Stop_Click(object sender, RoutedEventArgs e)
+    {
+        await AppServices.Instance.TcpCommunication.StopAsync();
+        _runningProjectCode = null;
+        RefreshProjectStatuses();
+        StateText.Text = "已停止";
+    }
     private async void Send_Click(object sender, RoutedEventArgs e)
     { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
     private void CommunicationSettingsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -510,7 +594,12 @@ public partial class CommunicationPage : UserControl
     }
     private void UpdateModeVisibility() { var tag = (ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(); var server = tag == "Server"; ListenAddressText.IsEnabled = server; ListenPortText.IsEnabled = server; MaxConnectionsText.IsEnabled = server; RemoteAddressText.IsEnabled = tag == "Client"; RemotePortText.IsEnabled = tag == "Client"; }
     private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() => { LogText.AppendText($"[{e.Timestamp:HH:mm:ss}] {e.Level} {e.Direction} {e.Message}{Environment.NewLine}"); LogText.ScrollToEnd(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray(); });
-    private void Tcp_StateChanged(object? sender, EventArgs e) => Dispatcher.Invoke(() => { StateText.Text = AppServices.Instance.TcpCommunication.State.ToString(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray(); });
+    private void Tcp_StateChanged(object? sender, EventArgs e) => Dispatcher.Invoke(() =>
+    {
+        StateText.Text = AppServices.Instance.TcpCommunication.State.ToString();
+        ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray();
+        RefreshProjectStatuses();
+    });
     private static int ParseInt(string text, int fallback) => int.TryParse(text, out var value) ? value : fallback;
     private static int ParsePort(string text, int fallback) => Math.Clamp(ParseInt(text, fallback), 1, 65535);
     private static void SelectTag(ComboBox box, string tag) { box.SelectedItem = box.Items.OfType<ComboBoxItem>().FirstOrDefault(x => string.Equals(x.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase)); }

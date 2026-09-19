@@ -48,10 +48,24 @@
                             <Button Grid.Column="1" Content="删除项目" Click="DeleteProject_Click"
                                     HorizontalAlignment="Stretch" Margin="4,0,0,0" />
                         </Grid>
-                        <ListBox x:Name="ProjectList" DisplayMemberPath="Name"
+                        <ListBox x:Name="ProjectList"
                                  MinWidth="0" HorizontalContentAlignment="Stretch"
                                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                 SelectionChanged="ProjectList_Changed" />
+                                 SelectionChanged="ProjectList_Changed">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid MinWidth="0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Status}"
+                                                   Margin="12,0,0,0" Foreground="#7ED6A5" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </StackPanel>
                 </GroupBox>
             </Grid>
