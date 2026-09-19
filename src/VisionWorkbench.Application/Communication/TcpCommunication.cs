@@ -23,6 +23,8 @@ public enum OfflineResponsePolicy { Drop, KeepLatest, StoreAndRetry }
 public sealed class TaskTcpTriggerConfig
 {
     public bool Enabled { get; set; }
+    /// <summary>TCP/IP 项目（配置档案）编码。为空时兼容旧任务并使用默认项目。</summary>
+    public string? TcpProjectCode { get; set; }
     public MessageMatchMode MatchMode { get; set; } = MessageMatchMode.ExactText;
     public string MatchValue { get; set; } = "";
     public string ResponseTemplate { get; set; } = "{\"ok\":true,\"code\":\"completed\",\"requestId\":\"{requestId}\",\"task\":\"{task}\",\"status\":\"{status}\",\"count\":{count}}";
@@ -33,6 +35,7 @@ public sealed record TcpTaskExecutionResult(string Status, long Count, string De
 public sealed class ProjectCommunicationConfig
 {
     public string ProjectCode { get; set; } = "default";
+    public string Name { get; set; } = "默认 TCP/IP 项目";
     public bool Enabled { get; set; }
     public TcpWorkMode WorkMode { get; set; } = TcpWorkMode.Disabled;
     public string Encoding { get; set; } = "utf-8";
@@ -69,6 +72,72 @@ public sealed class ProjectCommunicationConfig
     public List<string> AllowedClientAddresses { get; set; } = [];
     public int MaxRequestsPerMinute { get; set; } = 1200;
     public int IdleTimeoutSeconds { get; set; } = 300;
+}
+
+/// <summary>TCP/IP 项目配置文件的统一读写入口，兼容旧版字典格式。</summary>
+public sealed class TcpCommunicationProfileStore
+{
+    private readonly string _filePath;
+
+    public TcpCommunicationProfileStore(string configDirectory)
+    {
+        _filePath = Path.Combine(configDirectory, "tcp-communication.json");
+    }
+
+    public string FilePath => _filePath;
+
+    public List<ProjectCommunicationConfig> Load()
+    {
+        try
+        {
+            if (!File.Exists(_filePath))
+            {
+                return [CreateDefault()];
+            }
+
+            var all = JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(
+                File.ReadAllText(_filePath)) ?? [];
+            var profiles = all.Values
+                .Where(profile => profile is not null)
+                .Select(profile => Normalize(profile))
+                .GroupBy(profile => profile.ProjectCode, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderBy(profile => profile.ProjectCode, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return profiles.Count == 0 ? [CreateDefault()] : profiles;
+        }
+        catch
+        {
+            return [CreateDefault()];
+        }
+    }
+
+    public void Save(IEnumerable<ProjectCommunicationConfig> profiles)
+    {
+        var normalized = profiles
+            .Select(Normalize)
+            .Where(profile => !string.IsNullOrWhiteSpace(profile.ProjectCode))
+            .GroupBy(profile => profile.ProjectCode, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToDictionary(profile => profile.ProjectCode, StringComparer.OrdinalIgnoreCase);
+        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+        File.WriteAllText(_filePath, JsonSerializer.Serialize(normalized, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    public static ProjectCommunicationConfig CreateDefault() => new()
+    {
+        ProjectCode = "default",
+        Name = "默认 TCP/IP 项目",
+    };
+
+    private static ProjectCommunicationConfig Normalize(ProjectCommunicationConfig profile)
+    {
+        profile.ProjectCode = string.IsNullOrWhiteSpace(profile.ProjectCode) ? "default" : profile.ProjectCode.Trim();
+        profile.Name = string.IsNullOrWhiteSpace(profile.Name)
+            ? profile.ProjectCode == "default" ? "默认 TCP/IP 项目" : profile.ProjectCode
+            : profile.Name.Trim();
+        return profile;
+    }
 }
 
 public sealed class TcpConnectionInfo
@@ -491,7 +560,9 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         var tasks = await _tasks.ListAsync();
         var configured = tasks
             .Select(task => (Task: task, Trigger: ParseTrigger(task.TriggerJson)))
-            .FirstOrDefault(pair => pair.Trigger is { Enabled: true } trigger && Matches(trigger, text));
+            .FirstOrDefault(pair => pair.Trigger is { Enabled: true } trigger
+                && IsForCurrentProject(trigger)
+                && Matches(trigger, text));
         if (configured.Task is not null && configured.Trigger is not null)
         {
             await ExecuteConfiguredTaskAsync(connectionId, text, configured.Task, configured.Trigger);
@@ -562,6 +633,9 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         MessageMatchMode.Default => true,
         _ => false,
     };
+    private bool IsForCurrentProject(TaskTcpTriggerConfig trigger) =>
+        string.IsNullOrWhiteSpace(trigger.TcpProjectCode)
+        || string.Equals(trigger.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase);
     private static string? TryReadRequestId(string text)
     {
         try { using var doc = JsonDocument.Parse(text); return doc.RootElement.TryGetProperty("requestId", out var value) ? value.GetString() : null; }

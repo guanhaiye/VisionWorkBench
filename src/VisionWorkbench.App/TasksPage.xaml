@@ -74,6 +74,10 @@
                             </Grid>
                         </GroupBox>
                         <TextBlock Text="说明" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="触发源" VerticalAlignment="Center" />
+                            <ComboBox x:Name="TcpTriggerProfileCombo" Width="220" Margin="8,0,0,0" DisplayMemberPath="Name" />
+                        </StackPanel>
                         <TextBox x:Name="DescriptionText" Margin="0,2,0,8" />
                     </StackPanel>
                 </GroupBox>

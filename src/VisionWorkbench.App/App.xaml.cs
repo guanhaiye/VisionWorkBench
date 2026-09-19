@@ -146,10 +146,8 @@ public partial class App : System.Windows.Application
     {
         try
         {
-            var path = Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "tcp-communication.json");
-            if (!File.Exists(path)) return;
-            var configs = JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(path));
-            var config = configs?.Values.FirstOrDefault(x => x.Enabled && x.AutoStart);
+            var profiles = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory).Load();
+            var config = profiles.FirstOrDefault(x => x.Enabled && x.AutoStart);
             if (config is not null) _ = AppServices.Instance.TcpCommunication.StartAsync(config);
         }
         catch (Exception ex)

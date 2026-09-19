@@ -9,9 +9,10 @@ namespace VisionWorkbench.App;
 
 public partial class CommunicationPage : UserControl
 {
+    private readonly TcpCommunicationProfileStore _profileStore;
     private readonly string _configFile;
     private ProjectCommunicationConfig _config = new();
-    private List<ProjectEntity> _projects = [];
+    private List<ProjectCommunicationConfig> _profiles = [];
     private List<TaskEntity> _triggerTasks = [];
     private bool _loadingTriggerEditor;
     private sealed record TriggerRuleRow(long TaskId, string DisplayText);
@@ -20,7 +21,8 @@ public partial class CommunicationPage : UserControl
         InitializeComponent();
         MoveStateToBottomRight();
         ManualText.Text = "{\"command\":\"ping\",\"requestId\":\"PING-001\"}";
-        _configFile = Path.Combine(AppServices.Instance.Settings.ConfigDirectory, "tcp-communication.json");
+        _profileStore = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory);
+        _configFile = _profileStore.FilePath;
         AppServices.Instance.TcpCommunication.LogReceived += Tcp_LogReceived;
         AppServices.Instance.TcpCommunication.StateChanged += Tcp_StateChanged;
         Loaded += async (_, _) => await LoadProjectsAsync();
@@ -42,9 +44,9 @@ public partial class CommunicationPage : UserControl
     }
     private async Task LoadProjectsAsync()
     {
-        _projects = await AppServices.Instance.Projects.ListProjectsAsync();
-        ProjectCombo.ItemsSource = _projects;
-        if (_projects.Count > 0) ProjectCombo.SelectedIndex = 0;
+        _profiles = _profileStore.Load();
+        ProjectCombo.ItemsSource = _profiles;
+        if (_profiles.Count > 0) ProjectCombo.SelectedIndex = 0;
         _triggerTasks = await AppServices.Instance.Tasks.ListAsync();
         TriggerTaskCombo.ItemsSource = _triggerTasks;
         RefreshTriggerRules();
@@ -54,13 +56,12 @@ public partial class CommunicationPage : UserControl
     private void Load_Click(object sender, RoutedEventArgs e) => LoadConfig();
     private void LoadConfig()
     {
-        var code = (ProjectCombo.SelectedItem as ProjectEntity)?.ProjectCode ?? "default";
-        _config = new ProjectCommunicationConfig { ProjectCode = code };
-        if (File.Exists(_configFile))
-        {
-            try { var all = JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)); if (all?.TryGetValue(code, out var saved) == true) _config = saved; } catch { }
-        }
-        _config.ProjectCode = code; FillControls();
+        var selected = ProjectCombo.SelectedItem as ProjectCommunicationConfig;
+        var code = selected?.ProjectCode ?? "default";
+        _config = _profiles.FirstOrDefault(profile => string.Equals(profile.ProjectCode, code, StringComparison.OrdinalIgnoreCase))
+            ?? TcpCommunicationProfileStore.CreateDefault();
+        _config.ProjectCode = code;
+        FillControls();
     }
     private void FillControls()
     {
@@ -71,7 +72,40 @@ public partial class CommunicationPage : UserControl
     {
         _config.Enabled = EnabledCheck.IsChecked == true; _config.WorkMode = Enum.Parse<TcpWorkMode>((ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Disabled"); _config.FrameMode = Enum.Parse<TcpFrameMode>((FrameCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Line"); _config.Encoding = (EncodingCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "utf-8"; _config.ListenAddress = ListenAddressText.Text.Trim(); _config.ListenPort = ParsePort(ListenPortText.Text, 5000); _config.RemoteAddress = RemoteAddressText.Text.Trim(); _config.RemotePort = ParsePort(RemotePortText.Text, 5000); _config.MaxConnections = Math.Clamp(ParseInt(MaxConnectionsText.Text, 10), 1, 100); _config.MessageTerminator = TerminatorText.Text; _config.MaxMessageBytes = Math.Clamp(ParseInt(MaxMessageText.Text, 1024 * 1024), 1024, 16 * 1024 * 1024); _config.ReceiveTimeoutMs = Math.Clamp(ParseInt(ReceiveTimeoutText.Text, 30000), 1000, 300000); _config.AutoReconnect = AutoReconnectCheck.IsChecked == true;
     }
-    private async void Save_Click(object sender, RoutedEventArgs e)
+    private void NewProject_Click(object sender, RoutedEventArgs e)
+    {
+        var number = 1;
+        string code;
+        do { code = $"tcp-{number++:000}"; } while (_profiles.Any(profile => string.Equals(profile.ProjectCode, code, StringComparison.OrdinalIgnoreCase)));
+        var profile = new ProjectCommunicationConfig { ProjectCode = code, Name = $"TCP/IP 项目 {number - 1}" };
+        _profiles.Add(profile);
+        ProjectCombo.ItemsSource = null;
+        ProjectCombo.ItemsSource = _profiles;
+        ProjectCombo.SelectedItem = profile;
+        _profileStore.Save(_profiles);
+        StateText.Text = $"已创建 TCP/IP 项目：{profile.Name}";
+    }
+
+    private void DeleteProject_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectCombo.SelectedItem is not ProjectCommunicationConfig profile) return;
+        if (_profiles.Count <= 1)
+        {
+            ThemedMessageBox.Show("至少保留一个 TCP/IP 项目。", "TCP/IP 项目");
+            return;
+        }
+        if (ThemedMessageBox.Show($"删除 TCP/IP 项目“{profile.Name}”？", "确认删除", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+        if (string.Equals(_config.ProjectCode, profile.ProjectCode, StringComparison.OrdinalIgnoreCase))
+            _ = AppServices.Instance.TcpCommunication.StopAsync();
+        _profiles.Remove(profile);
+        _profileStore.Save(_profiles);
+        ProjectCombo.ItemsSource = null;
+        ProjectCombo.ItemsSource = _profiles;
+        ProjectCombo.SelectedIndex = 0;
+        StateText.Text = $"已删除 TCP/IP 项目：{profile.Name}";
+    }
+
+    private void Save_Click(object sender, RoutedEventArgs e)
     {
         try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); StateText.Text = "配置已保存"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
@@ -140,6 +174,7 @@ public partial class CommunicationPage : UserControl
         var config = new TaskTcpTriggerConfig
         {
             Enabled = TriggerEnabledCheck.IsChecked == true,
+            TcpProjectCode = _config.ProjectCode,
             MatchMode = Enum.Parse<MessageMatchMode>(modeText),
             MatchValue = TriggerMatchValueText.Text,
             ResponseTemplate = TriggerResponseTemplateText.Text,
