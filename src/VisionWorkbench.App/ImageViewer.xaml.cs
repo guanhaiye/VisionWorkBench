@@ -283,10 +283,19 @@ public class ImageViewer : ContentControl
             return;
         }
 
-        if (resetBase || Zoom <= 1.001 || _baseWidth <= 0 || _baseHeight <= 0)
+        var viewportWidth = _viewer.ViewportWidth;
+        var viewportHeight = _viewer.ViewportHeight;
+        var viewportChangedWhileZoomed =
+            Zoom > 1.001 &&
+            (Math.Abs(_baseWidth - viewportWidth) > 0.5 ||
+             Math.Abs(_baseHeight - viewportHeight) > 0.5);
+        if (resetBase || Zoom <= 1.001 || _baseWidth <= 0 || _baseHeight <= 0 || viewportChangedWhileZoomed)
         {
-            _baseWidth = _viewer.ViewportWidth;
-            _baseHeight = _viewer.ViewportHeight;
+            // The unscaled content must always match the current viewport.
+            // Otherwise a resize while zoomed leaves the image at the old
+            // size and the newly available area renders as empty background.
+            _baseWidth = viewportWidth;
+            _baseHeight = viewportHeight;
         }
 
         _contentHost.Width = _baseWidth;
