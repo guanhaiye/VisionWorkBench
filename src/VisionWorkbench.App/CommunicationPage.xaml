@@ -34,15 +34,23 @@
             <Button Grid.Column="8" Visibility="Collapsed" Content="删除项目" Click="DeleteProject_Click" Margin="6,0,0,0"/>
         </Grid>
                 <Grid Grid.Row="1" Margin="0,12,0,0">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="300"/><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="360" MinWidth="340"/><ColumnDefinition Width="390"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Grid Grid.Column="0" Margin="0,0,12,0">
                 <GroupBox Header="TCP/IP 项目列表">
                     <StackPanel Margin="8">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                            <Button Content="新建项目" Click="NewProject_Click" Width="112" />
-                            <Button Content="删除项目" Click="DeleteProject_Click" Width="112" Margin="8,0,0,0" />
-                        </StackPanel>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Content="新建项目" Click="NewProject_Click"
+                                    HorizontalAlignment="Stretch" Margin="0,0,4,0" />
+                            <Button Grid.Column="1" Content="删除项目" Click="DeleteProject_Click"
+                                    HorizontalAlignment="Stretch" Margin="4,0,0,0" />
+                        </Grid>
                         <ListBox x:Name="ProjectList" DisplayMemberPath="Name"
+                                 MinWidth="0" HorizontalContentAlignment="Stretch"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                  SelectionChanged="ProjectList_Changed" />
                     </StackPanel>
                 </GroupBox>
