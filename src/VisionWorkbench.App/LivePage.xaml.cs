@@ -57,24 +57,24 @@ public partial class LivePage : UserControl
         await ShutdownPanelsAsync();
     }
 
-    private Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(long taskId, CancellationToken cancellationToken)
+    private Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken)
     {
         return Dispatcher.InvokeAsync(
-                () => ExecuteTcpTriggerOnUiAsync(taskId, cancellationToken),
+                () => ExecuteTcpTriggerOnUiAsync(request, cancellationToken),
                 System.Windows.Threading.DispatcherPriority.Normal)
             .Task
             .Unwrap();
     }
 
-    private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(long taskId, CancellationToken cancellationToken)
+    private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken)
     {
-        var panel = _panels.FirstOrDefault(item => item.TaskId == taskId);
+        var panel = _panels.FirstOrDefault(item => item.TaskId == request.TaskId);
         if (panel is null)
         {
             throw new InvalidOperationException("实时检测页面中没有配置该任务，请先添加对应任务面板。");
         }
 
-        return await panel.ExecuteTcpTriggerAsync(cancellationToken);
+        return await panel.ExecuteTcpTriggerAsync(request, cancellationToken);
     }
 
     private async Task LoadTasksAsync()

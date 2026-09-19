@@ -99,7 +99,8 @@ public partial class LiveTaskPanel : UserControl
     private int _singleFrameNextIndex;
     private int _offlineImageTotal;
     private int _offlineImageStartIndex;
-    private bool _singleFrameBusy;
+    // 仅用于界面“单帧检测”按钮；TCP 触发不再使用此锁。
+    private bool _manualSingleFrameBusy;
     private bool _startInProgress;
     private bool _overlayRedrawPending;
     private bool _fitPreviewOnNextFrame = true;
@@ -319,7 +320,7 @@ public partial class LiveTaskPanel : UserControl
         }
     }
 
-    public Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(CancellationToken cancellationToken = default)
+    public Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken = default)
     {
         return Dispatcher.InvokeAsync(
                 () => ExecuteTcpTriggerOnUiAsync(cancellationToken),
@@ -342,19 +343,11 @@ public partial class LiveTaskPanel : UserControl
             throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”启动失败，无法执行 TCP 指令。");
         }
 
-        if (_singleFrameBusy)
-        {
-            throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”正在执行上一条指令。");
-        }
-
-        _singleFrameBusy = true;
         SetButtons(running: true);
-        ClearSingleResultDisplay();
         StatusText.Text = "TCP触发检测中…";
         try
         {
             var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(30), cancellationToken);
-            await Dispatcher.InvokeAsync(() => { });
             if (result is null)
             {
                 throw new TimeoutException("实时检测在 30 秒内没有获得有效帧。");
@@ -369,7 +362,6 @@ public partial class LiveTaskPanel : UserControl
         }
         finally
         {
-            _singleFrameBusy = false;
             SetButtons(running: _run?.State is DetectionRunState.Running or DetectionRunState.Paused);
         }
     }
@@ -738,19 +730,19 @@ public partial class LiveTaskPanel : UserControl
             ThemedMessageBox.Show("请先在当前任务面板中选择任务。", "实时检测");
             return;
         }
-        if (singleFrame && _singleFrameBusy)
+        if (singleFrame && _manualSingleFrameBusy)
         {
             return;
         }
         if (singleFrame)
         {
-            _singleFrameBusy = true;
+            _manualSingleFrameBusy = true;
             SetButtons(running: true);
         }
         var found = await AppServices.Instance.Recipes.FindAsync(item.Id);
         if (found is not { } pair)
         {
-            _singleFrameBusy = false;
+            _manualSingleFrameBusy = false;
             SetButtons(running: false);
             ThemedMessageBox.Show("任务数据无效", "错误");
             return;
@@ -846,7 +838,7 @@ public partial class LiveTaskPanel : UserControl
         {
             logger.LogError(ex, "开始检测失败");
             ThemedMessageBox.Show($"开始检测失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-            _singleFrameBusy = false;
+            _manualSingleFrameBusy = false;
             await CleanupAsync(disposeAlgorithm: true);
         }
     }
@@ -873,13 +865,13 @@ public partial class LiveTaskPanel : UserControl
 
     private async void Single_Click(object sender, RoutedEventArgs e)
     {
-        if (_singleFrameBusy)
+        if (_manualSingleFrameBusy)
         {
             return;
         }
         if (_run is not null && _run.State is (DetectionRunState.Running or DetectionRunState.Paused))
         {
-            _singleFrameBusy = true;
+            _manualSingleFrameBusy = true;
             SetButtons(running: true);
             ClearSingleResultDisplay();
             try
@@ -900,7 +892,7 @@ public partial class LiveTaskPanel : UserControl
             }
             finally
             {
-                _singleFrameBusy = false;
+                _manualSingleFrameBusy = false;
                 SetButtons(running: _run?.State is DetectionRunState.Running or DetectionRunState.Paused);
             }
             return;
@@ -1013,7 +1005,7 @@ public partial class LiveTaskPanel : UserControl
             await _cameraSession.DisposeAsync();
             _cameraSession = null;
         }
-        _singleFrameBusy = false;
+        _manualSingleFrameBusy = false;
         await Dispatcher.InvokeAsync(() => SetButtons(running: false));
     }
 
@@ -1121,7 +1113,7 @@ public partial class LiveTaskPanel : UserControl
     {
         Dispatcher.BeginInvoke(() =>
         {
-            if (_singleFrameBusy)
+            if (_manualSingleFrameBusy)
             {
                 return;
             }
@@ -1692,7 +1684,7 @@ public partial class LiveTaskPanel : UserControl
         StartButton.IsEnabled = canStart;
         PauseButton.IsEnabled = canPause;
         PauseButton.Content = "暂停";
-        SingleButton.IsEnabled = !_singleFrameBusy && (!_startInProgress || running);
+        SingleButton.IsEnabled = !_manualSingleFrameBusy && (!_startInProgress || running);
         StopButton.IsEnabled = running;
         ResetCountButton.IsEnabled = true;
         TaskCombo.IsEnabled = !running && !_startInProgress;

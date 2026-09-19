@@ -178,6 +178,13 @@ public partial class App : System.Windows.Application
         catch (Exception)
         {
         }
+        try
+        {
+            AppServices.Instance.TcpTaskExecution.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception)
+        {
+        }
         try { AppServices.Instance.AutomaticBackups.Dispose(); } catch (Exception) { }
         try { AppServices.Instance.HealthMonitor.Dispose(); } catch (Exception) { }
         try

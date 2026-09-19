@@ -33,6 +33,225 @@ public sealed class TaskTcpTriggerConfig
 
 public sealed record TcpTaskExecutionResult(string Status, long Count, string Decision, long RecordId = 0);
 
+/// <summary>一次 TCP 触发任务的不可变执行上下文。</summary>
+public sealed record TcpTaskExecutionRequest(
+    string ProjectCode,
+    long TaskId,
+    string StationCode,
+    string TaskName,
+    string RequestId,
+    string Message,
+    DateTimeOffset ReceivedAt);
+
+public enum TcpExecutionAdmission
+{
+    Accepted,
+    Processing,
+    Completed,
+    QueueFull,
+}
+
+public sealed record TcpExecutionSubmission(
+    TcpExecutionAdmission Admission,
+    int QueuePosition = 0,
+    TcpTaskExecutionResult? CachedResult = null,
+    Task<TcpTaskExecutionResult>? Completion = null,
+    Action? Start = null,
+    Action? Cancel = null);
+
+/// <summary>
+/// 按工位隔离的异步执行调度器。TCP 接收线程只负责入队，实际执行由每个工位的固定 worker 完成。
+/// </summary>
+public sealed class TcpStationExecutionScheduler : IAsyncDisposable
+{
+    public sealed record Options
+    {
+        public int MaxConcurrency { get; init; } = 3;
+        public int MaxQueueLength { get; init; } = 20;
+        public TimeSpan ExecutionTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    }
+
+    private sealed class RequestState
+    {
+        public required string Key { get; init; }
+        public required string ProjectCode { get; init; }
+        public required TaskCompletionSource<TcpTaskExecutionResult> Completion { get; init; }
+        public TcpTaskExecutionResult? Result;
+        public bool Finished;
+    }
+
+    private sealed class WorkItem
+    {
+        public required RequestState Request { get; init; }
+        public required string StationKey { get; init; }
+        public required Func<CancellationToken, Task<TcpTaskExecutionResult>> Execute { get; init; }
+        public required CancellationToken ProjectCancellation { get; init; }
+        public required TaskCompletionSource<bool> StartGate { get; init; }
+    }
+
+    private sealed class StationState : IAsyncDisposable
+    {
+        public required Channel<WorkItem> Queue { get; init; }
+        public required Task[] Workers { get; init; }
+
+        public async ValueTask DisposeAsync()
+        {
+            Queue.Writer.TryComplete();
+            try { await Task.WhenAll(Workers); } catch { }
+        }
+    }
+
+    private Options _options;
+    private readonly CancellationTokenSource _stop = new();
+    private readonly ConcurrentDictionary<string, StationState> _stations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, RequestState> _requests = new(StringComparer.Ordinal);
+
+    public TcpStationExecutionScheduler(Options? options = null)
+    {
+        _options = Normalize(options ?? new Options());
+    }
+
+    /// <summary>更新后续新工位队列使用的参数；已创建工位保持其当前 worker 数量和容量。</summary>
+    public void Configure(Options options) => _options = Normalize(options);
+
+    public TcpExecutionSubmission TryEnqueue(
+        TcpTaskExecutionRequest request,
+        CancellationToken projectCancellation,
+        Func<CancellationToken, Task<TcpTaskExecutionResult>> execute)
+    {
+        var key = $"{request.ProjectCode}:{request.RequestId}";
+        if (_requests.TryGetValue(key, out var existing))
+        {
+            return existing.Finished
+                ? new(TcpExecutionAdmission.Completed, CachedResult: existing.Result)
+                : new(TcpExecutionAdmission.Processing);
+        }
+
+        var state = new RequestState
+        {
+            Key = key,
+            ProjectCode = request.ProjectCode,
+            Completion = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        if (!_requests.TryAdd(key, state))
+        {
+            return new(TcpExecutionAdmission.Processing);
+        }
+
+        var stationKey = string.IsNullOrWhiteSpace(request.StationCode)
+            ? $"task:{request.TaskId}"
+            : request.StationCode.Trim();
+        var station = _stations.GetOrAdd(stationKey, _ => CreateStation(stationKey));
+        var startGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var item = new WorkItem
+        {
+            Request = state,
+            StationKey = stationKey,
+            Execute = execute,
+            ProjectCancellation = projectCancellation,
+            StartGate = startGate,
+        };
+        if (!station.Queue.Writer.TryWrite(item))
+        {
+            _requests.TryRemove(key, out _);
+            return new(TcpExecutionAdmission.QueueFull);
+        }
+
+        var queued = station.Queue.Reader.Count;
+        return new(
+            TcpExecutionAdmission.Accepted,
+            QueuePosition: queued,
+            Completion: state.Completion.Task,
+            Start: () => startGate.TrySetResult(true),
+            Cancel: () => startGate.TrySetCanceled());
+    }
+
+    private StationState CreateStation(string stationKey)
+    {
+        var queue = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(_options.MaxQueueLength)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = false,
+            SingleWriter = false,
+        });
+        var station = new StationState
+        {
+            Queue = queue,
+            Workers = Enumerable.Range(0, _options.MaxConcurrency)
+                .Select(_ => WorkerLoopAsync(stationKey, queue.Reader))
+                .ToArray(),
+        };
+        return station;
+    }
+
+    private async Task WorkerLoopAsync(string stationKey, ChannelReader<WorkItem> reader)
+    {
+        try
+        {
+            await foreach (var item in reader.ReadAllAsync(_stop.Token))
+            {
+                if (item.ProjectCancellation.IsCancellationRequested)
+                {
+                    CompleteCanceled(item);
+                    continue;
+                }
+
+                try
+                {
+                    await item.StartGate.Task.WaitAsync(item.ProjectCancellation);
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                        _stop.Token, item.ProjectCancellation);
+                    timeout.CancelAfter(_options.ExecutionTimeout);
+                    var result = await item.Execute(timeout.Token);
+                    item.Request.Result = result;
+                    item.Request.Finished = true;
+                    item.Request.Completion.TrySetResult(result);
+                }
+                catch (OperationCanceledException)
+                {
+                    CompleteCanceled(item);
+                }
+                catch (Exception ex)
+                {
+                    item.Request.Finished = true;
+                    item.Request.Completion.TrySetException(ex);
+                }
+                finally
+                {
+                    // 保留完成记录，使相同 requestId 在缓存生命周期内得到幂等结果。
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void CompleteCanceled(WorkItem item)
+    {
+        item.Request.Completion.TrySetCanceled();
+        _requests.TryRemove(item.Request.Key, out _);
+    }
+
+    private static Options Normalize(Options options) => options with
+    {
+        MaxConcurrency = Math.Max(1, options.MaxConcurrency),
+        MaxQueueLength = Math.Max(1, options.MaxQueueLength),
+        ExecutionTimeout = options.ExecutionTimeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(30) : options.ExecutionTimeout,
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        foreach (var state in _stations.Values)
+            state.Queue.Writer.TryComplete();
+        foreach (var state in _stations.Values)
+            await state.DisposeAsync();
+        foreach (var request in _requests.Values)
+            request.Completion.TrySetCanceled();
+        _requests.Clear();
+        _stop.Dispose();
+    }
+}
+
 public sealed class ProjectCommunicationConfig
 {
     public string ProjectCode { get; set; } = "default";
@@ -73,6 +292,9 @@ public sealed class ProjectCommunicationConfig
     public List<string> AllowedClientAddresses { get; set; } = [];
     public int MaxRequestsPerMinute { get; set; } = 1200;
     public int IdleTimeoutSeconds { get; set; } = 300;
+    public int StationMaxConcurrency { get; set; } = 3;
+    public int StationQueueLength { get; set; } = 20;
+    public int StationExecutionTimeoutSeconds { get; set; } = 30;
 }
 
 /// <summary>TCP/IP 项目配置文件的统一读写入口，兼容旧版字典格式。</summary>
@@ -523,6 +745,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         public EventHandler<TcpRawDataReceivedEventArgs>? RawDataHandler { get; set; }
         public EventHandler<TcpFrameReceivedEventArgs>? FrameHandler { get; set; }
         public EventHandler<TcpConnectionChangedEventArgs>? ConnectionHandler { get; set; }
+        public CancellationTokenSource ExecutionStop { get; } = new();
     }
 
     private readonly Persistence.ProjectStationRepository _projects;
@@ -531,9 +754,11 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     private readonly string? _logDirectory;
     private readonly Persistence.CommunicationRequestStore? _requestStore;
     private readonly ConcurrentDictionary<string, string> _completed = new();
+    private readonly ConcurrentDictionary<string, byte> _processing = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> _rateWindows = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ProjectRuntime> _runtimes = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly TcpStationExecutionScheduler _executionScheduler;
     public TcpRuntimeState State => _runtimes.Values.Select(runtime => runtime.Transport?.State ?? TcpRuntimeState.Stopped)
         .OrderByDescending(state => state == TcpRuntimeState.Connected)
         .ThenByDescending(state => state == TcpRuntimeState.Listening)
@@ -548,14 +773,29 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         : [];
     public event EventHandler<TcpLogEntry>? LogReceived;
     public event EventHandler? StateChanged;
-    public Func<Persistence.TaskEntity, CancellationToken, Task<TcpTaskExecutionResult>>? TaskExecutor { get; set; }
-    public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null, Persistence.CommunicationRequestStore? requestStore = null) { _projects = projects; _tasks = tasks; _logger = logger; _logDirectory = logDirectory; _requestStore = requestStore; }
+    public event Action<string>? ProjectStopped;
+    public Func<TcpTaskExecutionRequest, CancellationToken, Task<TcpTaskExecutionResult>>? TaskExecutor { get; set; }
+    public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null, Persistence.CommunicationRequestStore? requestStore = null)
+    {
+        _projects = projects;
+        _tasks = tasks;
+        _logger = logger;
+        _logDirectory = logDirectory;
+        _requestStore = requestStore;
+        _executionScheduler = new TcpStationExecutionScheduler();
+    }
     public async Task StartAsync(ProjectCommunicationConfig config, CancellationToken ct = default)
     {
         var projectCode = string.IsNullOrWhiteSpace(config.ProjectCode) ? "default" : config.ProjectCode;
         await _lifecycleGate.WaitAsync(ct);
         try
         {
+            _executionScheduler.Configure(new TcpStationExecutionScheduler.Options
+            {
+                MaxConcurrency = config.StationMaxConcurrency,
+                MaxQueueLength = config.StationQueueLength,
+                ExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, config.StationExecutionTimeoutSeconds)),
+            });
             await StopProjectCoreAsync(projectCode, ct);
             var runtime = new ProjectRuntime(config);
             _runtimes[projectCode] = runtime;
@@ -614,6 +854,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     private async Task StopProjectCoreAsync(string projectCode, CancellationToken ct)
     {
         if (!_runtimes.TryRemove(projectCode, out var runtime)) return;
+        runtime.ExecutionStop.Cancel();
         runtime.FrameChannel.Writer.TryComplete();
         if (runtime.FrameConsumer is not null)
         {
@@ -626,6 +867,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             if (runtime.ConnectionHandler is not null) runtime.Transport.ConnectionChanged -= runtime.ConnectionHandler;
             await runtime.Transport.DisposeAsync();
         }
+        runtime.ExecutionStop.Dispose();
+        foreach (var key in _processing.Keys.Where(key => key.StartsWith(projectCode + ":", StringComparison.OrdinalIgnoreCase)).ToArray())
+            _processing.TryRemove(key, out _);
+        ProjectStopped?.Invoke(projectCode);
         Log("INFO", "SYS", $"[{projectCode}] TCP 已停止");
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -753,34 +998,151 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             var taskKey = root.TryGetProperty("task", out var t) ? t.GetString() : null;
             var matched = TcpTaskMatcher.Match(command ?? "", taskKey, tasks);
             if (matched is null) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "task_not_configured", requestId, task = taskKey }); return; }
-            await SendJsonAsync(runtime, connectionId, new { ok = true, code = "accepted", requestId, data = new { task = matched, queuePosition = 0 } });
-            var result = JsonSerializer.Serialize(new { ok = true, code = "completed", requestId, responseId = Guid.NewGuid().ToString("N"), data = new { task = matched, status = "received", message = "命令已匹配；请在实时检测任务中启动对应工位" } });
-            _completed[$"{runtime.Config.ProjectCode}:{requestId}"] = result;
-            if (persistedRequest is not null) await _requestStore!.CompleteAsync(persistedRequest.Id, result);
-            await SendTextAsync(runtime, connectionId, result);
+            var matchedTask = tasks.First(task => string.Equals(task.StationCode, matched, StringComparison.OrdinalIgnoreCase));
+            var trigger = ParseTriggers(matchedTask.TriggerJson).FirstOrDefault(item => item.Enabled)
+                ?? new TaskTcpTriggerConfig();
+            await ExecuteConfiguredTaskAsync(runtime, connectionId, text, matchedTask, trigger, persistedRequest);
         }
     }
-    private async Task ExecuteConfiguredTaskAsync(ProjectRuntime runtime, string connectionId, string text, Persistence.TaskEntity task, TaskTcpTriggerConfig trigger)
+    private async Task ExecuteConfiguredTaskAsync(ProjectRuntime runtime, string connectionId, string text, Persistence.TaskEntity task, TaskTcpTriggerConfig trigger, Persistence.CommunicationRequestEntity? persistedRequest = null)
     {
         var requestId = TryReadRequestId(text) ?? Guid.NewGuid().ToString("N");
         var cacheKey = $"{runtime.Config.ProjectCode}:{requestId}";
         if (_completed.TryGetValue(cacheKey, out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
-        Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 开始执行任务: {task.Name} ({task.StationCode})");
-        await SendJsonAsync(runtime, connectionId, new { ok = true, code = "accepted", requestId, data = new { task = task.Name } });
+        if (!_processing.TryAdd(cacheKey, 0))
+        {
+            await SendJsonAsync(runtime, connectionId, new { ok = true, code = "processing", requestId });
+            return;
+        }
+
+        if (TaskExecutor is null)
+        {
+            _processing.TryRemove(cacheKey, out _);
+            await SendJsonAsync(runtime, connectionId, new { ok = false, code = "execution_unavailable", requestId, task = task.Name });
+            return;
+        }
+
+        var request = new TcpTaskExecutionRequest(
+            runtime.Config.ProjectCode,
+            task.Id,
+            task.StationCode,
+            task.Name,
+            requestId,
+            text,
+            DateTimeOffset.UtcNow);
+        var submission = _executionScheduler.TryEnqueue(
+            request,
+            runtime.ExecutionStop.Token,
+            token => TaskExecutor(request, token));
+        if (submission.Admission == TcpExecutionAdmission.QueueFull)
+        {
+            _processing.TryRemove(cacheKey, out _);
+            await SendJsonAsync(runtime, connectionId, new { ok = false, code = "station_queue_full", requestId, task = task.Name });
+            return;
+        }
+        if (submission.Admission == TcpExecutionAdmission.Completed && submission.CachedResult is { } completed)
+        {
+            _processing.TryRemove(cacheKey, out _);
+            var completedResponse = ApplyTemplate(trigger.ResponseTemplate, requestId, task, completed);
+            _completed[cacheKey] = completedResponse;
+            await CompletePersistedRequestAsync(persistedRequest, completedResponse);
+            await SendTextAsync(runtime, connectionId, completedResponse);
+            return;
+        }
+        if (submission.Admission == TcpExecutionAdmission.Completed)
+        {
+            _processing.TryRemove(cacheKey, out _);
+            if (_completed.TryGetValue(cacheKey, out var completedResponse))
+                await SendTextAsync(runtime, connectionId, completedResponse);
+            else
+                await SendJsonAsync(runtime, connectionId, new { ok = true, code = "processing", requestId });
+            return;
+        }
+        if (submission.Admission == TcpExecutionAdmission.Processing)
+        {
+            _processing.TryRemove(cacheKey, out _);
+            await SendJsonAsync(runtime, connectionId, new { ok = true, code = "processing", requestId });
+            return;
+        }
+
+        Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 已接收任务: {task.Name} ({task.StationCode}), requestId={requestId}");
         try
         {
-            if (TaskExecutor is null) throw new InvalidOperationException("TCP 任务执行器未配置");
-            var result = await TaskExecutor(task, CancellationToken.None);
-            var response = ApplyTemplate(trigger.ResponseTemplate, requestId, task, result);
+            await SendJsonAsync(runtime, connectionId, new
+            {
+                ok = true,
+                code = "accepted",
+                requestId,
+                data = new { task = task.Name, station = task.StationCode, queuePosition = submission.QueuePosition },
+            });
+            submission.Start?.Invoke();
+        }
+        catch
+        {
+            submission.Cancel?.Invoke();
+            _processing.TryRemove(cacheKey, out _);
+            throw;
+        }
+        _ = ObserveExecutionAsync(runtime, connectionId, task, trigger, request, submission.Completion!, cacheKey, persistedRequest);
+    }
+
+    private async Task ObserveExecutionAsync(
+        ProjectRuntime runtime,
+        string connectionId,
+        Persistence.TaskEntity task,
+        TaskTcpTriggerConfig trigger,
+        TcpTaskExecutionRequest request,
+        Task<TcpTaskExecutionResult> completion,
+        string cacheKey,
+        Persistence.CommunicationRequestEntity? persistedRequest)
+    {
+        try
+        {
+            var result = await completion;
+            var response = ApplyTemplate(trigger.ResponseTemplate, request.RequestId, task, result);
             _completed[cacheKey] = response;
-            Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行完成: {task.Name}, status={result.Status}, count={result.Count}");
-            await SendTextAsync(runtime, connectionId, response);
+            await CompletePersistedRequestAsync(persistedRequest, response);
+            Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行完成: {task.Name}, status={result.Status}, count={result.Count}, requestId={request.RequestId}");
+            if (_runtimes.ContainsKey(runtime.Config.ProjectCode))
+                await TrySendTextAsync(runtime, connectionId, response);
+        }
+        catch (OperationCanceledException)
+        {
+            Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务已取消: {task.Name}, requestId={request.RequestId}");
         }
         catch (Exception ex)
         {
+            var response = JsonSerializer.Serialize(new
+            {
+                ok = false,
+                code = "execution_failed",
+                requestId = request.RequestId,
+                task = task.Name,
+                message = ex.Message,
+            });
+            _completed[cacheKey] = response;
+            await CompletePersistedRequestAsync(persistedRequest, response);
             Log("ERROR", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行失败: {task.Name}, {ex.Message}");
-            await SendJsonAsync(runtime, connectionId, new { ok = false, code = "execution_failed", requestId, task = task.Name, message = ex.Message });
+            if (_runtimes.ContainsKey(runtime.Config.ProjectCode))
+                await TrySendTextAsync(runtime, connectionId, response);
         }
+        finally
+        {
+            _processing.TryRemove(cacheKey, out _);
+        }
+    }
+
+    private async Task CompletePersistedRequestAsync(Persistence.CommunicationRequestEntity? request, string response)
+    {
+        if (request is null || _requestStore is null) return;
+        try { await _requestStore.CompleteAsync(request.Id, response); }
+        catch (Exception ex) { _logger?.LogDebug(ex, "保存 TCP 请求缓存失败: {RequestId}", request.RequestId); }
+    }
+
+    private async Task TrySendTextAsync(ProjectRuntime runtime, string connectionId, string text)
+    {
+        try { await SendTextAsync(runtime, connectionId, text); }
+        catch (Exception ex) { Log("WARN", "SYS", $"[{runtime.Config.ProjectCode}/{connectionId}] 完成响应发送失败: {ex.Message}"); }
     }
     private static IReadOnlyList<TaskTcpTriggerConfig> ParseTriggers(string? json)
     {
@@ -864,6 +1226,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
+        await _executionScheduler.DisposeAsync();
         _lifecycleGate.Dispose();
     }
 }
