@@ -14,7 +14,6 @@ using System.Windows.Media.Imaging;
 using Rectangle = System.Windows.Shapes.Rectangle;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Application;
-using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Domain;
 
@@ -42,7 +41,6 @@ public partial class TasksPage : UserControl
     private Point _roiDragStart;
     private NormalizedRect? _draftRoi;
     private readonly List<string> _taskTestImagePaths = [];
-    private List<ProjectCommunicationConfig> _tcpProfiles = [];
     private int _taskTestImageIndex = -1;
     private AlgorithmOutput? _taskTestOutput;
     private bool _taskTestRunning;
@@ -545,8 +543,6 @@ public partial class TasksPage : UserControl
     {
         try
         {
-            _tcpProfiles = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory).Load();
-            TcpTriggerProfileCombo.ItemsSource = _tcpProfiles;
             var tasks = await AppServices.Instance.Recipes.ListAsync();
             TaskList.ItemsSource = tasks
                 .Select(t => new TaskRow(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
@@ -587,7 +583,6 @@ public partial class TasksPage : UserControl
         }
         var (entity, recipe) = pair;
         _editingId = entity.Id;
-        SelectTcpTriggerProfile(ReadTcpTrigger(entity.TriggerJson)?.TcpProjectCode);
         StationCodeText.Text = recipe.StationCode;
         NameText.Text = recipe.Name;
         DescriptionText.Text = recipe.Description;
@@ -666,7 +661,6 @@ public partial class TasksPage : UserControl
         await DisposeTaskTestSessionAsync();
         TaskList.SelectedItem = null;
         _editingId = null;
-        SelectTcpTriggerProfile("default");
         ClearTaskTestPreview();
         StationCodeText.Text = NextStationCode();
         NameText.Text = NextTaskName();
@@ -893,11 +887,7 @@ public partial class TasksPage : UserControl
         };
         try
         {
-            var saved = await AppServices.Instance.Recipes.SaveAsync(recipe, _editingId);
-            var tcpTrigger = ReadTcpTrigger(saved.TriggerJson) ?? new TaskTcpTriggerConfig();
-            tcpTrigger.TcpProjectCode = (TcpTriggerProfileCombo.SelectedItem as ProjectCommunicationConfig)?.ProjectCode ?? "default";
-            saved.TriggerJson = JsonSerializer.Serialize(tcpTrigger);
-            await AppServices.Instance.Tasks.SaveAsync(saved);
+            await AppServices.Instance.Recipes.SaveAsync(recipe, _editingId);
             ThemedMessageBox.Show("已保存", "任务配置");
             Refresh();
         }
@@ -1263,21 +1253,6 @@ public partial class TasksPage : UserControl
 
     private static string NormalizeExecutionProvider(string? provider) =>
         string.Equals(provider, "cuda", StringComparison.OrdinalIgnoreCase) ? "cuda" : "cpu";
-
-    private void SelectTcpTriggerProfile(string? code)
-    {
-        if (TcpTriggerProfileCombo is null) return;
-        TcpTriggerProfileCombo.SelectedItem = _tcpProfiles.FirstOrDefault(profile =>
-            string.Equals(profile.ProjectCode, string.IsNullOrWhiteSpace(code) ? "default" : code, StringComparison.OrdinalIgnoreCase))
-            ?? _tcpProfiles.FirstOrDefault();
-    }
-
-    private static TaskTcpTriggerConfig? ReadTcpTrigger(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return null;
-        try { return JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json); }
-        catch (JsonException) { return null; }
-    }
 
     private void SelectTaskType(InspectionTaskType? type)
     {

@@ -79,11 +79,9 @@ public partial class CommunicationPage : UserControl
 
     private void RefreshBoundTasks()
     {
-        _triggerTasks = _allTasks
-            .Where(task => TryReadTrigger(task.TriggerJson) is { } trigger
-                && !string.IsNullOrWhiteSpace(trigger.TcpProjectCode)
-                && string.Equals(trigger.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // Detection tasks are selected and bound here in the TCP/IP page.
+        // Task configuration deliberately has no TCP/IP project selector.
+        _triggerTasks = _allTasks.ToList();
         TriggerTaskCombo.ItemsSource = _triggerTasks;
         TriggerTaskCombo.SelectedIndex = _triggerTasks.Count > 0 ? 0 : -1;
         RefreshTriggerRules();
@@ -156,6 +154,10 @@ public partial class CommunicationPage : UserControl
         TaskTcpTriggerConfig config;
         try { config = JsonSerializer.Deserialize<TaskTcpTriggerConfig>(task.TriggerJson ?? "") ?? new TaskTcpTriggerConfig(); }
         catch (JsonException) { config = new TaskTcpTriggerConfig(); }
+        if (!string.Equals(config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
+        {
+            config = new TaskTcpTriggerConfig();
+        }
         TriggerEnabledCheck.IsChecked = config.Enabled;
         SelectTag(TriggerMatchModeCombo, config.MatchMode.ToString());
         TriggerMatchValueText.Text = config.MatchValue;
@@ -217,6 +219,7 @@ public partial class CommunicationPage : UserControl
         }
         if (config.Enabled && _triggerTasks.Any(other => other.Id != task.Id
             && TryReadTrigger(other.TriggerJson) is { Enabled: true } existing
+            && string.Equals(existing.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase)
             && existing.MatchMode == config.MatchMode
             && string.Equals(existing.MatchValue, config.MatchValue, StringComparison.Ordinal)))
         {
@@ -232,7 +235,8 @@ public partial class CommunicationPage : UserControl
     {
         TriggerRulesList.ItemsSource = _triggerTasks
             .Select(task => (Task: task, Config: TryReadTrigger(task.TriggerJson)))
-            .Where(pair => pair.Config is { Enabled: true })
+            .Where(pair => pair.Config is { Enabled: true }
+                && string.Equals(pair.Config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
             .Select(pair => new TriggerRuleRow(pair.Task.Id,
                 $"{pair.Task.Name}  ·  {pair.Config!.MatchMode}  ·  {pair.Config.MatchValue}"))
             .ToArray();
