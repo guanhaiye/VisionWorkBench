@@ -614,7 +614,7 @@ public partial class DatasetAnnotationPage : UserControl
         DatasetRootText.Text = dataset.RootDirectory;
         DatasetClassesText.Text = string.Join(", ", dataset.Classes);
         ClassCombo.ItemsSource = dataset.Classes;
-        if (ClassCombo.Items.Count > 0) ClassCombo.SelectedIndex = 0;
+        SelectDefaultAnnotationClass();
         UpdateTaskTypeUi();
         ImageList.ItemsSource = AppServices.Instance.Datasets.ListImages(dataset);
         UpdateImageListEmptyState();
@@ -1242,6 +1242,25 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void FinishPolygon_Click(object sender, RoutedEventArgs e) => FinishPolygon();
 
+    private void SelectDefaultAnnotationClass()
+    {
+        if (ClassCombo.Items.Count == 0) return;
+        var defaultClass = ClassCombo.Items
+            .OfType<string>()
+            .FirstOrDefault(value => string.Equals(value, "object", StringComparison.OrdinalIgnoreCase));
+        ClassCombo.SelectedItem = defaultClass ?? ClassCombo.Items[0];
+    }
+
+    private bool TryResolveAnnotationClass(out string className)
+    {
+        if (PromptClassAfterDrawCheckBox.IsChecked != true && ClassCombo.SelectedItem is string selected)
+        {
+            className = selected.Trim();
+            return !string.IsNullOrWhiteSpace(className);
+        }
+        return TrySelectAnnotationClass(out className);
+    }
+
     private bool TrySelectAnnotationClass(out string className)
     {
         className = string.Empty;
@@ -1285,7 +1304,7 @@ public partial class DatasetAnnotationPage : UserControl
         {
             return;
         }
-        if (!TrySelectAnnotationClass(out var className))
+        if (!TryResolveAnnotationClass(out var className))
         {
             CancelPolygonDraft();
             RenderAnnotations();
@@ -1440,7 +1459,7 @@ public partial class DatasetAnnotationPage : UserControl
             .Select(contour => BuildPolygonFromContour(string.Empty, contour, rasterWidth, rasterHeight))
             .ToList();
         if (paintedObjects.Count == 0) return;
-        if (!TrySelectAnnotationClass(out var className))
+        if (!TryResolveAnnotationClass(out var className))
         {
             StatusText.Text = "已取消本次画刷绘制。";
             return;
@@ -2038,6 +2057,7 @@ public partial class DatasetAnnotationPage : UserControl
         ManualDrawButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         BrushButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         EraserButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
+        PromptClassAfterDrawCheckBox.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         Sam1Button.Visibility = IsSegmentationPlatform
             ? Visibility.Visible
             : Visibility.Collapsed;
