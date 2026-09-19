@@ -53,6 +53,7 @@ public partial class DatasetAnnotationPage : UserControl
     private Point? _eraserCursorPoint;
     private Point _eraserLastPoint;
     private bool _eraserChanged;
+    private List<DatasetAnnotationObject>? _eraserUndoSnapshot;
     private bool _refreshingImageList;
     private readonly List<Point> _eraserStrokePoints = [];
     private Polyline? _eraserStrokeVisual;
@@ -866,6 +867,7 @@ public partial class DatasetAnnotationPage : UserControl
     {
         if (_refreshingImageList) return;
         if (_dataset is null || ImageList.SelectedItem is not DatasetImageItem image) return;
+        _eraserUndoSnapshot = null;
         var keepSam1Active = _sam1ClickMode;
         ResetSam1ImageState();
         ResetZoom();
@@ -1233,6 +1235,7 @@ public partial class DatasetAnnotationPage : UserControl
         if (_annotation is null || sender is not MenuItem item || item.Tag is not string className) return;
         var index = AnnotationList.SelectedIndex;
         if (index < 0 || index >= _annotation.Objects.Count) return;
+        _eraserUndoSnapshot = null;
         _annotation.Objects[index].ClassName = className;
         RefreshAnnotationList(index);
         AutoSaveAnnotation("切换类别");
@@ -1321,6 +1324,7 @@ public partial class DatasetAnnotationPage : UserControl
         var minY = points.Min(point => point.Y);
         var maxX = points.Max(point => point.X);
         var maxY = points.Max(point => point.Y);
+        _eraserUndoSnapshot = null;
         _annotation.Objects.Add(new DatasetAnnotationObject
         {
             ClassName = className,
@@ -1361,6 +1365,7 @@ public partial class DatasetAnnotationPage : UserControl
     private void DeleteAnnotation_Click(object sender, RoutedEventArgs e)
     {
         if (_annotation is null || AnnotationList.SelectedIndex < 0) return;
+        _eraserUndoSnapshot = null;
         _annotation.Objects.RemoveAt(AnnotationList.SelectedIndex);
         AnnotationList.ItemsSource = null;
         AnnotationList.ItemsSource = _annotation.Objects;
@@ -1379,6 +1384,9 @@ public partial class DatasetAnnotationPage : UserControl
             Math.Clamp((int)Math.Round((point.Y - imageRect.Top) / imageRect.Height * rasterHeight), 0, rasterHeight - 1))).ToArray();
         var thickness = Math.Max(2, (int)Math.Round(_eraserDiameter / imageRect.Width * rasterWidth));
 
+        var beforeErase = _annotation.Objects
+            .Select(CloneAnnotationObject)
+            .ToList();
         var changed = false;
         for (var index = _annotation.Objects.Count - 1; index >= 0; index--)
         {
@@ -1428,6 +1436,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
 
         if (!changed) return;
+        _eraserUndoSnapshot = beforeErase;
         _eraserChanged = true;
         AnnotationList.ItemsSource = null;
         AnnotationList.ItemsSource = _annotation.Objects;
@@ -1522,6 +1531,7 @@ public partial class DatasetAnnotationPage : UserControl
             paintedObject.ClassName = className;
 
         _annotation.Objects.AddRange(paintedObjects);
+        _eraserUndoSnapshot = null;
         MergeSameClassPolygons(className, rasterWidth, rasterHeight);
         _brushChanged = true;
         RefreshAnnotationList(_annotation.Objects.Count - 1);
@@ -2438,6 +2448,9 @@ public partial class DatasetAnnotationPage : UserControl
         _brushDragging = false;
         _brushChanged = false;
         _brushStrokePoints.Clear();
+        _eraserDragging = false;
+        _eraserChanged = false;
+        _eraserStrokePoints.Clear();
         AnnotationCanvas.ReleaseMouseCapture();
         RenderAnnotations();
         StatusText.Text = "已按 Esc 取消本次绘制，已有标注保持不变。";
@@ -2457,6 +2470,24 @@ public partial class DatasetAnnotationPage : UserControl
             StatusText.Text = "已撤销当前未完成的画刷绘制。";
             return;
         }
+        if (_eraserMode && (_eraserStrokePoints.Count > 0 || _eraserDragging))
+        {
+            CancelCurrentDraw();
+            StatusText.Text = "已撤销当前未完成的橡皮擦操作。";
+            return;
+        }
+        if (_annotation is not null && _eraserUndoSnapshot is not null)
+        {
+            var selectedIndex = AnnotationList.SelectedIndex;
+            _annotation.Objects.Clear();
+            _annotation.Objects.AddRange(_eraserUndoSnapshot);
+            _eraserUndoSnapshot = null;
+            RefreshAnnotationList(Math.Min(selectedIndex, _annotation.Objects.Count - 1));
+            RenderAnnotations();
+            AutoSaveAnnotation("撤销橡皮擦");
+            StatusText.Text = "已撤销最近一次橡皮擦操作。";
+            return;
+        }
         if (_annotation is null || _annotation.Objects.Count == 0)
         {
             StatusText.Text = "当前没有可以撤销的分割标注。";
@@ -2464,6 +2495,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
 
         _annotation.Objects.RemoveAt(_annotation.Objects.Count - 1);
+        _eraserUndoSnapshot = null;
         RefreshAnnotationList(Math.Min(_annotation.Objects.Count - 1, AnnotationList.SelectedIndex));
         RenderAnnotations();
         AutoSaveAnnotation("撤销分割标注");
