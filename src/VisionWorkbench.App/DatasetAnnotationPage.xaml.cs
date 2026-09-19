@@ -38,6 +38,15 @@ public partial class DatasetAnnotationPage : UserControl
     private readonly DispatcherTimer _yoloeSpinnerTimer;
     private int _yoloeSpinnerFrame;
     private bool _manualDrawMode = true;
+    private bool _brushMode;
+    private bool _brushDragging;
+    private double _brushDiameter = 36;
+    private Point? _brushCursorPoint;
+    private Point _brushLastPoint;
+    private bool _brushChanged;
+    private readonly List<Point> _brushStrokePoints = [];
+    private Polyline? _brushStrokeVisual;
+    private Ellipse? _brushCursorVisual;
     private bool _eraserMode;
     private bool _eraserDragging;
     private double _eraserDiameter = 36;
@@ -904,6 +913,20 @@ public partial class DatasetAnnotationPage : UserControl
             return;
         }
         var point = e.GetPosition(AnnotationCanvas);
+        if (_brushMode && IsPolygonMode())
+        {
+            if (!TryGetImageNormalizedPoint(point, GetImageRect(), out _)) return;
+            _brushDragging = true;
+            _brushChanged = false;
+            _brushLastPoint = point;
+            _brushCursorPoint = point;
+            _brushStrokePoints.Clear();
+            _brushStrokePoints.Add(point);
+            AnnotationCanvas.CaptureMouse();
+            UpdateBrushVisuals();
+            e.Handled = true;
+            return;
+        }
         if (_eraserMode && IsPolygonMode())
         {
             _eraserDragging = true;
@@ -961,6 +984,21 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_brushMode)
+        {
+            var point = ClampPointToRect(e.GetPosition(AnnotationCanvas), GetImageRect());
+            _brushCursorPoint = point;
+            if (_brushDragging && e.LeftButton == MouseButtonState.Pressed)
+            {
+                if ((point - _brushLastPoint).Length >= 2)
+                {
+                    _brushStrokePoints.Add(point);
+                    _brushLastPoint = point;
+                }
+            }
+            UpdateBrushVisuals();
+            return;
+        }
         if (_eraserMode)
         {
             var point = e.GetPosition(AnnotationCanvas);
@@ -1003,6 +1041,12 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseEnter(object sender, MouseEventArgs e)
     {
+        if (_brushMode)
+        {
+            _brushCursorPoint = ClampPointToRect(e.GetPosition(AnnotationCanvas), GetImageRect());
+            RenderAnnotations();
+            return;
+        }
         if (_eraserMode)
         {
             _eraserCursorPoint = e.GetPosition(AnnotationCanvas);
@@ -1015,6 +1059,12 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseLeave(object sender, MouseEventArgs e)
     {
+        if (_brushMode)
+        {
+            _brushCursorPoint = null;
+            RenderAnnotations();
+            return;
+        }
         if (_eraserMode)
         {
             _eraserCursorPoint = null;
@@ -1031,6 +1081,17 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_brushMode && _brushDragging)
+        {
+            _brushDragging = false;
+            AnnotationCanvas.ReleaseMouseCapture();
+            PaintStroke(_brushStrokePoints);
+            _brushStrokePoints.Clear();
+            if (_brushChanged) AutoSaveAnnotation("画刷标注");
+            RenderAnnotations();
+            e.Handled = true;
+            return;
+        }
         if (_eraserMode && _eraserDragging)
         {
             _eraserDragging = false;
@@ -1297,6 +1358,51 @@ public partial class DatasetAnnotationPage : UserControl
         StatusText.Text = $"正在擦除；橡皮擦直径 {_eraserDiameter:0} 像素。松开左键后自动保存。";
     }
 
+    private void PaintStroke(IReadOnlyList<Point> stroke)
+    {
+        if (_annotation is null || ClassCombo.SelectedItem is not string className ||
+            stroke.Count == 0 || AnnotationCanvas.ActualWidth < 1 || AnnotationCanvas.ActualHeight < 1)
+        {
+            return;
+        }
+
+        var imageRect = GetImageRect();
+        if (imageRect.Width < 1 || imageRect.Height < 1) return;
+        var rasterWidth = Math.Clamp((int)Math.Round(imageRect.Width), 64, 2048);
+        var rasterHeight = Math.Clamp((int)Math.Round(imageRect.Height), 64, 2048);
+        var rasterStroke = stroke.Select(point => new OpenCvSharp.Point(
+            Math.Clamp((int)Math.Round((point.X - imageRect.Left) / imageRect.Width * rasterWidth), 0, rasterWidth - 1),
+            Math.Clamp((int)Math.Round((point.Y - imageRect.Top) / imageRect.Height * rasterHeight), 0, rasterHeight - 1))).ToArray();
+        var thickness = Math.Max(2, (int)Math.Round(_brushDiameter / imageRect.Width * rasterWidth));
+
+        using var mask = new OpenCvSharp.Mat(rasterHeight, rasterWidth, OpenCvSharp.MatType.CV_8UC1, OpenCvSharp.Scalar.Black);
+        if (rasterStroke.Length == 1)
+        {
+            OpenCvSharp.Cv2.Circle(mask, rasterStroke[0], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.White, -1);
+        }
+        else
+        {
+            OpenCvSharp.Cv2.Polylines(mask, [rasterStroke], false, OpenCvSharp.Scalar.White,
+                thickness, OpenCvSharp.LineTypes.AntiAlias);
+            OpenCvSharp.Cv2.Circle(mask, rasterStroke[0], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.White, -1);
+            OpenCvSharp.Cv2.Circle(mask, rasterStroke[^1], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.White, -1);
+        }
+
+        OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
+            OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
+        var paintedObjects = contours
+            .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
+            .Select(contour => BuildPolygonFromContour(className, contour, rasterWidth, rasterHeight))
+            .ToList();
+        if (paintedObjects.Count == 0) return;
+
+        _annotation.Objects.AddRange(paintedObjects);
+        _brushChanged = true;
+        RefreshAnnotationList(_annotation.Objects.Count - 1);
+        RenderAnnotations();
+        StatusText.Text = $"画刷已添加 {paintedObjects.Count} 个分割区域；画刷直径 {_brushDiameter:0} 像素。";
+    }
+
     private static DatasetAnnotationObject BuildPolygonFromContour(
         string className, OpenCvSharp.Point[] contour, int width, int height)
     {
@@ -1354,12 +1460,23 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (!_eraserMode || AnnotationImage.Source is null) return;
+        if ((!_eraserMode && !_brushMode) || AnnotationImage.Source is null) return;
         e.Handled = true;
-        _eraserDiameter = Math.Clamp(_eraserDiameter + (e.Delta > 0 ? 6 : -6), 8, 240);
-        _eraserCursorPoint = Mouse.GetPosition(AnnotationCanvas);
-        RenderAnnotations();
-        StatusText.Text = $"橡皮擦直径：{_eraserDiameter:0} 像素；按住左键拖动擦除。";
+        var delta = e.Delta > 0 ? 6 : -6;
+        if (_brushMode)
+        {
+            _brushDiameter = Math.Clamp(_brushDiameter + delta, 8, 240);
+            _brushCursorPoint = Mouse.GetPosition(AnnotationCanvas);
+            UpdateBrushVisuals();
+            StatusText.Text = $"画刷直径：{_brushDiameter:0} 像素；按住左键拖动画刷。";
+        }
+        else
+        {
+            _eraserDiameter = Math.Clamp(_eraserDiameter + delta, 8, 240);
+            _eraserCursorPoint = Mouse.GetPosition(AnnotationCanvas);
+            RenderAnnotations();
+            StatusText.Text = $"橡皮擦直径：{_eraserDiameter:0} 像素；按住左键拖动擦除。";
+        }
     }
 
     private void ResetZoom()
@@ -1381,6 +1498,8 @@ public partial class DatasetAnnotationPage : UserControl
     {
         if (AnnotationCanvas is null) return;
         AnnotationCanvas.Children.Clear();
+        _brushStrokeVisual = null;
+        _brushCursorVisual = null;
         _eraserStrokeVisual = null;
         _eraserCursorVisual = null;
         if (_annotation is null) return;
@@ -1507,6 +1626,33 @@ public partial class DatasetAnnotationPage : UserControl
             Canvas.SetTop(_eraserCursorVisual, eraserPoint.Y - _eraserCursorVisual.Height / 2);
             AnnotationCanvas.Children.Add(_eraserCursorVisual);
         }
+        if (_brushMode && _brushCursorPoint is { } brushPoint)
+        {
+            _brushStrokeVisual = new Polyline
+            {
+                Points = new PointCollection(_brushStrokePoints),
+                Stroke = new SolidColorBrush(Color.FromArgb(150, 40, 220, 120)),
+                StrokeThickness = _brushDiameter,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                IsHitTestVisible = false,
+            };
+            AnnotationCanvas.Children.Add(_brushStrokeVisual);
+            _brushCursorVisual = new Ellipse
+            {
+                Width = _brushDiameter,
+                Height = _brushDiameter,
+                Stroke = Brushes.LimeGreen,
+                StrokeThickness = 2,
+                StrokeDashArray = [3, 2],
+                Fill = new SolidColorBrush(Color.FromArgb(45, 40, 220, 120)),
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(_brushCursorVisual, brushPoint.X - _brushCursorVisual.Width / 2);
+            Canvas.SetTop(_brushCursorVisual, brushPoint.Y - _brushCursorVisual.Height / 2);
+            AnnotationCanvas.Children.Add(_brushCursorVisual);
+        }
     }
 
     private double OverlayStrokeThickness(double baseThickness)
@@ -1531,6 +1677,22 @@ public partial class DatasetAnnotationPage : UserControl
         _eraserCursorVisual.Height = _eraserDiameter;
         Canvas.SetLeft(_eraserCursorVisual, point.X - _eraserDiameter / 2);
         Canvas.SetTop(_eraserCursorVisual, point.Y - _eraserDiameter / 2);
+    }
+
+    private void UpdateBrushVisuals()
+    {
+        if (!_brushMode || _brushCursorPoint is not { } point) return;
+        if (_brushStrokeVisual is null || _brushCursorVisual is null)
+        {
+            RenderAnnotations();
+            return;
+        }
+        _brushStrokeVisual.Points = new PointCollection(_brushStrokePoints);
+        _brushStrokeVisual.StrokeThickness = _brushDiameter;
+        _brushCursorVisual.Width = _brushDiameter;
+        _brushCursorVisual.Height = _brushDiameter;
+        Canvas.SetLeft(_brushCursorVisual, point.X - _brushDiameter / 2);
+        Canvas.SetTop(_brushCursorVisual, point.Y - _brushDiameter / 2);
     }
 
     private void ClearImageView()
@@ -1734,8 +1896,11 @@ public partial class DatasetAnnotationPage : UserControl
         if (!IsPolygonMode()) return;
         ResetSam1Interaction();
         _manualDrawMode = true;
+        _brushMode = false;
         _eraserMode = false;
+        _brushDragging = false;
         _eraserDragging = false;
+        _brushCursorPoint = null;
         _eraserCursorPoint = null;
         AnnotationCanvas.ReleaseMouseCapture();
         CancelPolygonDraft();
@@ -1744,13 +1909,34 @@ public partial class DatasetAnnotationPage : UserControl
         StatusText.Text = "手动绘制已开启：依次单击添加轮廓点，双击完成并保存分割区域。";
     }
 
+    private void Brush_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsPolygonMode()) return;
+        ResetSam1Interaction();
+        _manualDrawMode = false;
+        _brushMode = true;
+        _eraserMode = false;
+        _brushDragging = false;
+        _eraserDragging = false;
+        _brushCursorPoint = null;
+        _eraserCursorPoint = null;
+        AnnotationCanvas.ReleaseMouseCapture();
+        CancelPolygonDraft();
+        UpdateTaskTypeUi();
+        RenderAnnotations();
+        StatusText.Text = $"画刷已开启：按住左键绘制分割区域，滚动鼠标调节画刷大小；当前直径 {_brushDiameter:0} 像素。";
+    }
+
     private void Eraser_Click(object sender, RoutedEventArgs e)
     {
         if (!IsPolygonMode()) return;
         ResetSam1Interaction();
         _manualDrawMode = false;
+        _brushMode = false;
         _eraserMode = true;
         _eraserDragging = false;
+        _brushDragging = false;
+        _brushCursorPoint = null;
         _eraserCursorPoint = null;
         CancelPolygonDraft();
         UpdateTaskTypeUi();
@@ -1767,6 +1953,7 @@ public partial class DatasetAnnotationPage : UserControl
     private void UpdateToolButtons()
     {
         ManualDrawButton.Content = "手动绘制";
+        BrushButton.Content = "画刷";
         EraserButton.Content = "橡皮擦";
     }
 
@@ -1786,7 +1973,7 @@ public partial class DatasetAnnotationPage : UserControl
             "instance_segmentation" => "实例分割",
             _ => "未选择",
         };
-        AnnotationScrollViewer.WheelZoomEnabled = !_eraserMode;
+        AnnotationScrollViewer.WheelZoomEnabled = !_eraserMode && !_brushMode;
         DatasetTaskTypeText.Text = $"标注类型：{typeName}";
         YoloeButton.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
         YoloeOutputModeLabel.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
@@ -1797,6 +1984,7 @@ public partial class DatasetAnnotationPage : UserControl
             YoloeButton.Content = "智能标注";
         }
         ManualDrawButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
+        BrushButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         EraserButton.Visibility = isSegmentation ? Visibility.Visible : Visibility.Collapsed;
         Sam1Button.Visibility = IsSegmentationPlatform
             ? Visibility.Visible
@@ -1807,9 +1995,10 @@ public partial class DatasetAnnotationPage : UserControl
         {
             _sam1ClickMode = false;
             _manualDrawMode = false;
+            _brushMode = false;
             _eraserMode = false;
         }
-        else if (!_sam1ClickMode && !_manualDrawMode && !_eraserMode)
+        else if (!_sam1ClickMode && !_manualDrawMode && !_brushMode && !_eraserMode)
         {
             _manualDrawMode = true;
         }
@@ -1891,6 +2080,7 @@ public partial class DatasetAnnotationPage : UserControl
             ClearSam1HoverPreview();
             _sam1ClickMode = false;
             _manualDrawMode = true;
+            _brushMode = false;
             _eraserMode = false;
             _sam1Prompts.Clear();
             _sam1ResultIndex = -1;
@@ -1902,6 +2092,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         _sam1ClickMode = true;
         _manualDrawMode = false;
+        _brushMode = false;
         _eraserMode = false;
         CancelPolygonDraft();
         _sam1Prompts.Clear();
@@ -1989,6 +2180,7 @@ public partial class DatasetAnnotationPage : UserControl
             ClearSam1HoverPreview();
             _sam1ClickMode = true;
             _manualDrawMode = false;
+            _brushMode = false;
             _eraserMode = false;
             _eraserDragging = false;
             _sam1Prompts.Clear();
@@ -2018,6 +2210,25 @@ public partial class DatasetAnnotationPage : UserControl
             UpdateToolButtons();
             RenderAnnotations();
             StatusText.Text = "S：本次橡皮擦操作已结束，可继续擦除下一个区域。";
+            return;
+        }
+
+        if (_brushMode)
+        {
+            if (_brushDragging)
+            {
+                _brushDragging = false;
+                AnnotationCanvas.ReleaseMouseCapture();
+                PaintStroke(_brushStrokePoints);
+                _brushStrokePoints.Clear();
+                if (_brushChanged) AutoSaveAnnotation("画刷轨迹");
+            }
+            _brushMode = true;
+            _brushCursorPoint = null;
+            _manualDrawMode = false;
+            UpdateToolButtons();
+            RenderAnnotations();
+            StatusText.Text = "S：本次画刷操作已结束，可继续绘制下一个区域。";
             return;
         }
 

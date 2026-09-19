@@ -133,6 +133,7 @@
                         <ComboBoxItem Content="框和轮廓都输出" Tag="both" />
                     </ComboBox>
                     <Button x:Name="ManualDrawButton" Content="手动绘制" Click="ManualDraw_Click" Margin="8,0,0,0" Visibility="Collapsed" />
+                    <Button x:Name="BrushButton" Content="画刷" Click="Brush_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="EraserButton" Content="橡皮擦" Click="Eraser_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <Button x:Name="Sam1Button" Content="智能标注" Click="Sam1ClickMode_Click" Margin="8,0,0,0" Visibility="Collapsed" />
                     <TextBlock x:Name="ZoomText" Text="缩放：100%" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="{DynamicResource MutedTextBrush}" />
