@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using VisionWorkbench.Algorithms;
 using VisionWorkbench.Application;
+using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Cameras.Abstractions;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Domain;
@@ -315,6 +316,54 @@ public partial class LiveTaskPanel : UserControl
         if (sender is MenuItem { Tag: LiveTaskPanel panel } && ReferenceEquals(panel, this))
         {
             panel.RequestRemove();
+        }
+    }
+
+    public Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(CancellationToken cancellationToken = default)
+    {
+        return Dispatcher.InvokeAsync(
+                () => ExecuteTcpTriggerOnUiAsync(cancellationToken),
+                DispatcherPriority.Normal)
+            .Task
+            .Unwrap();
+    }
+
+    private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(CancellationToken cancellationToken)
+    {
+        if (_run is null || _run.State is not (DetectionRunState.Running or DetectionRunState.Paused))
+        {
+            throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”尚未启动，请先点击开始检测。");
+        }
+
+        if (_singleFrameBusy)
+        {
+            throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”正在执行上一条指令。");
+        }
+
+        _singleFrameBusy = true;
+        SetButtons(running: true);
+        ClearSingleResultDisplay();
+        StatusText.Text = "TCP触发检测中…";
+        try
+        {
+            var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            await Dispatcher.InvokeAsync(() => { });
+            if (result is null)
+            {
+                throw new TimeoutException("实时检测在 30 秒内没有获得有效帧。");
+            }
+
+            StatusText.Text = "TCP触发检测已完成";
+            return new TcpTaskExecutionResult(
+                "completed",
+                result.CountAfter,
+                result.Decision.Status.ToString(),
+                result.Record.Id);
+        }
+        finally
+        {
+            _singleFrameBusy = false;
+            SetButtons(running: _run?.State is DetectionRunState.Running or DetectionRunState.Paused);
         }
     }
 

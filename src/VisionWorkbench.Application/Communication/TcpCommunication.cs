@@ -728,6 +728,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         var requestId = TryReadRequestId(text) ?? Guid.NewGuid().ToString("N");
         var cacheKey = $"{runtime.Config.ProjectCode}:{requestId}";
         if (_completed.TryGetValue(cacheKey, out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
+        Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 开始执行任务: {task.Name} ({task.StationCode})");
         await SendJsonAsync(runtime, connectionId, new { ok = true, code = "accepted", requestId, data = new { task = task.Name } });
         try
         {
@@ -735,10 +736,12 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             var result = await TaskExecutor(task, CancellationToken.None);
             var response = ApplyTemplate(trigger.ResponseTemplate, requestId, task, result);
             _completed[cacheKey] = response;
+            Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行完成: {task.Name}, status={result.Status}, count={result.Count}");
             await SendTextAsync(runtime, connectionId, response);
         }
         catch (Exception ex)
         {
+            Log("ERROR", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行失败: {task.Name}, {ex.Message}");
             await SendJsonAsync(runtime, connectionId, new { ok = false, code = "execution_failed", requestId, task = task.Name, message = ex.Message });
         }
     }

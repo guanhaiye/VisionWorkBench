@@ -6,6 +6,7 @@ using System.Windows.Shapes;
 using Microsoft.Extensions.Logging;
 
 using VisionWorkbench.Application;
+using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Domain;
 
@@ -35,19 +36,45 @@ public partial class LivePage : UserControl
 
     public void OnShown()
     {
+        AppServices.Instance.LiveTaskTriggerExecutor = ExecuteTcpTriggerAsync;
         _ = LoadTasksAsync();
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
+        AppServices.Instance.LiveTaskTriggerExecutor = ExecuteTcpTriggerAsync;
         await LoadTasksAsync();
     }
 
     private async void Page_Unloaded(object sender, RoutedEventArgs e)
     {
+        if (ReferenceEquals(AppServices.Instance.LiveTaskTriggerExecutor?.Target, this))
+        {
+            AppServices.Instance.LiveTaskTriggerExecutor = null;
+        }
         SetRuntimeMode(false);
         SaveWorkspaceSettings();
         await ShutdownPanelsAsync();
+    }
+
+    private Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(long taskId, CancellationToken cancellationToken)
+    {
+        return Dispatcher.InvokeAsync(
+                () => ExecuteTcpTriggerOnUiAsync(taskId, cancellationToken),
+                System.Windows.Threading.DispatcherPriority.Normal)
+            .Task
+            .Unwrap();
+    }
+
+    private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(long taskId, CancellationToken cancellationToken)
+    {
+        var panel = _panels.FirstOrDefault(item => item.TaskId == taskId);
+        if (panel is null)
+        {
+            throw new InvalidOperationException("实时检测页面中没有配置该任务，请先添加对应任务面板。");
+        }
+
+        return await panel.ExecuteTcpTriggerAsync(cancellationToken);
     }
 
     private async Task LoadTasksAsync()

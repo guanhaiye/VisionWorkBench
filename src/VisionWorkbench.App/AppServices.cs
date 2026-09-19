@@ -146,6 +146,8 @@ public sealed class AppServices
     public YoloModelTestService YoloModelTest { get; private set; } = null!;
     public BehaviorTrainingService BehaviorTraining { get; private set; } = null!;
     public ProjectCommunicationManager TcpCommunication { get; private set; } = null!;
+    /// <summary>实时检测页面为 TCP 触发提供的任务执行入口。</summary>
+    public Func<long, CancellationToken, Task<TcpTaskExecutionResult>>? LiveTaskTriggerExecutor { get; set; }
     public string SettingsFile { get; private set; } = "";
 
     private AppServices() { }

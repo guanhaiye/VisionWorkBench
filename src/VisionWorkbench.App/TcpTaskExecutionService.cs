@@ -10,6 +10,17 @@ public sealed class TcpTaskExecutionService(AppServices services)
 {
     public async Task<TcpTaskExecutionResult> ExecuteAsync(TaskEntity task, CancellationToken cancellationToken)
     {
+        if (services.LiveTaskTriggerExecutor is not null)
+        {
+            return await services.LiveTaskTriggerExecutor(task.Id, cancellationToken);
+        }
+
+        // 实时检测页面尚未加载时保留后台单帧执行能力，确保 TCP 服务不依赖页面是否可见。
+        return await ExecuteStandaloneAsync(task, cancellationToken);
+    }
+
+    private async Task<TcpTaskExecutionResult> ExecuteStandaloneAsync(TaskEntity task, CancellationToken cancellationToken)
+    {
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken)
             ?? throw new InvalidOperationException($"任务不存在或配置无效: {task.Name}");
         var recipe = found.Recipe;
