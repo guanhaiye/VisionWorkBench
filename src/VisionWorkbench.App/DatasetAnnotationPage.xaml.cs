@@ -2240,6 +2240,14 @@ public partial class DatasetAnnotationPage : UserControl
             EndCurrentAnnotation();
             return;
         }
+        if (e.Key == Key.Z &&
+            (Keyboard.Modifiers & ModifierKeys.Control) != 0 &&
+            IsPolygonMode() && !_sam1ClickMode && !IsTextInputFocused())
+        {
+            e.Handled = true;
+            UndoLastSegmentationAnnotation();
+            return;
+        }
         if (!_sam1ClickMode || e.Key != Key.Z ||
             (Keyboard.Modifiers & ModifierKeys.Control) == 0)
         {
@@ -2262,6 +2270,32 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationCanvas.ReleaseMouseCapture();
         RenderAnnotations();
         StatusText.Text = "已按 Esc 取消本次绘制，已有标注保持不变。";
+    }
+
+    private void UndoLastSegmentationAnnotation()
+    {
+        if (_manualDrawMode && (_polygonPoints.Count > 0 || _dragging))
+        {
+            CancelCurrentDraw();
+            StatusText.Text = "已撤销当前未完成的外轮廓绘制。";
+            return;
+        }
+        if (_brushMode && (_brushStrokePoints.Count > 0 || _brushDragging))
+        {
+            CancelCurrentDraw();
+            StatusText.Text = "已撤销当前未完成的画刷绘制。";
+            return;
+        }
+        if (_annotation is null || _annotation.Objects.Count == 0)
+        {
+            StatusText.Text = "当前没有可以撤销的分割标注。";
+            return;
+        }
+
+        _annotation.Objects.RemoveAt(_annotation.Objects.Count - 1);
+        RefreshAnnotationList(Math.Min(_annotation.Objects.Count - 1, AnnotationList.SelectedIndex));
+        RenderAnnotations();
+        AutoSaveAnnotation("撤销分割标注");
     }
 
     private void EndCurrentAnnotation()
