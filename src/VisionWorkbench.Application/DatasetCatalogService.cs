@@ -53,6 +53,7 @@ public sealed class DatasetAnnotationObject
     public double Width { get; set; }
     public double Height { get; set; }
     public List<DatasetPoint> Polygon { get; set; } = [];
+    public List<List<DatasetPoint>> PolygonHoles { get; set; } = [];
     public List<DatasetPoint> Keypoints { get; set; } = [];
 
     public override string ToString() =>

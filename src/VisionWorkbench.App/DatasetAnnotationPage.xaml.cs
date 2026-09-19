@@ -1397,6 +1397,13 @@ public partial class DatasetAnnotationPage : UserControl
                 Math.Clamp((int)Math.Round(point.X * (rasterWidth - 1)), 0, rasterWidth - 1),
                 Math.Clamp((int)Math.Round(point.Y * (rasterHeight - 1)), 0, rasterHeight - 1))).ToArray();
             OpenCvSharp.Cv2.FillPoly(mask, [polygon], OpenCvSharp.Scalar.White);
+            foreach (var hole in source.PolygonHoles.Where(item => item.Count >= 3))
+            {
+                var holePoints = hole.Select(point => new OpenCvSharp.Point(
+                    Math.Clamp((int)Math.Round(point.X * (rasterWidth - 1)), 0, rasterWidth - 1),
+                    Math.Clamp((int)Math.Round(point.Y * (rasterHeight - 1)), 0, rasterHeight - 1))).ToArray();
+                OpenCvSharp.Cv2.FillPoly(mask, [holePoints], OpenCvSharp.Scalar.Black);
+            }
             var areaBefore = OpenCvSharp.Cv2.CountNonZero(mask);
             if (rasterStroke.Length == 1)
             {
@@ -1412,24 +1419,8 @@ public partial class DatasetAnnotationPage : UserControl
             var areaAfter = OpenCvSharp.Cv2.CountNonZero(mask);
             if (areaAfter == areaBefore) continue;
 
-            // YOLO 分割标注只保存单一外轮廓，不能直接保存多边形内部的“洞”。
-            // 如果橡皮擦完全落在区域内部，External 轮廓会把这个洞忽略，结果看起来就像没有擦除。
-            // 将内部擦除区域通过最短通道连接到边界后，再提取外轮廓即可保留擦除结果。
-            OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] allContours, out _,
-                OpenCvSharp.RetrievalModes.CComp, OpenCvSharp.ContourApproximationModes.ApproxSimple);
-            if (allContours.Length > 1)
-            {
-                var (endpoint, boundaryPoint) = FindNearestPolygonBoundary(polygon, rasterStroke);
-                OpenCvSharp.Cv2.Line(mask, endpoint, boundaryPoint, OpenCvSharp.Scalar.Black,
-                    Math.Max(1, thickness), OpenCvSharp.LineTypes.AntiAlias);
-            }
-
-            OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
-                OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
-            var replacements = contours
-                .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
-                .Select(contour => BuildPolygonFromContour(source.ClassName, contour, rasterWidth, rasterHeight))
-                .ToList();
+            // 重新提取外轮廓及其内部孔洞，避免擦除内部区域时产生人为连接缺口。
+            var replacements = BuildPolygonObjectsFromMask(mask, source.ClassName, rasterWidth, rasterHeight);
             _annotation.Objects.RemoveAt(index);
             _annotation.Objects.InsertRange(index, replacements);
             changed = true;
@@ -1442,44 +1433,6 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationList.ItemsSource = _annotation.Objects;
         RenderAnnotations();
         StatusText.Text = $"正在擦除；橡皮擦直径 {_eraserDiameter:0} 像素。松开左键后自动保存。";
-    }
-
-    private static (OpenCvSharp.Point Endpoint, OpenCvSharp.Point Boundary) FindNearestPolygonBoundary(
-        OpenCvSharp.Point[] polygon, OpenCvSharp.Point[] stroke)
-    {
-        var firstEndpoint = stroke[0];
-        var firstBoundary = ClosestPointOnPolygon(firstEndpoint, polygon, out var firstDistance);
-        var lastEndpoint = stroke[^1];
-        var lastBoundary = ClosestPointOnPolygon(lastEndpoint, polygon, out var lastDistance);
-        return lastDistance < firstDistance
-            ? (lastEndpoint, lastBoundary)
-            : (firstEndpoint, firstBoundary);
-    }
-
-    private static OpenCvSharp.Point ClosestPointOnPolygon(
-        OpenCvSharp.Point point, OpenCvSharp.Point[] polygon, out double distanceSquared)
-    {
-        var bestPoint = polygon[0];
-        distanceSquared = double.MaxValue;
-        for (var index = 0; index < polygon.Length; index++)
-        {
-            var start = polygon[index];
-            var end = polygon[(index + 1) % polygon.Length];
-            var dx = end.X - start.X;
-            var dy = end.Y - start.Y;
-            var lengthSquared = dx * (double)dx + dy * (double)dy;
-            var t = lengthSquared < double.Epsilon
-                ? 0
-                : ((point.X - start.X) * dx + (point.Y - start.Y) * dy) / lengthSquared;
-            t = Math.Clamp(t, 0, 1);
-            var candidateX = start.X + t * dx;
-            var candidateY = start.Y + t * dy;
-            var candidateDistance = Math.Pow(point.X - candidateX, 2) + Math.Pow(point.Y - candidateY, 2);
-            if (candidateDistance >= distanceSquared) continue;
-            distanceSquared = candidateDistance;
-            bestPoint = new OpenCvSharp.Point((int)Math.Round(candidateX), (int)Math.Round(candidateY));
-        }
-        return bestPoint;
     }
 
     private void PaintStroke(IReadOnlyList<Point> stroke)
@@ -1511,16 +1464,8 @@ public partial class DatasetAnnotationPage : UserControl
             OpenCvSharp.Cv2.Circle(mask, rasterStroke[^1], Math.Max(1, thickness / 2), OpenCvSharp.Scalar.White, -1);
         }
 
-        // 标注对象只有一个外轮廓。画刷画出闭合环或自交区域时，直接提取 External
-        // 会把内部孔洞填满；先把每个孔洞开一条最短通道到画布边缘，再提取外轮廓，
-        // 这样生成的多边形仍然是单轮廓，但不会把孔洞区域变成标注区域。
-        OpenPaintMaskHoles(mask);
-        OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
-            OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
-        var paintedObjects = contours
-            .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
-            .Select(contour => BuildPolygonFromContour(string.Empty, contour, rasterWidth, rasterHeight))
-            .ToList();
+        // 画刷闭合成环时保存外轮廓和孔洞，避免孔洞被错误填充或人为切开。
+        var paintedObjects = BuildPolygonObjectsFromMask(mask, string.Empty, rasterWidth, rasterHeight);
         if (paintedObjects.Count == 0) return;
         if (!TryResolveAnnotationClass(out var className))
         {
@@ -1557,14 +1502,16 @@ public partial class DatasetAnnotationPage : UserControl
                 Math.Clamp((int)Math.Round(point.X * (rasterWidth - 1)), 0, rasterWidth - 1),
                 Math.Clamp((int)Math.Round(point.Y * (rasterHeight - 1)), 0, rasterHeight - 1))).ToArray();
             OpenCvSharp.Cv2.FillPoly(mask, [polygon], OpenCvSharp.Scalar.White);
+            foreach (var hole in source.PolygonHoles.Where(item => item.Count >= 3))
+            {
+                var holePoints = hole.Select(point => new OpenCvSharp.Point(
+                    Math.Clamp((int)Math.Round(point.X * (rasterWidth - 1)), 0, rasterWidth - 1),
+                    Math.Clamp((int)Math.Round(point.Y * (rasterHeight - 1)), 0, rasterHeight - 1))).ToArray();
+                OpenCvSharp.Cv2.FillPoly(mask, [holePoints], OpenCvSharp.Scalar.Black);
+            }
         }
 
-        OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
-            OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
-        var mergedObjects = contours
-            .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
-            .Select(contour => BuildPolygonFromContour(className, contour, rasterWidth, rasterHeight))
-            .ToList();
+        var mergedObjects = BuildPolygonObjectsFromMask(mask, className, rasterWidth, rasterHeight);
         if (mergedObjects.Count >= matchingObjects.Count) return;
 
         var firstIndex = _annotation.Objects.IndexOf(matchingObjects[0]);
@@ -1578,46 +1525,38 @@ public partial class DatasetAnnotationPage : UserControl
         _annotation.Objects.InsertRange(firstIndex, mergedObjects);
     }
 
-    private static void OpenPaintMaskHoles(OpenCvSharp.Mat mask)
+    private static List<DatasetAnnotationObject> BuildPolygonObjectsFromMask(
+        OpenCvSharp.Mat mask, string className, int width, int height)
     {
         OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours,
             out OpenCvSharp.HierarchyIndex[] hierarchy,
             OpenCvSharp.RetrievalModes.CComp, OpenCvSharp.ContourApproximationModes.ApproxSimple);
+        var objects = new List<DatasetAnnotationObject>();
         for (var index = 0; index < contours.Length && index < hierarchy.Length; index++)
         {
-            if (hierarchy[index].Parent < 0 || contours[index].Length == 0) continue;
-            var (holePoint, edgePoint) = FindNearestImageEdge(contours[index], mask.Width, mask.Height);
-            OpenCvSharp.Cv2.Line(mask, holePoint, edgePoint, OpenCvSharp.Scalar.Black,
-                1, OpenCvSharp.LineTypes.Link8);
-        }
-    }
-
-    private static (OpenCvSharp.Point Hole, OpenCvSharp.Point Edge) FindNearestImageEdge(
-        OpenCvSharp.Point[] contour, int width, int height)
-    {
-        var holePoint = contour[0];
-        var edgePoint = new OpenCvSharp.Point(0, holePoint.Y);
-        var bestDistance = double.MaxValue;
-        foreach (var point in contour)
-        {
-            var distances = new[]
+            if (hierarchy[index].Parent >= 0 || contours[index].Length < 3 ||
+                OpenCvSharp.Cv2.ContourArea(contours[index]) < 6)
             {
-                (Distance: (double)point.X, Edge: new OpenCvSharp.Point(0, point.Y)),
-                (Distance: (double)(width - 1 - point.X), Edge: new OpenCvSharp.Point(width - 1, point.Y)),
-                (Distance: (double)point.Y, Edge: new OpenCvSharp.Point(point.X, 0)),
-                (Distance: (double)(height - 1 - point.Y), Edge: new OpenCvSharp.Point(point.X, height - 1)),
-            };
-            var nearest = distances.MinBy(item => item.Distance);
-            if (nearest.Distance >= bestDistance) continue;
-            bestDistance = nearest.Distance;
-            holePoint = point;
-            edgePoint = nearest.Edge;
+                continue;
+            }
+
+            var holes = new List<OpenCvSharp.Point[]>();
+            for (var child = hierarchy[index].Child; child >= 0; child = hierarchy[child].Next)
+            {
+                if (child < contours.Length && contours[child].Length >= 3 &&
+                    OpenCvSharp.Cv2.ContourArea(contours[child]) >= 6)
+                {
+                    holes.Add(contours[child]);
+                }
+            }
+            objects.Add(BuildPolygonFromContour(className, contours[index], width, height, holes));
         }
-        return (holePoint, edgePoint);
+        return objects;
     }
 
     private static DatasetAnnotationObject BuildPolygonFromContour(
-        string className, OpenCvSharp.Point[] contour, int width, int height)
+        string className, OpenCvSharp.Point[] contour, int width, int height,
+        IEnumerable<OpenCvSharp.Point[]>? holes = null)
     {
         var simplified = OpenCvSharp.Cv2.ApproxPolyDP(contour, 1.0, true);
         var points = simplified.Select(point => new DatasetPoint
@@ -1638,7 +1577,34 @@ public partial class DatasetAnnotationPage : UserControl
             Width = maxX - minX,
             Height = maxY - minY,
             Polygon = points,
+            PolygonHoles = holes?
+                .Select(hole => OpenCvSharp.Cv2.ApproxPolyDP(hole, 1.0, true)
+                    .Select(point => new DatasetPoint
+                    {
+                        X = Math.Clamp(point.X / (double)Math.Max(1, width - 1), 0, 1),
+                        Y = Math.Clamp(point.Y / (double)Math.Max(1, height - 1), 0, 1),
+                    })
+                    .ToList())
+                .Where(hole => hole.Count >= 3)
+                .ToList() ?? [],
         };
+    }
+
+    private static void AddPolygonFigure(
+        PathGeometry geometry, IReadOnlyList<DatasetPoint> points, Rect imageRect)
+    {
+        if (points.Count < 3) return;
+        var mapped = points.Select(point => new Point(
+            imageRect.Left + point.X * imageRect.Width,
+            imageRect.Top + point.Y * imageRect.Height)).ToList();
+        var figure = new PathFigure
+        {
+            StartPoint = mapped[0],
+            IsClosed = true,
+            IsFilled = true,
+        };
+        figure.Segments.Add(new PolyLineSegment(mapped.Skip(1), true));
+        geometry.Figures.Add(figure);
     }
 
     private void SaveAnnotation_Click(object sender, RoutedEventArgs e)
@@ -1757,10 +1723,13 @@ public partial class DatasetAnnotationPage : UserControl
             AnnotationCanvas.Children.Add(label);
             if (hasPolygon && _showContours)
             {
-                var polygon = new Polygon
+                var geometry = new PathGeometry { FillRule = FillRule.EvenOdd };
+                AddPolygonFigure(geometry, obj.Polygon, imageRect);
+                foreach (var hole in obj.PolygonHoles.Where(item => item.Count >= 3))
+                    AddPolygonFigure(geometry, hole, imageRect);
+                var polygon = new System.Windows.Shapes.Path
                 {
-                    Points = new PointCollection(obj.Polygon.Select(point =>
-                        new Point(imageRect.Left + point.X * imageRect.Width, imageRect.Top + point.Y * imageRect.Height))),
+                    Data = geometry,
                     Stroke = i == selected ? Brushes.Lime : Brushes.Orange,
                     StrokeThickness = i == selected ? selectedStroke : normalStroke,
                     Fill = new SolidColorBrush(Color.FromArgb(18, 255, 165, 0)),
@@ -1983,7 +1952,11 @@ public partial class DatasetAnnotationPage : UserControl
             var obj = _annotation.Objects[index];
             if (obj.Shape.Equals("polygon", StringComparison.OrdinalIgnoreCase) && obj.Polygon.Count >= 3)
             {
-                if (IsPointInsidePolygon(x, y, obj.Polygon)) return index;
+                if (IsPointInsidePolygon(x, y, obj.Polygon) &&
+                    obj.PolygonHoles.All(hole => hole.Count < 3 || !IsPointInsidePolygon(x, y, hole)))
+                {
+                    return index;
+                }
                 continue;
             }
             if (x >= obj.X - toleranceX && x <= obj.X + obj.Width + toleranceX &&
@@ -2099,6 +2072,9 @@ public partial class DatasetAnnotationPage : UserControl
         Width = source.Width,
         Height = source.Height,
         Polygon = source.Polygon.Select(point => new DatasetPoint { X = point.X, Y = point.Y }).ToList(),
+        PolygonHoles = source.PolygonHoles
+            .Select(hole => hole.Select(point => new DatasetPoint { X = point.X, Y = point.Y }).ToList())
+            .ToList(),
     };
 
     private bool IsPolygonMode() =>
