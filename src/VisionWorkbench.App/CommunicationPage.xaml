@@ -123,7 +123,7 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                              </ComboBox>
-                            <TextBlock Text="任务名称" Margin="0,8,0,0"/>
+                            <TextBlock Text="规则名称" Margin="0,8,0,0"/>
                             <TextBox x:Name="TaskNameText" MinHeight="40"/>
                             <CheckBox x:Name="TriggerEnabledCheck" Content="启用 TCP/IP 消息触发任务" Margin="0,8,0,0"/>
                             <TextBlock Text="匹配方式" Margin="0,8,0,0"/>

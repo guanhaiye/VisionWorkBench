@@ -270,7 +270,7 @@ public partial class CommunicationPage : UserControl
     private void TriggerTask_Changed(object sender, SelectionChangedEventArgs e)
     {
         // 检测任务下拉框只负责切换任务，不改变规则编辑器的启用状态。
-        // 编辑器是否启用仅由规则列表是否被点击选中决定，任务名称也不参与匹配判断。
+        // 编辑器是否启用仅由规则列表是否被点击选中决定，规则名称也不参与匹配判断。
     }
     private void LoadTriggerEditor(TaskEntity task)
     {
