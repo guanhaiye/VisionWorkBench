@@ -7,9 +7,9 @@
     </UserControl.Resources>
     <Grid Margin="8">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260" />
-            <ColumnDefinition Width="2*" MinWidth="560" />
-            <ColumnDefinition Width="1*" MinWidth="330" />
+            <ColumnDefinition Width="1*" MinWidth="220" />
+            <ColumnDefinition Width="1*" MinWidth="360" />
+            <ColumnDefinition Width="3*" MinWidth="480" />
         </Grid.ColumnDefinitions>
 
         <!-- 左：任务列表 -->
