@@ -686,9 +686,50 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             .FirstOrDefault(pair => pair.Trigger is { Enabled: true } trigger
                 && IsForCurrentProject(trigger, runtime.Config.ProjectCode)
                 && Matches(trigger, text));
+
+        if (configured.Task is null)
+        {
+            // 当前连接没有专属规则时，按所有项目的已启用规则进行通用路由。
+            // 这样同一服务器下的多个 TCP 客户端不会因为连接项目不同而丢失任务指令。
+            var globalCandidates = tasks
+                .SelectMany(task => ParseTriggers(task.TriggerJson)
+                    .Where(trigger => trigger.Enabled && Matches(trigger, text))
+                    .Select(trigger => (Task: task, Trigger: trigger)))
+                .GroupBy(pair => pair.Task.Id)
+                .Select(group => group.First())
+                .ToArray();
+            if (globalCandidates.Length == 1)
+            {
+                var selected = globalCandidates[0];
+                configured = selected;
+                Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}] 跨 TCP 项目路由任务: {selected.Task.Name} ({selected.Trigger.TcpProjectCode})");
+            }
+            else if (globalCandidates.Length > 1)
+            {
+                await SendJsonAsync(runtime, connectionId, new
+                {
+                    ok = false,
+                    code = "trigger_ambiguous",
+                    message = "当前触发指令匹配到多个任务，请为每个任务配置不同的触发指令",
+                    candidates = globalCandidates.Select(pair => pair.Task.StationCode).ToArray(),
+                });
+                return;
+            }
+        }
+
         if (configured.Task is not null && configured.Trigger is not null)
         {
             await ExecuteConfiguredTaskAsync(runtime, connectionId, text, configured.Task, configured.Trigger);
+            return;
+        }
+        if (!text.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        {
+            await SendJsonAsync(runtime, connectionId, new
+            {
+                ok = false,
+                code = "task_not_configured",
+                message = $"未找到与消息“{text}”匹配的已启用任务规则",
+            });
             return;
         }
         JsonDocument doc;
@@ -747,34 +788,37 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     }
     private static TaskTcpTriggerConfig? ParseTrigger(string? json, string? projectCode)
     {
-        if (string.IsNullOrWhiteSpace(json)) return null;
+        return ParseTriggers(json).FirstOrDefault(trigger => IsForCurrentProject(trigger, projectCode));
+    }
+    private static IReadOnlyList<TaskTcpTriggerConfig> ParseTriggers(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
         try
         {
             using var document = JsonDocument.Parse(json);
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             if (document.RootElement.ValueKind != JsonValueKind.Object)
-                return null;
+                return [];
 
             if (document.RootElement.TryGetProperty("TcpProjectCode", out _)
                 || document.RootElement.TryGetProperty("tcpProjectCode", out _))
             {
                 var single = JsonSerializer.Deserialize<TaskTcpTriggerConfig>(json, options);
-                return single is not null && (string.IsNullOrWhiteSpace(single.TcpProjectCode)
-                    || string.Equals(single.TcpProjectCode, projectCode, StringComparison.OrdinalIgnoreCase))
-                    ? single
-                    : null;
+                return single is null ? [] : [single];
             }
 
             var map = JsonSerializer.Deserialize<Dictionary<string, TaskTcpTriggerConfig>>(json, options);
-            if (map is null || projectCode is null) return null;
-            var pair = map.FirstOrDefault(item => string.Equals(item.Key, projectCode, StringComparison.OrdinalIgnoreCase));
-            if (pair.Value is null) return null;
-            pair.Value.TcpProjectCode = string.IsNullOrWhiteSpace(pair.Value.TcpProjectCode)
-                ? pair.Key
-                : pair.Value.TcpProjectCode;
-            return pair.Value;
+            if (map is null) return [];
+            foreach (var pair in map)
+            {
+                if (pair.Value is null) continue;
+                pair.Value.TcpProjectCode = string.IsNullOrWhiteSpace(pair.Value.TcpProjectCode)
+                    ? pair.Key
+                    : pair.Value.TcpProjectCode;
+            }
+            return map.Values.Where(value => value is not null).ToArray()!;
         }
-        catch (JsonException) { return null; }
+        catch (JsonException) { return []; }
     }
     private static bool Matches(TaskTcpTriggerConfig trigger, string text) => trigger.MatchMode switch
     {
@@ -784,7 +828,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         MessageMatchMode.Default => true,
         _ => false,
     };
-    private static bool IsForCurrentProject(TaskTcpTriggerConfig trigger, string projectCode) =>
+    private static bool IsForCurrentProject(TaskTcpTriggerConfig trigger, string? projectCode) =>
         string.IsNullOrWhiteSpace(trigger.TcpProjectCode)
         || string.Equals(trigger.TcpProjectCode, projectCode, StringComparison.OrdinalIgnoreCase);
     private static string? TryReadRequestId(string text)
