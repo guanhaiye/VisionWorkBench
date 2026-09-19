@@ -27,6 +27,13 @@ public partial class LiveTaskPanel : UserControl
 
     private void WorkspaceContentGrid_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
     {
+        // The shared ImageViewer owns wheel zoom while the pointer is over the
+        // preview. Let that control preserve the image point beneath the mouse.
+        if (PreviewViewer.IsMouseOver)
+        {
+            return;
+        }
+
         var direction = -Math.Sign(e.Delta);
         const double wheelStep = 54;
         if (SopStepsScrollViewer.IsMouseOver && SopStepsScrollViewer.ScrollableHeight > 0)

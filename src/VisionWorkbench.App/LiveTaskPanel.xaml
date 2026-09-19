@@ -66,7 +66,7 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#111111">
-                <local:ImageViewer x:Name="PreviewViewer" WheelZoomEnabled="False">
+                <local:ImageViewer x:Name="PreviewViewer" WheelZoomEnabled="True">
                     <Grid x:Name="PreviewSurface"
                            MinWidth="1" MinHeight="1"
                            HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
