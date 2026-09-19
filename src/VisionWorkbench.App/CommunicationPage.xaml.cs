@@ -65,7 +65,8 @@ public partial class CommunicationPage : UserControl
     private void Load_Click(object sender, RoutedEventArgs e) => LoadConfig();
     private void LoadConfig()
     {
-        var selected = ProjectCombo.SelectedItem as ProjectCommunicationConfig;
+        var selected = ProjectList.SelectedItem as ProjectCommunicationConfig
+            ?? ProjectCombo.SelectedItem as ProjectCommunicationConfig;
         var code = selected?.ProjectCode ?? "default";
         _config = _profiles.FirstOrDefault(profile => string.Equals(profile.ProjectCode, code, StringComparison.OrdinalIgnoreCase))
             ?? TcpCommunicationProfileStore.CreateDefault();
@@ -138,6 +139,12 @@ public partial class CommunicationPage : UserControl
         try
         {
             ReadControls();
+            var index = _profiles.FindIndex(profile =>
+                string.Equals(profile.ProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+                _profiles[index] = _config;
+            else
+                _profiles.Add(_config);
             _profileStore.Save(_profiles);
             RefreshProjectSelectors(_config.ProjectCode);
             StateText.Text = "配置已保存";
