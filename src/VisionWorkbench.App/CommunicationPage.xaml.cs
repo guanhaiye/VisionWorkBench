@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,7 +9,6 @@ namespace VisionWorkbench.App;
 public partial class CommunicationPage : UserControl
 {
     private readonly TcpCommunicationProfileStore _profileStore;
-    private readonly string _configFile;
     private ProjectCommunicationConfig _config = new();
     private List<ProjectCommunicationConfig> _profiles = [];
     private List<TaskEntity> _allTasks = [];
@@ -23,7 +21,6 @@ public partial class CommunicationPage : UserControl
         MoveStateToBottomRight();
         ManualText.Text = "{\"command\":\"ping\",\"requestId\":\"PING-001\"}";
         _profileStore = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory);
-        _configFile = _profileStore.FilePath;
         AppServices.Instance.TcpCommunication.LogReceived += Tcp_LogReceived;
         AppServices.Instance.TcpCommunication.StateChanged += Tcp_StateChanged;
         Loaded += async (_, _) => await LoadProjectsAsync();
@@ -138,7 +135,29 @@ public partial class CommunicationPage : UserControl
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); ProjectCombo.Items.Refresh(); ProjectList.Items.Refresh(); StateText.Text = "配置已保存"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
+        try
+        {
+            ReadControls();
+            _profileStore.Save(_profiles);
+            RefreshProjectSelectors(_config.ProjectCode);
+            StateText.Text = "配置已保存";
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void RefreshProjectSelectors(string selectedProjectCode)
+    {
+        var selected = _profiles.FirstOrDefault(profile =>
+            string.Equals(profile.ProjectCode, selectedProjectCode, StringComparison.OrdinalIgnoreCase));
+        ProjectCombo.ItemsSource = null;
+        ProjectList.ItemsSource = null;
+        ProjectCombo.ItemsSource = _profiles;
+        ProjectList.ItemsSource = _profiles;
+        ProjectCombo.SelectedItem = selected;
+        ProjectList.SelectedItem = selected;
     }
     private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式" : "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
     private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
