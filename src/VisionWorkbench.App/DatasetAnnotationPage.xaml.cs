@@ -1088,15 +1088,16 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_sam1ClickMode)
+        var point = e.GetPosition(AnnotationCanvas);
+        if (_sam1ClickMode && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
             e.Handled = true;
-            _ = AddSam1PromptAsync(e.GetPosition(AnnotationCanvas), label: 0);
+            _ = AddSam1PromptAsync(point, label: 0);
             return;
         }
-        var index = HitTestAnnotation(e.GetPosition(AnnotationCanvas));
+        var index = HitTestAnnotation(point);
         if (index >= 0) AnnotationList.SelectedIndex = index;
-        ShowAnnotationContextMenu(index >= 0 ? index : null, AnnotationCanvas);
+        ShowAnnotationContextMenu(index >= 0 ? index : null, AnnotationCanvas, _sam1ClickMode ? point : null);
         e.Handled = true;
     }
 
@@ -1126,12 +1127,19 @@ public partial class DatasetAnnotationPage : UserControl
             : null;
     }
 
-    private void ShowAnnotationContextMenu(int? index, FrameworkElement placementTarget)
+    private void ShowAnnotationContextMenu(int? index, FrameworkElement placementTarget, Point? sam1NegativePoint = null)
     {
         var menu = new ContextMenu { PlacementTarget = placementTarget };
         var fit = new MenuItem { Header = "图像自适应窗口" };
         fit.Click += FitImageToWindow_Click;
         menu.Items.Add(fit);
+
+        if (_sam1ClickMode && sam1NegativePoint is { } point)
+        {
+            var addNegativePoint = new MenuItem { Header = "添加排除点" };
+            addNegativePoint.Click += (_, _) => _ = AddSam1PromptAsync(point, label: 0);
+            menu.Items.Add(addNegativePoint);
+        }
 
         if (_dataset is not null && _annotation is not null &&
             index is >= 0 && index.Value < _annotation.Objects.Count)
