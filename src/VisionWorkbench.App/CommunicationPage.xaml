@@ -59,6 +59,14 @@
                 <StackPanel>
                     <GroupBox Header="项目通讯">
                         <StackPanel Margin="8">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="92" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="项目名称" VerticalAlignment="Center" />
+                                <TextBox x:Name="ProjectNameText" Grid.Column="1" />
+                            </Grid>
                             <CheckBox x:Name="EnabledCheck" Content="启用 TCP/IP 通讯"/>
                             <CheckBox x:Name="AutoReconnectCheck" Content="客户端自动重连" Margin="0,8,0,0"/>
                             <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="工作模式"/><ComboBox x:Name="ModeCombo" Grid.Column="1" MinWidth="190" SelectionChanged="Mode_Changed"><ComboBoxItem Content="禁用" Tag="Disabled"/><ComboBoxItem Content="服务端" Tag="Server"/><ComboBoxItem Content="客户端" Tag="Client"/></ComboBox></Grid>

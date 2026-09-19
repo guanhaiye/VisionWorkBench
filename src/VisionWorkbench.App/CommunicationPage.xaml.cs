@@ -88,11 +88,13 @@ public partial class CommunicationPage : UserControl
     }
     private void FillControls()
     {
+        ProjectNameText.Text = _config.Name;
         EnabledCheck.IsChecked = _config.Enabled; SelectTag(ModeCombo, _config.WorkMode.ToString()); SelectTag(FrameCombo, _config.FrameMode.ToString()); SelectText(EncodingCombo, _config.Encoding);
         ListenAddressText.Text = _config.ListenAddress; ListenPortText.Text = _config.ListenPort.ToString(); RemoteAddressText.Text = _config.RemoteAddress; RemotePortText.Text = _config.RemotePort.ToString(); MaxConnectionsText.Text = _config.MaxConnections.ToString(); TerminatorText.Text = _config.MessageTerminator; MaxMessageText.Text = _config.MaxMessageBytes.ToString(); ReceiveTimeoutText.Text = _config.ReceiveTimeoutMs.ToString(); AutoReconnectCheck.IsChecked = _config.AutoReconnect; UpdateModeVisibility();
     }
     private void ReadControls()
     {
+        _config.Name = string.IsNullOrWhiteSpace(ProjectNameText.Text) ? _config.ProjectCode : ProjectNameText.Text.Trim();
         _config.Enabled = EnabledCheck.IsChecked == true; _config.WorkMode = Enum.Parse<TcpWorkMode>((ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Disabled"); _config.FrameMode = Enum.Parse<TcpFrameMode>((FrameCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Line"); _config.Encoding = (EncodingCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "utf-8"; _config.ListenAddress = ListenAddressText.Text.Trim(); _config.ListenPort = ParsePort(ListenPortText.Text, 5000); _config.RemoteAddress = RemoteAddressText.Text.Trim(); _config.RemotePort = ParsePort(RemotePortText.Text, 5000); _config.MaxConnections = Math.Clamp(ParseInt(MaxConnectionsText.Text, 10), 1, 100); _config.MessageTerminator = TerminatorText.Text; _config.MaxMessageBytes = Math.Clamp(ParseInt(MaxMessageText.Text, 1024 * 1024), 1024, 16 * 1024 * 1024); _config.ReceiveTimeoutMs = Math.Clamp(ParseInt(ReceiveTimeoutText.Text, 30000), 1000, 300000); _config.AutoReconnect = AutoReconnectCheck.IsChecked == true;
     }
     private void NewProject_Click(object sender, RoutedEventArgs e)
@@ -136,7 +138,7 @@ public partial class CommunicationPage : UserControl
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); StateText.Text = "配置已保存"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
+        try { ReadControls(); Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!); var all = File.Exists(_configFile) ? JsonSerializer.Deserialize<Dictionary<string, ProjectCommunicationConfig>>(File.ReadAllText(_configFile)) ?? [] : []; all[_config.ProjectCode] = _config; File.WriteAllText(_configFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); ProjectCombo.Items.Refresh(); ProjectList.Items.Refresh(); StateText.Text = "配置已保存"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "保存通讯配置失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
     private async void Start_Click(object sender, RoutedEventArgs e) { try { ReadControls(); await AppServices.Instance.TcpCommunication.StartAsync(_config); StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled ? "TCP/IP 通讯未启用，请先勾选启用 TCP/IP 通讯并选择工作模式" : "已启动"; } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error); } }
     private async void Stop_Click(object sender, RoutedEventArgs e) { await AppServices.Instance.TcpCommunication.StopAsync(); StateText.Text = "已停止"; }
