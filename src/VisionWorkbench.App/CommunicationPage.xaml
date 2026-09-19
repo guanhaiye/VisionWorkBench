@@ -40,6 +40,7 @@
                     <GroupBox Header="项目通讯">
                         <StackPanel Margin="8">
                             <CheckBox x:Name="EnabledCheck" Content="启用 TCP/IP 通讯"/>
+                            <CheckBox x:Name="AutoReconnectCheck" Content="客户端自动重连" Margin="0,8,0,0"/>
                             <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="工作模式"/><ComboBox x:Name="ModeCombo" Grid.Column="1" MinWidth="190" SelectionChanged="Mode_Changed"><ComboBoxItem Content="禁用" Tag="Disabled"/><ComboBoxItem Content="服务端" Tag="Server"/><ComboBoxItem Content="客户端" Tag="Client"/></ComboBox></Grid>
                             <TextBlock Text="监听地址" Margin="0,8,0,0"/><TextBox x:Name="ListenAddressText"/>
                             <TextBlock Text="监听端口"/><TextBox x:Name="ListenPortText"/>
@@ -57,7 +58,6 @@
                             <TextBlock Text="消息结束符（\\n 或 HEX:0D0A）" Margin="0,8,0,0"/><TextBox x:Name="TerminatorText"/>
                             <TextBlock Text="最大消息字节数"/><TextBox x:Name="MaxMessageText"/>
                             <TextBlock Text="接收超时（毫秒）"/><TextBox x:Name="ReceiveTimeoutText"/>
-                            <CheckBox x:Name="AutoReconnectCheck" Content="客户端自动重连" Margin="0,8,0,0"/>
                         </StackPanel>
                     </Expander>
                     <GroupBox Header="任务触发与结果回传" Margin="0,10,0,0">
