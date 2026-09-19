@@ -146,7 +146,26 @@ public partial class TasksPage : UserControl
         TaskTestResultText.Text = "正在启动算法插件…";
         try
         {
-            var recipe = pair.Recipe;
+            // 测试应使用当前编辑器中的配置。ROI 绘制后会先同步到输入框，
+            // 用户不必为了验证 ROI 是否生效而先保存一次任务。
+            if (!TryReadCurrentRoi(out var currentRoi, out var roiError))
+            {
+                _taskTestOutput = null;
+                TaskTestStatusText.Text = "ROI 配置无效，测试未执行";
+                TaskTestStatusText.Visibility = Visibility.Visible;
+                TaskTestResultText.Text = roiError!;
+                ThemedMessageBox.Show(roiError!, "ROI 配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var currentPolicy = (RoiPolicyCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+            var recipe = pair.Recipe with
+            {
+                Roi = currentRoi,
+                RoiPolicy = Enum.TryParse<RoiBoundaryPolicy>(currentPolicy, true, out var parsedPolicy)
+                    ? parsedPolicy
+                    : pair.Recipe.RoiPolicy,
+            };
             await using var session = await AppServices.Instance.AlgorithmManager
                 .CreateSessionAsync(recipe.PluginId, CancellationToken.None);
             await session.InitializeAsync(new VisionWorkbench.Algorithms.AlgorithmInitialization
@@ -172,7 +191,10 @@ public partial class TasksPage : UserControl
             var decision = RuleEngine.Evaluate(output, recipe.Rules, recipe.Roi, recipe.RoiPolicy);
             _taskTestOutput = output with { Decision = decision };
             TaskTestStatusText.Visibility = Visibility.Collapsed;
-            TaskTestResultText.Text = $"测试完成：{decision.Status}；数量：{output.GetCount()}；耗时：{output.Performance?.TotalMs ?? 0:0.#} ms";
+            var roiSummary = recipe.Roi is { } appliedRoi
+                ? $"ROI 已应用（X={appliedRoi.X:0.###}, Y={appliedRoi.Y:0.###}, W={appliedRoi.Width:0.###}, H={appliedRoi.Height:0.###}）"
+                : "ROI 未设置，使用整幅图";
+            TaskTestResultText.Text = $"测试完成：{decision.Status}；数量：{output.GetCount()}；耗时：{output.Performance?.TotalMs ?? 0:0.#} ms；{roiSummary}";
             DrawTaskTestOverlay();
             await session.StopAsync(CancellationToken.None);
         }
@@ -203,6 +225,49 @@ public partial class TasksPage : UserControl
         RunTaskTestButton.IsEnabled = !_taskTestRunning
             && _editingId is not null
             && !string.IsNullOrWhiteSpace(_taskTestImagePath);
+    }
+
+    private bool TryReadCurrentRoi(out NormalizedRect? roi, out string? error)
+    {
+        roi = null;
+        error = null;
+
+        var values = new[]
+        {
+            (Name: "X", Text: RoiXText.Text),
+            (Name: "Y", Text: RoiYText.Text),
+            (Name: "W", Text: RoiWText.Text),
+            (Name: "H", Text: RoiHText.Text),
+        };
+        var parsed = new double[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (!double.TryParse(values[i].Text, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed[i])
+                && !double.TryParse(values[i].Text, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed[i]))
+            {
+                error = $"ROI 的 {values[i].Name} 必须是数字。";
+                return false;
+            }
+        }
+
+        var x = parsed[0];
+        var y = parsed[1];
+        var width = parsed[2];
+        var height = parsed[3];
+        if (width <= 0 || height <= 0)
+        {
+            // 宽高为 0 是产品约定，表示整幅图。
+            return true;
+        }
+        if (x < 0 || y < 0 || x >= 1 || y >= 1 || width > 1 || height > 1
+            || x + width > 1 || y + height > 1)
+        {
+            error = "ROI 必须位于 0~1 的归一化范围内，且不能超出图像边界。";
+            return false;
+        }
+
+        roi = new NormalizedRect { X = x, Y = y, Width = width, Height = height };
+        return true;
     }
 
     private void ClearTaskTestPreview()
