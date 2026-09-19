@@ -226,7 +226,7 @@ public class ImageViewer : ContentControl
 
     private void ZoomAt(double value, Point anchor)
     {
-        if (_viewer is null || _contentScale is null)
+        if (_viewer is null || _contentScale is null || _contentHost is null)
         {
             return;
         }
@@ -239,19 +239,39 @@ public class ImageViewer : ContentControl
             return;
         }
 
-        // Convert the cursor position to unscaled content coordinates before
-        // changing the transform. After scaling, scroll back to the exact
-        // offset that places that same content point under the cursor.
-        var contentX = (_viewer.HorizontalOffset + anchor.X) / oldZoom;
-        var contentY = (_viewer.VerticalOffset + anchor.Y) / oldZoom;
+        // Resolve the exact content point beneath the cursor before scaling.
+        // Offset arithmetic alone drifts because ScrollViewer applies offsets
+        // asynchronously and its viewport changes when scrollbars appear.
+        var beforeTransform = _contentHost.TransformToAncestor(_viewer);
+        var inverse = beforeTransform.Inverse;
+        if (inverse is null)
+        {
+            return;
+        }
+        var contentPoint = inverse.Transform(anchor);
+
         _contentScale.ScaleX = next;
         _contentScale.ScaleY = next;
         UpdateContentSize();
         _viewer.UpdateLayout();
-        var targetHorizontalOffset = contentX * next - anchor.X;
-        var targetVerticalOffset = contentY * next - anchor.Y;
-        _viewer.ScrollToHorizontalOffset(targetHorizontalOffset);
-        _viewer.ScrollToVerticalOffset(targetVerticalOffset);
+
+        // Compensate using the measured on-screen displacement of that same
+        // content point. Repeat once because showing/hiding a scrollbar can
+        // change the viewport during the first layout pass.
+        for (var pass = 0; pass < 2; pass++)
+        {
+            var currentPoint = _contentHost.TransformToAncestor(_viewer).Transform(contentPoint);
+            var deltaX = currentPoint.X - anchor.X;
+            var deltaY = currentPoint.Y - anchor.Y;
+            if (Math.Abs(deltaX) < 0.01 && Math.Abs(deltaY) < 0.01)
+            {
+                break;
+            }
+
+            _viewer.ScrollToHorizontalOffset(_viewer.HorizontalOffset + deltaX);
+            _viewer.ScrollToVerticalOffset(_viewer.VerticalOffset + deltaY);
+            _viewer.UpdateLayout();
+        }
         ZoomChanged?.Invoke(this, next);
     }
 
