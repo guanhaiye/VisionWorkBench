@@ -445,11 +445,17 @@ public partial class CommunicationPage : UserControl
         if (!TrySaveProjectParameters(refreshSelectors: false))
             return;
         if (TriggerRulesList.SelectedItem is not TriggerRuleRow row)
+        {
+            StateText.Text = "项目通讯及协议参数已保存";
             return;
+        }
         var ruleTask = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
         var task = TriggerTaskCombo.SelectedItem as TaskEntity;
         if (ruleTask is null || task is null)
+        {
+            StateText.Text = "项目通讯及协议参数已保存";
             return;
+        }
         var modeText = (TriggerMatchModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "ExactText";
         var config = new TaskTcpTriggerConfig
         {
@@ -590,7 +596,6 @@ public partial class CommunicationPage : UserControl
         TriggerMatchModeCombo.IsEnabled = enabled;
         TriggerMatchValueText.IsEnabled = enabled;
         TriggerResponseTemplateText.IsEnabled = enabled;
-        SaveTaskTriggerButton.IsEnabled = enabled;
     }
     private void UpdateModeVisibility() { var tag = (ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(); var server = tag == "Server"; ListenAddressText.IsEnabled = server; ListenPortText.IsEnabled = server; MaxConnectionsText.IsEnabled = server; RemoteAddressText.IsEnabled = tag == "Client"; RemotePortText.IsEnabled = tag == "Client"; }
     private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() => { LogText.AppendText($"[{e.Timestamp:HH:mm:ss}] {e.Level} {e.Direction} {e.Message}{Environment.NewLine}"); LogText.ScrollToEnd(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray(); });
