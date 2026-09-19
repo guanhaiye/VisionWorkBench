@@ -158,10 +158,10 @@
                 </StackPanel>
             </ScrollViewer>
             <Grid x:Name="RightContentGrid" Grid.Column="2">
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="180"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="340"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <TextBlock Text="连接列表" FontWeight="Bold"/>
                 <ListBox x:Name="ConnectionsList" Grid.Row="1" Margin="0,6,0,10" DisplayMemberPath="RemoteEndpoint"/>
-                <GroupBox Header="通讯日志" Grid.Row="2" Margin="0,0,0,10"><TextBox x:Name="LogText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></GroupBox>
+                <GroupBox Header="通讯日志" Grid.Row="2" Margin="0,0,0,10"><TextBox x:Name="LogText" MinHeight="300" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></GroupBox>
                 <Grid Grid.Row="3">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />

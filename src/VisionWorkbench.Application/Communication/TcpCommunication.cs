@@ -156,6 +156,12 @@ public sealed class TcpFrameReceivedEventArgs(TcpConnectionInfo connection, byte
     public byte[] Data { get; } = data;
 }
 
+public sealed class TcpRawDataReceivedEventArgs(TcpConnectionInfo connection, byte[] data) : EventArgs
+{
+    public TcpConnectionInfo Connection { get; } = connection;
+    public byte[] Data { get; } = data;
+}
+
 public sealed class TcpConnectionChangedEventArgs(TcpConnectionInfo connection, bool connected, string? error = null) : EventArgs
 {
     public TcpConnectionInfo Connection { get; } = connection;
@@ -169,6 +175,7 @@ public interface ITcpTransport : IAsyncDisposable
 {
     TcpRuntimeState State { get; }
     IReadOnlyCollection<TcpConnectionInfo> Connections { get; }
+    event EventHandler<TcpRawDataReceivedEventArgs>? RawDataReceived;
     event EventHandler<TcpFrameReceivedEventArgs>? FrameReceived;
     event EventHandler<TcpConnectionChangedEventArgs>? ConnectionChanged;
     Task StartAsync(ProjectCommunicationConfig config, CancellationToken ct = default);
@@ -287,6 +294,7 @@ internal sealed class TcpConnectionSession : IAsyncDisposable
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
     public TcpConnectionInfo Info { get; }
+    public event EventHandler<TcpRawDataReceivedEventArgs>? RawDataReceived;
     public event EventHandler<TcpFrameReceivedEventArgs>? FrameReceived;
     public event EventHandler<string?>? Closed;
 
@@ -322,6 +330,7 @@ internal sealed class TcpConnectionSession : IAsyncDisposable
                 var read = await _stream.ReadAsync(buffer, linked.Token);
                 if (read == 0) break;
                 Info.LastActivityAt = DateTime.UtcNow;
+                RawDataReceived?.Invoke(this, new TcpRawDataReceivedEventArgs(Info, buffer[..read].ToArray()));
                 foreach (var frame in _decoder.Append(buffer.AsSpan(0, read))) FrameReceived?.Invoke(this, new TcpFrameReceivedEventArgs(Info, frame));
             }
         }
@@ -357,6 +366,7 @@ public sealed class TcpServerTransport : ITcpTransport
     private ProjectCommunicationConfig _config = new();
     public TcpRuntimeState State { get; private set; } = TcpRuntimeState.Stopped;
     public IReadOnlyCollection<TcpConnectionInfo> Connections => _sessions.Values.Select(s => s.Info).ToArray();
+    public event EventHandler<TcpRawDataReceivedEventArgs>? RawDataReceived;
     public event EventHandler<TcpFrameReceivedEventArgs>? FrameReceived;
     public event EventHandler<TcpConnectionChangedEventArgs>? ConnectionChanged;
     public async Task StartAsync(ProjectCommunicationConfig config, CancellationToken ct = default)
@@ -378,6 +388,7 @@ public sealed class TcpServerTransport : ITcpTransport
                 var id = Guid.NewGuid().ToString("N")[..12];
                 var session = new TcpConnectionSession(client, _config, id);
                 if (!_sessions.TryAdd(id, session)) { await session.DisposeAsync(); continue; }
+                session.RawDataReceived += (_, e) => RawDataReceived?.Invoke(this, e);
                 session.FrameReceived += (_, e) => FrameReceived?.Invoke(this, e);
                 session.Closed += async (_, error) => await RemoveAsync(id, session, error);
                 ConnectionChanged?.Invoke(this, new TcpConnectionChangedEventArgs(session.Info, true));
@@ -423,6 +434,7 @@ public sealed class TcpClientTransport : ITcpTransport
     private ProjectCommunicationConfig _config = new();
     public TcpRuntimeState State { get; private set; } = TcpRuntimeState.Stopped;
     public IReadOnlyCollection<TcpConnectionInfo> Connections => _sessions.Values.Select(s => s.Info).ToArray();
+    public event EventHandler<TcpRawDataReceivedEventArgs>? RawDataReceived;
     public event EventHandler<TcpFrameReceivedEventArgs>? FrameReceived;
     public event EventHandler<TcpConnectionChangedEventArgs>? ConnectionChanged;
     public async Task StartAsync(ProjectCommunicationConfig config, CancellationToken ct = default)
@@ -441,6 +453,7 @@ public sealed class TcpClientTransport : ITcpTransport
                 await client.ConnectAsync(_config.RemoteAddress, _config.RemotePort, ct);
                 var id = "client";
                 var session = new TcpConnectionSession(client, _config, id); _sessions[id] = session; State = TcpRuntimeState.Connected;
+                session.RawDataReceived += (_, e) => RawDataReceived?.Invoke(this, e);
                 session.FrameReceived += (_, e) => FrameReceived?.Invoke(this, e);
                 session.Closed += async (sender, error) => { _sessions.TryRemove(id, out var removed); ConnectionChanged?.Invoke(this, new TcpConnectionChangedEventArgs(session.Info, false, error)); await session.DisposeAsync(); };
                 ConnectionChanged?.Invoke(this, new TcpConnectionChangedEventArgs(session.Info, true));
@@ -491,6 +504,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         public Channel<TcpFrameReceivedEventArgs> FrameChannel { get; } = Channel.CreateBounded<TcpFrameReceivedEventArgs>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
         public Task? FrameConsumer { get; set; }
         public ITcpTransport? Transport { get; set; }
+        public EventHandler<TcpRawDataReceivedEventArgs>? RawDataHandler { get; set; }
         public EventHandler<TcpFrameReceivedEventArgs>? FrameHandler { get; set; }
         public EventHandler<TcpConnectionChangedEventArgs>? ConnectionHandler { get; set; }
     }
@@ -537,8 +551,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 return;
             }
             runtime.Transport = config.WorkMode == TcpWorkMode.Server ? new TcpServerTransport() : new TcpClientTransport();
+            runtime.RawDataHandler = (_, e) => Transport_RawDataReceived(runtime, e);
             runtime.FrameHandler = (_, e) => Transport_FrameReceived(runtime, e);
             runtime.ConnectionHandler = (_, e) => Transport_ConnectionChanged(runtime, e);
+            runtime.Transport.RawDataReceived += runtime.RawDataHandler;
             runtime.Transport.FrameReceived += runtime.FrameHandler;
             runtime.Transport.ConnectionChanged += runtime.ConnectionHandler;
             try
@@ -589,6 +605,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         }
         if (runtime.Transport is not null)
         {
+            if (runtime.RawDataHandler is not null) runtime.Transport.RawDataReceived -= runtime.RawDataHandler;
             if (runtime.FrameHandler is not null) runtime.Transport.FrameReceived -= runtime.FrameHandler;
             if (runtime.ConnectionHandler is not null) runtime.Transport.ConnectionChanged -= runtime.ConnectionHandler;
             await runtime.Transport.DisposeAsync();
@@ -600,6 +617,15 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     {
         Log(e.Connected ? "INFO" : "WARN", "SYS", $"[{runtime.Config.ProjectCode}] {(e.Connected ? "连接建立" : "连接断开")}: {e.Connection.ConnectionId} {e.Connection.RemoteEndpoint} {e.Error}");
         StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+    private void Transport_RawDataReceived(ProjectRuntime runtime, TcpRawDataReceivedEventArgs e)
+    {
+        var text = TcpMessageCodec.GetEncoding(runtime.Config).GetString(e.Data)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
+        Log("INFO", "RAW-RX", $"[{runtime.Config.ProjectCode}/{e.Connection.ConnectionId}] {text} ({e.Data.Length} bytes)");
     }
     private void Transport_FrameReceived(ProjectRuntime runtime, TcpFrameReceivedEventArgs e)
     {
