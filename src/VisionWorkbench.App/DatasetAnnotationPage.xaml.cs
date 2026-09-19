@@ -1404,6 +1404,18 @@ public partial class DatasetAnnotationPage : UserControl
             var areaAfter = OpenCvSharp.Cv2.CountNonZero(mask);
             if (areaAfter == areaBefore) continue;
 
+            // YOLO 分割标注只保存单一外轮廓，不能直接保存多边形内部的“洞”。
+            // 如果橡皮擦完全落在区域内部，External 轮廓会把这个洞忽略，结果看起来就像没有擦除。
+            // 将内部擦除区域通过最短通道连接到边界后，再提取外轮廓即可保留擦除结果。
+            OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] allContours, out _,
+                OpenCvSharp.RetrievalModes.CComp, OpenCvSharp.ContourApproximationModes.ApproxSimple);
+            if (allContours.Length > 1)
+            {
+                var (endpoint, boundaryPoint) = FindNearestPolygonBoundary(polygon, rasterStroke);
+                OpenCvSharp.Cv2.Line(mask, endpoint, boundaryPoint, OpenCvSharp.Scalar.Black,
+                    Math.Max(1, thickness), OpenCvSharp.LineTypes.AntiAlias);
+            }
+
             OpenCvSharp.Cv2.FindContours(mask, out OpenCvSharp.Point[][] contours, out _,
                 OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
             var replacements = contours
@@ -1421,6 +1433,44 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationList.ItemsSource = _annotation.Objects;
         RenderAnnotations();
         StatusText.Text = $"正在擦除；橡皮擦直径 {_eraserDiameter:0} 像素。松开左键后自动保存。";
+    }
+
+    private static (OpenCvSharp.Point Endpoint, OpenCvSharp.Point Boundary) FindNearestPolygonBoundary(
+        OpenCvSharp.Point[] polygon, OpenCvSharp.Point[] stroke)
+    {
+        var firstEndpoint = stroke[0];
+        var firstBoundary = ClosestPointOnPolygon(firstEndpoint, polygon, out var firstDistance);
+        var lastEndpoint = stroke[^1];
+        var lastBoundary = ClosestPointOnPolygon(lastEndpoint, polygon, out var lastDistance);
+        return lastDistance < firstDistance
+            ? (lastEndpoint, lastBoundary)
+            : (firstEndpoint, firstBoundary);
+    }
+
+    private static OpenCvSharp.Point ClosestPointOnPolygon(
+        OpenCvSharp.Point point, OpenCvSharp.Point[] polygon, out double distanceSquared)
+    {
+        var bestPoint = polygon[0];
+        distanceSquared = double.MaxValue;
+        for (var index = 0; index < polygon.Length; index++)
+        {
+            var start = polygon[index];
+            var end = polygon[(index + 1) % polygon.Length];
+            var dx = end.X - start.X;
+            var dy = end.Y - start.Y;
+            var lengthSquared = dx * (double)dx + dy * (double)dy;
+            var t = lengthSquared < double.Epsilon
+                ? 0
+                : ((point.X - start.X) * dx + (point.Y - start.Y) * dy) / lengthSquared;
+            t = Math.Clamp(t, 0, 1);
+            var candidateX = start.X + t * dx;
+            var candidateY = start.Y + t * dy;
+            var candidateDistance = Math.Pow(point.X - candidateX, 2) + Math.Pow(point.Y - candidateY, 2);
+            if (candidateDistance >= distanceSquared) continue;
+            distanceSquared = candidateDistance;
+            bestPoint = new OpenCvSharp.Point((int)Math.Round(candidateX), (int)Math.Round(candidateY));
+        }
+        return bestPoint;
     }
 
     private void PaintStroke(IReadOnlyList<Point> stroke)
