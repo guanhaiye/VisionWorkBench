@@ -2360,10 +2360,10 @@ public partial class DatasetAnnotationPage : UserControl
 
     private async void DatasetAnnotationPage_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape && !IsTextInputFocused() && (_manualDrawMode || _brushMode))
+        if (e.Key == Key.Escape && !IsTextInputFocused() && IsAnnotationInteractionActive())
         {
             e.Handled = true;
-            CancelCurrentDraw();
+            ExitAnnotationMode();
             return;
         }
         if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.None && !IsTextInputFocused())
@@ -2388,6 +2388,45 @@ public partial class DatasetAnnotationPage : UserControl
 
         e.Handled = true;
         await UndoLastSam1PromptAsync();
+    }
+
+    private bool IsAnnotationInteractionActive() =>
+        _manualDrawMode || _brushMode || _eraserMode || _sam1ClickMode ||
+        _dragging || _editingIndex >= 0 || _polygonPoints.Count > 0 ||
+        _brushDragging || _eraserDragging || _sam1Prompts.Count > 0;
+
+    private void ExitAnnotationMode()
+    {
+        ++_sam1PromptVersion;
+        ClearSam1HoverPreview();
+        _sam1ClickMode = false;
+        _sam1Prompts.Clear();
+        _sam1ResultIndex = -1;
+
+        _manualDrawMode = false;
+        _brushMode = false;
+        _eraserMode = false;
+        _dragging = false;
+        _editingIndex = -1;
+        _editMode = EditMode.None;
+        _editOriginal = null;
+        _draft = null;
+        _polygonPoints.Clear();
+        _polygonDraft = null;
+        _brushDragging = false;
+        _brushChanged = false;
+        _brushStrokePoints.Clear();
+        _brushCursorPoint = null;
+        _eraserDragging = false;
+        _eraserChanged = false;
+        _eraserStrokePoints.Clear();
+        _eraserCursorPoint = null;
+        AnnotationCanvas.ReleaseMouseCapture();
+        AnnotationScrollViewer.WheelZoomEnabled = true;
+        Sam1Button.Content = "智能标注";
+        UpdateToolButtons();
+        RenderAnnotations();
+        StatusText.Text = "已按 Esc 退出标注状态。已有标注保持不变。";
     }
 
     private void CancelCurrentDraw()
