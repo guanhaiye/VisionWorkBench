@@ -16,7 +16,6 @@ public partial class CommunicationPage : UserControl
     private List<TaskEntity> _allTasks = [];
     private List<TaskEntity> _triggerTasks = [];
     private readonly HashSet<long> _pendingTriggerTaskIds = [];
-    private bool _loadingTriggerEditor;
     private sealed record TriggerRuleRow(long TaskId, string DisplayText);
     public CommunicationPage()
     {
@@ -241,8 +240,8 @@ public partial class CommunicationPage : UserControl
     private void Mode_Changed(object sender, SelectionChangedEventArgs e) => UpdateModeVisibility();
     private void TriggerTask_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_loadingTriggerEditor) return;
-        SetTriggerEditorEnabled(false);
+        // 检测任务下拉框只负责切换任务，不改变规则编辑器的启用状态。
+        // 编辑器是否启用仅由规则列表是否被点击选中决定，任务名称也不参与匹配判断。
     }
     private void LoadTriggerEditor(TaskEntity task)
     {
@@ -282,9 +281,7 @@ public partial class CommunicationPage : UserControl
     {
         var task = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
         if (task is null) return;
-        _loadingTriggerEditor = true;
         TriggerTaskCombo.SelectedItem = task;
-        _loadingTriggerEditor = false;
         LoadTriggerEditor(task);
     }
     private async void NewTaskTrigger_Click(object sender, RoutedEventArgs e)
@@ -314,9 +311,7 @@ public partial class CommunicationPage : UserControl
         }
         RefreshTriggerRules();
         TriggerRulesList.SelectedItem = null;
-        _loadingTriggerEditor = true;
         TriggerTaskCombo.SelectedItem = task;
-        _loadingTriggerEditor = false;
         TriggerRulesList.SelectedItem = TriggerRulesList.Items
             .OfType<TriggerRuleRow>()
             .FirstOrDefault(row => row.TaskId == task.Id);
