@@ -901,7 +901,9 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void AnnotationCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_dataset is null || _image is null || _annotation is null || ClassCombo.SelectedItem is not string)
+        var canChooseClassAfterDrawing = IsPolygonMode() && (_manualDrawMode || _brushMode);
+        if (_dataset is null || _image is null || _annotation is null ||
+            (!canChooseClassAfterDrawing && ClassCombo.SelectedItem is not string))
         {
             StatusText.Text = "请选择数据集、图片和标注类别。";
             return;
@@ -1240,10 +1242,54 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void FinishPolygon_Click(object sender, RoutedEventArgs e) => FinishPolygon();
 
+    private bool TrySelectAnnotationClass(out string className)
+    {
+        className = string.Empty;
+        if (_dataset is null) return false;
+
+        var dialog = new AnnotationClassDialog(_dataset.Classes)
+        {
+            Owner = Window.GetWindow(this),
+        };
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.SelectedClassName))
+            return false;
+
+        var selectedClassName = dialog.SelectedClassName.Trim();
+        className = selectedClassName;
+        if (!_dataset.Classes.Contains(className, StringComparer.OrdinalIgnoreCase))
+        {
+            _dataset.Classes.Add(className);
+            DatasetClassesText.Text = string.Join(", ", _dataset.Classes);
+            ClassCombo.ItemsSource = null;
+            ClassCombo.ItemsSource = _dataset.Classes;
+        }
+        ClassCombo.SelectedItem = _dataset.Classes.FirstOrDefault(
+            value => string.Equals(value, selectedClassName, StringComparison.OrdinalIgnoreCase));
+
+        try
+        {
+            _dataset = AppServices.Instance.Datasets.Save(_dataset);
+        }
+        catch (Exception ex)
+        {
+            ThemedMessageBox.Show(Window.GetWindow(this), $"保存类别失败：{ex.Message}", "标注类别",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+        return true;
+    }
+
     private void FinishPolygon()
     {
-        if (_annotation is null || ClassCombo.SelectedItem is not string className || _polygonPoints.Count < 3)
+        if (_annotation is null || _polygonPoints.Count < 3)
         {
+            return;
+        }
+        if (!TrySelectAnnotationClass(out var className))
+        {
+            CancelPolygonDraft();
+            RenderAnnotations();
+            StatusText.Text = "已取消本次外轮廓绘制。";
             return;
         }
         var imageRect = GetImageRect();
@@ -1360,8 +1406,7 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void PaintStroke(IReadOnlyList<Point> stroke)
     {
-        if (_annotation is null || ClassCombo.SelectedItem is not string className ||
-            stroke.Count == 0 || AnnotationCanvas.ActualWidth < 1 || AnnotationCanvas.ActualHeight < 1)
+        if (_annotation is null || stroke.Count == 0 || AnnotationCanvas.ActualWidth < 1 || AnnotationCanvas.ActualHeight < 1)
         {
             return;
         }
@@ -1392,9 +1437,16 @@ public partial class DatasetAnnotationPage : UserControl
             OpenCvSharp.RetrievalModes.External, OpenCvSharp.ContourApproximationModes.ApproxSimple);
         var paintedObjects = contours
             .Where(contour => contour.Length >= 3 && OpenCvSharp.Cv2.ContourArea(contour) >= 6)
-            .Select(contour => BuildPolygonFromContour(className, contour, rasterWidth, rasterHeight))
+            .Select(contour => BuildPolygonFromContour(string.Empty, contour, rasterWidth, rasterHeight))
             .ToList();
         if (paintedObjects.Count == 0) return;
+        if (!TrySelectAnnotationClass(out var className))
+        {
+            StatusText.Text = "已取消本次画刷绘制。";
+            return;
+        }
+        foreach (var paintedObject in paintedObjects)
+            paintedObject.ClassName = className;
 
         _annotation.Objects.AddRange(paintedObjects);
         _brushChanged = true;
