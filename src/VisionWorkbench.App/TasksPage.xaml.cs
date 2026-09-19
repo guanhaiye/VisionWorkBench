@@ -1401,7 +1401,9 @@ public partial class TasksPage : UserControl
             : [];
         var selected = options.FirstOrDefault(source =>
             string.Equals(source.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(source.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+            && (IsPathInputSource(providerId)
+                || IsNetworkInputSource(providerId)
+                || string.Equals(source.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)));
         if (selected is null)
         {
             selected = new InputSourceOption(
