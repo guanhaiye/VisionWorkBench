@@ -2156,6 +2156,12 @@ public partial class DatasetAnnotationPage : UserControl
 
     private async void DatasetAnnotationPage_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && !IsTextInputFocused() && (_manualDrawMode || _brushMode))
+        {
+            e.Handled = true;
+            CancelCurrentDraw();
+            return;
+        }
         if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.None && !IsTextInputFocused())
         {
             e.Handled = true;
@@ -2170,6 +2176,20 @@ public partial class DatasetAnnotationPage : UserControl
 
         e.Handled = true;
         await UndoLastSam1PromptAsync();
+    }
+
+    private void CancelCurrentDraw()
+    {
+        _dragging = false;
+        _draft = null;
+        _polygonPoints.Clear();
+        _polygonDraft = null;
+        _brushDragging = false;
+        _brushChanged = false;
+        _brushStrokePoints.Clear();
+        AnnotationCanvas.ReleaseMouseCapture();
+        RenderAnnotations();
+        StatusText.Text = "已按 Esc 取消本次绘制，已有标注保持不变。";
     }
 
     private void EndCurrentAnnotation()
