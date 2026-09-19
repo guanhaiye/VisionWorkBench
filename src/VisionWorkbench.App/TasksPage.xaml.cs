@@ -44,6 +44,8 @@ public partial class TasksPage : UserControl
     private int _taskTestImageIndex = -1;
     private AlgorithmOutput? _taskTestOutput;
     private bool _taskTestRunning;
+    private VisionWorkbench.Algorithms.IAlgorithmSession? _taskTestSession;
+    private string? _taskTestSessionKey;
 
     private sealed record InputSourceOption(string DisplayName, string ProviderId, string DeviceId)
     {
@@ -91,6 +93,7 @@ public partial class TasksPage : UserControl
     private async void TasksPage_Unloaded(object sender, RoutedEventArgs e)
     {
         await StopCameraPreviewAsync();
+        await DisposeTaskTestSessionAsync();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => Refresh();
@@ -250,18 +253,15 @@ public partial class TasksPage : UserControl
                     ? parsedPolicy
                     : pair.Recipe.RoiPolicy,
             };
-            await using var session = await AppServices.Instance.AlgorithmManager
-                .CreateSessionAsync(recipe.PluginId, CancellationToken.None);
-            await session.InitializeAsync(new VisionWorkbench.Algorithms.AlgorithmInitialization
+            var session = await GetTaskTestSessionAsync(taskId, recipe, CancellationToken.None);
+            if (session.State == VisionWorkbench.Algorithms.AlgorithmSessionState.Ready)
             {
-                Settings = DetectionRunService.BuildAlgorithmSettings(recipe),
-                ExecutionProvider = recipe.ExecutionProvider,
-            }, CancellationToken.None);
-            await session.StartAsync(new VisionWorkbench.Algorithms.AlgorithmStartOptions
-            {
-                Mode = "snapshot",
-                Roi = recipe.Roi,
-            }, CancellationToken.None);
+                await session.StartAsync(new VisionWorkbench.Algorithms.AlgorithmStartOptions
+                {
+                    Mode = "snapshot",
+                    Roi = recipe.Roi,
+                }, CancellationToken.None);
+            }
 
             var started = DateTimeOffset.UtcNow;
             var rawOutput = await session.SubmitAsync(new AlgorithmInput
@@ -281,10 +281,10 @@ public partial class TasksPage : UserControl
                 : "ROI 未设置，使用整幅图";
             TaskTestResultText.Text = $"测试完成：{decision.Status}；数量：{output.GetCount()}；耗时：{output.Performance?.TotalMs ?? 0:0.#} ms；{roiSummary}";
             DrawTaskTestOverlay();
-            await session.StopAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
+            await DisposeTaskTestSessionAsync();
             _taskTestOutput = null;
             TaskTestOverlayCanvas.Children.Clear();
             TaskTestStatusText.Text = "测试失败";
@@ -296,6 +296,54 @@ public partial class TasksPage : UserControl
         {
             _taskTestRunning = false;
             UpdateTaskTestAvailability();
+        }
+    }
+
+    private async Task<VisionWorkbench.Algorithms.IAlgorithmSession> GetTaskTestSessionAsync(
+        long taskId,
+        Recipe recipe,
+        CancellationToken cancellationToken)
+    {
+        var settings = DetectionRunService.BuildAlgorithmSettings(recipe);
+        var settingsText = settings is { } settingsElement ? settingsElement.GetRawText() : "{}";
+        var sessionKey = $"{taskId}|{recipe.PluginId}|{recipe.ExecutionProvider}|{settingsText}";
+        if (_taskTestSession is not null
+            && string.Equals(_taskTestSessionKey, sessionKey, StringComparison.Ordinal)
+            && _taskTestSession.State is VisionWorkbench.Algorithms.AlgorithmSessionState.Ready
+                or VisionWorkbench.Algorithms.AlgorithmSessionState.Running)
+        {
+            return _taskTestSession;
+        }
+
+        await DisposeTaskTestSessionAsync();
+        var session = await AppServices.Instance.AlgorithmManager
+            .CreateSessionAsync(recipe.PluginId, cancellationToken);
+        try
+        {
+            await session.InitializeAsync(new VisionWorkbench.Algorithms.AlgorithmInitialization
+            {
+                Settings = settings,
+                ExecutionProvider = recipe.ExecutionProvider,
+            }, cancellationToken);
+            _taskTestSession = session;
+            _taskTestSessionKey = sessionKey;
+            return session;
+        }
+        catch
+        {
+            await session.DisposeAsync();
+            throw;
+        }
+    }
+
+    private async Task DisposeTaskTestSessionAsync()
+    {
+        var session = _taskTestSession;
+        _taskTestSession = null;
+        _taskTestSessionKey = null;
+        if (session is not null)
+        {
+            await session.DisposeAsync();
         }
     }
 
@@ -521,6 +569,7 @@ public partial class TasksPage : UserControl
 
     private async void TaskList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        await DisposeTaskTestSessionAsync();
         if (TaskList.SelectedItem is not TaskRow row)
         {
             ClearTaskTestPreview();
@@ -602,13 +651,14 @@ public partial class TasksPage : UserControl
         ApplyRolePolicy();
     }
 
-    private void New_Click(object sender, RoutedEventArgs e)
+    private async void New_Click(object sender, RoutedEventArgs e)
     {
         if (!RolePolicy.CanEditRecipe)
         {
             ThemedMessageBox.Show("当前角色无权修改任务配置，请切换到工程师、专家或超级管理员。", "权限限制");
             return;
         }
+        await DisposeTaskTestSessionAsync();
         TaskList.SelectedItem = null;
         _editingId = null;
         ClearTaskTestPreview();
