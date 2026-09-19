@@ -230,10 +230,14 @@ public partial class CommunicationPage : UserControl
         _triggerTasks.Add(task);
         TriggerTaskCombo.ItemsSource = null;
         TriggerTaskCombo.ItemsSource = _triggerTasks;
+        RefreshTriggerRules();
         TriggerRulesList.SelectedItem = null;
         _loadingTriggerEditor = true;
         TriggerTaskCombo.SelectedItem = task;
         _loadingTriggerEditor = false;
+        TriggerRulesList.SelectedItem = TriggerRulesList.Items
+            .OfType<TriggerRuleRow>()
+            .FirstOrDefault(row => row.TaskId == task.Id);
         TriggerEnabledCheck.IsChecked = true;
         TriggerMatchModeCombo.SelectedIndex = 0;
         TriggerMatchValueText.Text = $"START_{task.StationCode}";
@@ -294,10 +298,8 @@ public partial class CommunicationPage : UserControl
     {
         TriggerRulesList.ItemsSource = _triggerTasks
             .Select(task => (Task: task, Config: TryReadTrigger(task.TriggerJson)))
-            .Where(pair => pair.Config is { }
-                && string.Equals(pair.Config.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase))
             .Select(pair => new TriggerRuleRow(pair.Task.Id,
-                $"{pair.Task.Name}  ·  {pair.Config!.MatchMode}  ·  {pair.Config.MatchValue}"))
+                $"{pair.Task.Name}  ·  {pair.Config?.MatchMode ?? MessageMatchMode.ExactText}  ·  {pair.Config?.MatchValue ?? "待保存"}"))
             .ToArray();
     }
     private static TaskTcpTriggerConfig? TryReadTrigger(string? json)
