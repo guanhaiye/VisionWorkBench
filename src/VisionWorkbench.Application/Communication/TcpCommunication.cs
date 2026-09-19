@@ -484,140 +484,220 @@ public sealed class TcpTaskMatcher
 
 public sealed class ProjectCommunicationManager : IAsyncDisposable
 {
+    private sealed class ProjectRuntime(ProjectCommunicationConfig config)
+    {
+        public ProjectCommunicationConfig Config { get; } = config;
+        public TcpSecurityValidator Security { get; } = new(TimeSpan.FromSeconds(Math.Max(1, config.MaxClockSkewSeconds)));
+        public Channel<TcpFrameReceivedEventArgs> FrameChannel { get; } = Channel.CreateBounded<TcpFrameReceivedEventArgs>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
+        public Task? FrameConsumer { get; set; }
+        public ITcpTransport? Transport { get; set; }
+        public EventHandler<TcpFrameReceivedEventArgs>? FrameHandler { get; set; }
+        public EventHandler<TcpConnectionChangedEventArgs>? ConnectionHandler { get; set; }
+    }
+
     private readonly Persistence.ProjectStationRepository _projects;
     private readonly Persistence.TaskRepository _tasks;
     private readonly ILogger<ProjectCommunicationManager>? _logger;
     private readonly string? _logDirectory;
     private readonly Persistence.CommunicationRequestStore? _requestStore;
     private readonly ConcurrentDictionary<string, string> _completed = new();
-    private TcpSecurityValidator _security = new();
     private readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> _rateWindows = new(StringComparer.Ordinal);
-    private Channel<TcpFrameReceivedEventArgs> _frameChannel = Channel.CreateBounded<TcpFrameReceivedEventArgs>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
-    private Task? _frameConsumer;
-    private ITcpTransport? _transport;
-    private ProjectCommunicationConfig _config = new();
-    public TcpRuntimeState State => _transport?.State ?? TcpRuntimeState.Stopped;
-    public IReadOnlyCollection<TcpConnectionInfo> Connections => _transport?.Connections ?? [];
+    private readonly ConcurrentDictionary<string, ProjectRuntime> _runtimes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    public TcpRuntimeState State => _runtimes.Values.Select(runtime => runtime.Transport?.State ?? TcpRuntimeState.Stopped)
+        .OrderByDescending(state => state == TcpRuntimeState.Connected)
+        .ThenByDescending(state => state == TcpRuntimeState.Listening)
+        .ThenByDescending(state => state == TcpRuntimeState.Connecting || state == TcpRuntimeState.Reconnecting)
+        .FirstOrDefault();
+    public TcpRuntimeState GetState(string projectCode) => _runtimes.TryGetValue(projectCode, out var runtime)
+        ? runtime.Transport?.State ?? TcpRuntimeState.Stopped
+        : TcpRuntimeState.Stopped;
+    public IReadOnlyCollection<TcpConnectionInfo> Connections => _runtimes.Values.SelectMany(runtime => runtime.Transport?.Connections ?? []).ToArray();
+    public IReadOnlyCollection<TcpConnectionInfo> GetConnections(string projectCode) => _runtimes.TryGetValue(projectCode, out var runtime)
+        ? runtime.Transport?.Connections ?? []
+        : [];
     public event EventHandler<TcpLogEntry>? LogReceived;
     public event EventHandler? StateChanged;
     public Func<Persistence.TaskEntity, CancellationToken, Task<TcpTaskExecutionResult>>? TaskExecutor { get; set; }
     public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null, Persistence.CommunicationRequestStore? requestStore = null) { _projects = projects; _tasks = tasks; _logger = logger; _logDirectory = logDirectory; _requestStore = requestStore; }
     public async Task StartAsync(ProjectCommunicationConfig config, CancellationToken ct = default)
     {
-        await StopAsync(ct); _config = config; _security = new TcpSecurityValidator(TimeSpan.FromSeconds(Math.Max(1, config.MaxClockSkewSeconds)));
-        _frameChannel = Channel.CreateBounded<TcpFrameReceivedEventArgs>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false });
-        _frameConsumer = ProcessFramesAsync(_frameChannel.Reader, ct);
-        if (!config.Enabled || config.WorkMode == TcpWorkMode.Disabled)
+        var projectCode = string.IsNullOrWhiteSpace(config.ProjectCode) ? "default" : config.ProjectCode;
+        await _lifecycleGate.WaitAsync(ct);
+        try
         {
-            Log("INFO", "SYS", "TCP/IP 通讯未启用，请先勾选“启用 TCP/IP 通讯”并选择工作模式");
-            return;
+            await StopProjectCoreAsync(projectCode, ct);
+            var runtime = new ProjectRuntime(config);
+            _runtimes[projectCode] = runtime;
+            runtime.FrameConsumer = ProcessFramesAsync(runtime, runtime.FrameChannel.Reader, ct);
+            if (!config.Enabled || config.WorkMode == TcpWorkMode.Disabled)
+            {
+                Log("INFO", "SYS", $"[{projectCode}] TCP/IP 通讯未启用");
+                StateChanged?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+            runtime.Transport = config.WorkMode == TcpWorkMode.Server ? new TcpServerTransport() : new TcpClientTransport();
+            runtime.FrameHandler = (_, e) => Transport_FrameReceived(runtime, e);
+            runtime.ConnectionHandler = (_, e) => Transport_ConnectionChanged(runtime, e);
+            runtime.Transport.FrameReceived += runtime.FrameHandler;
+            runtime.Transport.ConnectionChanged += runtime.ConnectionHandler;
+            try
+            {
+                await runtime.Transport.StartAsync(config, ct);
+                Log("INFO", "SYS", $"[{projectCode}] TCP {config.WorkMode} 已启动");
+                StateChanged?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                Log("ERROR", "SYS", $"[{projectCode}] {ex.Message}");
+                _logger?.LogError(ex, "TCP start failed");
+                await StopProjectCoreAsync(projectCode, ct);
+                throw;
+            }
         }
-        _transport = config.WorkMode == TcpWorkMode.Server ? new TcpServerTransport() : new TcpClientTransport();
-        _transport.FrameReceived += Transport_FrameReceived; _transport.ConnectionChanged += Transport_ConnectionChanged;
-        try { await _transport.StartAsync(config, ct); Log("INFO", "SYS", $"TCP {config.WorkMode} 已启动"); StateChanged?.Invoke(this, EventArgs.Empty); }
-        catch (Exception ex) { Log("ERROR", "SYS", ex.Message); _logger?.LogError(ex, "TCP start failed"); throw; }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
     public async Task StopAsync(CancellationToken ct = default)
     {
-        _frameChannel.Writer.TryComplete();
-        var consumer = Interlocked.Exchange(ref _frameConsumer, null);
-        var old = Interlocked.Exchange(ref _transport, null); if (old is null) { if (consumer is not null) try { await consumer.WaitAsync(TimeSpan.FromSeconds(2), ct); } catch { } return; }
-        old.FrameReceived -= Transport_FrameReceived; old.ConnectionChanged -= Transport_ConnectionChanged; await old.DisposeAsync(); Log("INFO", "SYS", "TCP 已停止"); StateChanged?.Invoke(this, EventArgs.Empty);
+        await _lifecycleGate.WaitAsync(ct);
+        try
+        {
+            foreach (var projectCode in _runtimes.Keys.ToArray())
+                await StopProjectCoreAsync(projectCode, ct);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
-    private void Transport_ConnectionChanged(object? sender, TcpConnectionChangedEventArgs e) => Log(e.Connected ? "INFO" : "WARN", "SYS", $"{(e.Connected ? "连接建立" : "连接断开")}: {e.Connection.ConnectionId} {e.Connection.RemoteEndpoint} {e.Error}");
-    private void Transport_FrameReceived(object? sender, TcpFrameReceivedEventArgs e)
+    public async Task StopProjectAsync(string projectCode, CancellationToken ct = default)
     {
-        var text = TcpMessageCodec.GetEncoding(_config).GetString(e.Data); Log("INFO", "RX", $"[{e.Connection.ConnectionId}] {text}");
-        if (!_frameChannel.Writer.TryWrite(e)) Log("WARN", "SYS", "TCP 接收队列已满，已丢弃报文");
+        await _lifecycleGate.WaitAsync(ct);
+        try { await StopProjectCoreAsync(projectCode, ct); }
+        finally { _lifecycleGate.Release(); }
     }
-    private async Task ProcessFramesAsync(ChannelReader<TcpFrameReceivedEventArgs> reader, CancellationToken ct)
+    private async Task StopProjectCoreAsync(string projectCode, CancellationToken ct)
+    {
+        if (!_runtimes.TryRemove(projectCode, out var runtime)) return;
+        runtime.FrameChannel.Writer.TryComplete();
+        if (runtime.FrameConsumer is not null)
+        {
+            try { await runtime.FrameConsumer.WaitAsync(TimeSpan.FromSeconds(2), ct); } catch { }
+        }
+        if (runtime.Transport is not null)
+        {
+            if (runtime.FrameHandler is not null) runtime.Transport.FrameReceived -= runtime.FrameHandler;
+            if (runtime.ConnectionHandler is not null) runtime.Transport.ConnectionChanged -= runtime.ConnectionHandler;
+            await runtime.Transport.DisposeAsync();
+        }
+        Log("INFO", "SYS", $"[{projectCode}] TCP 已停止");
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+    private void Transport_ConnectionChanged(ProjectRuntime runtime, TcpConnectionChangedEventArgs e)
+    {
+        Log(e.Connected ? "INFO" : "WARN", "SYS", $"[{runtime.Config.ProjectCode}] {(e.Connected ? "连接建立" : "连接断开")}: {e.Connection.ConnectionId} {e.Connection.RemoteEndpoint} {e.Error}");
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+    private void Transport_FrameReceived(ProjectRuntime runtime, TcpFrameReceivedEventArgs e)
+    {
+        var text = TcpMessageCodec.GetEncoding(runtime.Config).GetString(e.Data); Log("INFO", "RX", $"[{runtime.Config.ProjectCode}/{e.Connection.ConnectionId}] {text}");
+        if (!runtime.FrameChannel.Writer.TryWrite(e)) Log("WARN", "SYS", $"[{runtime.Config.ProjectCode}] TCP 接收队列已满，已丢弃报文");
+    }
+    private async Task ProcessFramesAsync(ProjectRuntime runtime, ChannelReader<TcpFrameReceivedEventArgs> reader, CancellationToken ct)
     {
         try
         {
             await foreach (var frame in reader.ReadAllAsync(ct))
-                try { await DispatchAsync(frame.Connection.ConnectionId, frame.Data, frame.Connection.RemoteEndpoint); } catch (Exception ex) { Log("ERROR", "SYS", ex.Message); }
+                try { await DispatchAsync(runtime, frame.Connection.ConnectionId, frame.Data, frame.Connection.RemoteEndpoint); } catch (Exception ex) { Log("ERROR", "SYS", ex.Message); }
         }
         catch (OperationCanceledException) { }
     }
-    public async Task SendTextAsync(string connectionId, string text, CancellationToken ct = default)
-    { if (_transport is null) throw new InvalidOperationException("TCP 未启动"); var data = TcpMessageCodec.Encode(text, _config); await _transport.SendAsync(connectionId, data, ct); Log("INFO", "TX", $"[{connectionId}] {text}"); }
-    public async Task BroadcastTextAsync(string text, CancellationToken ct = default)
-    { if (_transport is null) throw new InvalidOperationException("TCP 未启动"); var data = TcpMessageCodec.Encode(text, _config); await _transport.BroadcastAsync(data, ct); Log("INFO", "TX", $"[广播] {text}"); }
-    private async Task DispatchAsync(string connectionId, byte[] raw, string endpoint)
+    public Task SendTextAsync(string connectionId, string text, CancellationToken ct = default) => SendTextAsync("default", connectionId, text, ct);
+    public async Task SendTextAsync(string projectCode, string connectionId, string text, CancellationToken ct = default)
+    { if (!_runtimes.TryGetValue(projectCode, out var runtime) || runtime.Transport is null) throw new InvalidOperationException("TCP 未启动"); var data = TcpMessageCodec.Encode(text, runtime.Config); await runtime.Transport.SendAsync(connectionId, data, ct); Log("INFO", "TX", $"[{projectCode}/{connectionId}] {text}"); }
+    public Task BroadcastTextAsync(string text, CancellationToken ct = default) => BroadcastTextAsync("default", text, ct);
+    public async Task BroadcastTextAsync(string projectCode, string text, CancellationToken ct = default)
+    { if (!_runtimes.TryGetValue(projectCode, out var runtime) || runtime.Transport is null) throw new InvalidOperationException("TCP 未启动"); var data = TcpMessageCodec.Encode(text, runtime.Config); await runtime.Transport.BroadcastAsync(data, ct); Log("INFO", "TX", $"[{projectCode}/广播] {text}"); }
+    private async Task SendTextAsync(ProjectRuntime runtime, string connectionId, string text, CancellationToken ct = default)
+    { if (runtime.Transport is null) throw new InvalidOperationException("TCP 未启动"); var data = TcpMessageCodec.Encode(text, runtime.Config); await runtime.Transport.SendAsync(connectionId, data, ct); Log("INFO", "TX", $"[{runtime.Config.ProjectCode}/{connectionId}] {text}"); }
+    private async Task DispatchAsync(ProjectRuntime runtime, string connectionId, byte[] raw, string endpoint)
     {
-        var text = TcpMessageCodec.GetEncoding(_config).GetString(raw).Trim();
-        if (!AllowRate(endpoint)) { await SendJsonAsync(connectionId, new { ok = false, code = "rate_limited" }); return; }
-        if (_config.RequireAuthentication)
+        var text = TcpMessageCodec.GetEncoding(runtime.Config).GetString(raw).Trim();
+        if (!AllowRate(runtime, endpoint)) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "rate_limited" }); return; }
+        if (runtime.Config.RequireAuthentication)
         {
             try
             {
                 using var authDoc = JsonDocument.Parse(text);
-                if (!_security.Validate(authDoc.RootElement, _config.SharedSecret, DateTimeOffset.UtcNow, out var authError))
-                { await SendJsonAsync(connectionId, new { ok = false, code = authError }); return; }
+                if (!runtime.Security.Validate(authDoc.RootElement, runtime.Config.SharedSecret, DateTimeOffset.UtcNow, out var authError))
+                { await SendJsonAsync(runtime, connectionId, new { ok = false, code = authError }); return; }
             }
             catch (JsonException)
-            { await SendJsonAsync(connectionId, new { ok = false, code = "authentication_required" }); return; }
+            { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "authentication_required" }); return; }
         }
         var tasks = await _tasks.ListAsync();
         var configured = tasks
-            .Select(task => (Task: task, Trigger: ParseTrigger(task.TriggerJson, _config.ProjectCode)))
+            .Select(task => (Task: task, Trigger: ParseTrigger(task.TriggerJson, runtime.Config.ProjectCode)))
             .FirstOrDefault(pair => pair.Trigger is { Enabled: true } trigger
-                && IsForCurrentProject(trigger)
+                && IsForCurrentProject(trigger, runtime.Config.ProjectCode)
                 && Matches(trigger, text));
         if (configured.Task is not null && configured.Trigger is not null)
         {
-            await ExecuteConfiguredTaskAsync(connectionId, text, configured.Task, configured.Trigger);
+            await ExecuteConfiguredTaskAsync(runtime, connectionId, text, configured.Task, configured.Trigger);
             return;
         }
         JsonDocument doc;
         try { doc = JsonDocument.Parse(text); }
-        catch (JsonException) { await SendJsonAsync(connectionId, new { ok = false, code = "invalid_json", message = "消息不是合法 JSON" }); return; }
+        catch (JsonException) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "invalid_json", message = "消息不是合法 JSON" }); return; }
         using (doc)
         {
             var root = doc.RootElement;
             var command = root.TryGetProperty("command", out var c) ? c.GetString() : null;
             var requestId = root.TryGetProperty("requestId", out var r) ? r.GetString() : null;
-            if (string.Equals(command, "ping", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(connectionId, new { ok = true, code = "pong", message = "TCP服务正常", requestId, timestamp = DateTimeOffset.UtcNow }); return; }
-            if (string.IsNullOrWhiteSpace(requestId)) { await SendJsonAsync(connectionId, new { ok = false, code = "request_id_required", message = "execute 必须提供 requestId" }); return; }
+            if (string.Equals(command, "ping", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(runtime, connectionId, new { ok = true, code = "pong", message = "TCP服务正常", requestId, timestamp = DateTimeOffset.UtcNow }); return; }
+            if (string.IsNullOrWhiteSpace(requestId)) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "request_id_required", message = "execute 必须提供 requestId" }); return; }
             var clientId = root.TryGetProperty("clientId", out var client) && client.ValueKind == JsonValueKind.String ? client.GetString() : endpoint;
             Persistence.CommunicationRequestEntity? persistedRequest = null;
             if (_requestStore is not null)
             {
-                var persisted = await _requestStore.BeginAsync(_config.ProjectCode, clientId ?? endpoint, requestId!, command ?? "", text);
-                if (persisted.State == Persistence.CommunicationRequestState.Cached && persisted.ResponseJson is not null) { await SendTextAsync(connectionId, persisted.ResponseJson); return; }
-                if (persisted.State == Persistence.CommunicationRequestState.Conflict) { await SendJsonAsync(connectionId, new { ok = false, code = "request_id_conflict", requestId }); return; }
-                if (persisted.State == Persistence.CommunicationRequestState.Processing) { await SendJsonAsync(connectionId, new { ok = false, code = "request_processing", requestId }); return; }
+                var persisted = await _requestStore.BeginAsync(runtime.Config.ProjectCode, clientId ?? endpoint, requestId!, command ?? "", text);
+                if (persisted.State == Persistence.CommunicationRequestState.Cached && persisted.ResponseJson is not null) { await SendTextAsync(runtime, connectionId, persisted.ResponseJson); return; }
+                if (persisted.State == Persistence.CommunicationRequestState.Conflict) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "request_id_conflict", requestId }); return; }
+                if (persisted.State == Persistence.CommunicationRequestState.Processing) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "request_processing", requestId }); return; }
                 persistedRequest = persisted.Request;
             }
-            if (_completed.TryGetValue($"{_config.ProjectCode}:{requestId}", out var cached)) { await SendTextAsync(connectionId, cached); return; }
-            if (!string.Equals(command, "execute", StringComparison.OrdinalIgnoreCase) && !string.Equals(command, "task", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(connectionId, new { ok = false, code = "unsupported_command", requestId }); return; }
+            if (_completed.TryGetValue($"{runtime.Config.ProjectCode}:{requestId}", out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
+            if (!string.Equals(command, "execute", StringComparison.OrdinalIgnoreCase) && !string.Equals(command, "task", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "unsupported_command", requestId }); return; }
             var taskKey = root.TryGetProperty("task", out var t) ? t.GetString() : null;
             var matched = TcpTaskMatcher.Match(command ?? "", taskKey, tasks);
-            if (matched is null) { await SendJsonAsync(connectionId, new { ok = false, code = "task_not_configured", requestId, task = taskKey }); return; }
-            await SendJsonAsync(connectionId, new { ok = true, code = "accepted", requestId, data = new { task = matched, queuePosition = 0 } });
+            if (matched is null) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "task_not_configured", requestId, task = taskKey }); return; }
+            await SendJsonAsync(runtime, connectionId, new { ok = true, code = "accepted", requestId, data = new { task = matched, queuePosition = 0 } });
             var result = JsonSerializer.Serialize(new { ok = true, code = "completed", requestId, responseId = Guid.NewGuid().ToString("N"), data = new { task = matched, status = "received", message = "命令已匹配；请在实时检测任务中启动对应工位" } });
-            _completed[$"{_config.ProjectCode}:{requestId}"] = result;
+            _completed[$"{runtime.Config.ProjectCode}:{requestId}"] = result;
             if (persistedRequest is not null) await _requestStore!.CompleteAsync(persistedRequest.Id, result);
-            await SendTextAsync(connectionId, result);
+            await SendTextAsync(runtime, connectionId, result);
         }
     }
-    private async Task ExecuteConfiguredTaskAsync(string connectionId, string text, Persistence.TaskEntity task, TaskTcpTriggerConfig trigger)
+    private async Task ExecuteConfiguredTaskAsync(ProjectRuntime runtime, string connectionId, string text, Persistence.TaskEntity task, TaskTcpTriggerConfig trigger)
     {
         var requestId = TryReadRequestId(text) ?? Guid.NewGuid().ToString("N");
-        var cacheKey = $"{_config.ProjectCode}:{requestId}";
-        if (_completed.TryGetValue(cacheKey, out var cached)) { await SendTextAsync(connectionId, cached); return; }
-        await SendJsonAsync(connectionId, new { ok = true, code = "accepted", requestId, data = new { task = task.Name } });
+        var cacheKey = $"{runtime.Config.ProjectCode}:{requestId}";
+        if (_completed.TryGetValue(cacheKey, out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
+        await SendJsonAsync(runtime, connectionId, new { ok = true, code = "accepted", requestId, data = new { task = task.Name } });
         try
         {
             if (TaskExecutor is null) throw new InvalidOperationException("TCP 任务执行器未配置");
             var result = await TaskExecutor(task, CancellationToken.None);
             var response = ApplyTemplate(trigger.ResponseTemplate, requestId, task, result);
             _completed[cacheKey] = response;
-            await SendTextAsync(connectionId, response);
+            await SendTextAsync(runtime, connectionId, response);
         }
         catch (Exception ex)
         {
-            await SendJsonAsync(connectionId, new { ok = false, code = "execution_failed", requestId, task = task.Name, message = ex.Message });
+            await SendJsonAsync(runtime, connectionId, new { ok = false, code = "execution_failed", requestId, task = task.Name, message = ex.Message });
         }
     }
     private static TaskTcpTriggerConfig? ParseTrigger(string? json, string? projectCode)
@@ -659,9 +739,9 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         MessageMatchMode.Default => true,
         _ => false,
     };
-    private bool IsForCurrentProject(TaskTcpTriggerConfig trigger) =>
+    private static bool IsForCurrentProject(TaskTcpTriggerConfig trigger, string projectCode) =>
         string.IsNullOrWhiteSpace(trigger.TcpProjectCode)
-        || string.Equals(trigger.TcpProjectCode, _config.ProjectCode, StringComparison.OrdinalIgnoreCase);
+        || string.Equals(trigger.TcpProjectCode, projectCode, StringComparison.OrdinalIgnoreCase);
     private static string? TryReadRequestId(string text)
     {
         try { using var doc = JsonDocument.Parse(text); return doc.RootElement.TryGetProperty("requestId", out var value) ? value.GetString() : null; }
@@ -676,12 +756,12 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             .Replace("{decision}", result.Decision, StringComparison.Ordinal)
             .Replace("{count}", result.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
             .Replace("{recordId}", result.RecordId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
-    private async Task SendJsonAsync(string connectionId, object value) => await SendTextAsync(connectionId, JsonSerializer.Serialize(value));
-    private bool AllowRate(string endpoint)
+    private async Task SendJsonAsync(ProjectRuntime runtime, string connectionId, object value) => await SendTextAsync(runtime, connectionId, JsonSerializer.Serialize(value));
+    private bool AllowRate(ProjectRuntime runtime, string endpoint)
     {
-        var limit = Math.Max(1, _config.MaxRequestsPerMinute);
+        var limit = Math.Max(1, runtime.Config.MaxRequestsPerMinute);
         var now = DateTimeOffset.UtcNow;
-        var window = _rateWindows.GetOrAdd(endpoint, _ => new Queue<DateTimeOffset>());
+        var window = _rateWindows.GetOrAdd($"{runtime.Config.ProjectCode}:{endpoint}", _ => new Queue<DateTimeOffset>());
         lock (window)
         {
             while (window.Count > 0 && now - window.Peek() >= TimeSpan.FromMinutes(1)) window.Dequeue();
@@ -703,5 +783,9 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             catch (Exception ex) { _logger?.LogDebug(ex, "写入 TCP 日志失败"); }
         }
     }
-    public async ValueTask DisposeAsync() => await StopAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+        _lifecycleGate.Dispose();
+    }
 }

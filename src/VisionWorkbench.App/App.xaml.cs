@@ -149,11 +149,7 @@ public partial class App : System.Windows.Application
         try
         {
             var profiles = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory).Load();
-            var preferredCode = AppServices.Instance.Settings.LastTcpProjectCode;
-            var config = profiles.FirstOrDefault(x => x.Enabled && x.AutoStart
-                && string.Equals(x.ProjectCode, preferredCode, StringComparison.OrdinalIgnoreCase))
-                ?? profiles.FirstOrDefault(x => x.Enabled && x.AutoStart);
-            if (config is not null)
+            foreach (var config in profiles.Where(x => x.Enabled && x.AutoStart))
                 await AppServices.Instance.TcpCommunication.StartAsync(config);
         }
         catch (Exception ex)

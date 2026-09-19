@@ -15,7 +15,6 @@ public partial class CommunicationPage : UserControl
     private ProjectCommunicationConfig _config = new();
     private List<ProjectCommunicationConfig> _profiles = [];
     private List<ProjectListRow> _projectListRows = [];
-    private string? _runningProjectCode;
     private List<TaskEntity> _allTasks = [];
     private List<TaskEntity> _triggerTasks = [];
     private readonly HashSet<long> _pendingTriggerTaskIds = [];
@@ -54,12 +53,6 @@ public partial class CommunicationPage : UserControl
     {
         if (_profiles.Count == 0)
             await LoadProjectsAsync();
-        if (_runningProjectCode is null
-            && AppServices.Instance.TcpCommunication.State != TcpRuntimeState.Stopped)
-        {
-            _runningProjectCode = _config.ProjectCode;
-            RefreshProjectStatuses();
-        }
     }
 
     private void CommunicationPage_Unloaded(object sender, RoutedEventArgs e)
@@ -266,9 +259,7 @@ public partial class CommunicationPage : UserControl
     }
     private string GetProjectStatus(ProjectCommunicationConfig profile)
     {
-        if (!string.Equals(_runningProjectCode, profile.ProjectCode, StringComparison.OrdinalIgnoreCase))
-            return "未连接";
-        return AppServices.Instance.TcpCommunication.State switch
+        return AppServices.Instance.TcpCommunication.GetState(profile.ProjectCode) switch
         {
             TcpRuntimeState.Connected => "已连接",
             TcpRuntimeState.Listening => "监听中",
@@ -290,7 +281,6 @@ public partial class CommunicationPage : UserControl
         try
         {
             if (!TrySaveProjectParameters(refreshSelectors: false)) return;
-            _runningProjectCode = _config.ProjectCode;
             RefreshProjectStatuses();
             await AppServices.Instance.TcpCommunication.StartAsync(_config);
             StateText.Text = !_config.Enabled || _config.WorkMode == TcpWorkMode.Disabled
@@ -300,20 +290,18 @@ public partial class CommunicationPage : UserControl
         }
         catch (Exception ex)
         {
-            _runningProjectCode = null;
             RefreshProjectStatuses();
             ThemedMessageBox.Show(ex.Message, "启动 TCP/IP 失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
-        await AppServices.Instance.TcpCommunication.StopAsync();
-        _runningProjectCode = null;
+        await AppServices.Instance.TcpCommunication.StopProjectAsync(_config.ProjectCode);
         RefreshProjectStatuses();
         StateText.Text = "已停止";
     }
     private async void Send_Click(object sender, RoutedEventArgs e)
-    { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.Connections.FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
+    { try { var connection = (ConnectionsList.SelectedItem as TcpConnectionInfo)?.ConnectionId ?? (AppServices.Instance.TcpCommunication.GetConnections(_config.ProjectCode).FirstOrDefault()?.ConnectionId ?? "client"); await AppServices.Instance.TcpCommunication.SendTextAsync(_config.ProjectCode, connection, ManualText.Text); } catch (Exception ex) { ThemedMessageBox.Show(ex.Message, "发送失败", MessageBoxButton.OK, MessageBoxImage.Warning); } }
     private void CommunicationSettingsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (sender is not ScrollViewer outer || e.Delta == 0)
@@ -604,11 +592,11 @@ public partial class CommunicationPage : UserControl
         TriggerResponseTemplateText.IsEnabled = enabled;
     }
     private void UpdateModeVisibility() { var tag = (ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(); var server = tag == "Server"; ListenAddressText.IsEnabled = server; ListenPortText.IsEnabled = server; MaxConnectionsText.IsEnabled = server; RemoteAddressText.IsEnabled = tag == "Client"; RemotePortText.IsEnabled = tag == "Client"; }
-    private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() => { LogText.AppendText($"[{e.Timestamp:HH:mm:ss}] {e.Level} {e.Direction} {e.Message}{Environment.NewLine}"); LogText.ScrollToEnd(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray(); });
+    private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() => { LogText.AppendText($"[{e.Timestamp:HH:mm:ss}] {e.Level} {e.Direction} {e.Message}{Environment.NewLine}"); LogText.ScrollToEnd(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.GetConnections(_config.ProjectCode).ToArray(); });
     private void Tcp_StateChanged(object? sender, EventArgs e) => Dispatcher.Invoke(() =>
     {
-        StateText.Text = AppServices.Instance.TcpCommunication.State.ToString();
-        ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.Connections.ToArray();
+        StateText.Text = AppServices.Instance.TcpCommunication.GetState(_config.ProjectCode).ToString();
+        ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.GetConnections(_config.ProjectCode).ToArray();
         RefreshProjectStatuses();
     });
     private static int ParseInt(string text, int fallback) => int.TryParse(text, out var value) ? value : fallback;
