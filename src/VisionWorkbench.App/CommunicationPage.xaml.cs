@@ -242,17 +242,7 @@ public partial class CommunicationPage : UserControl
     private void TriggerTask_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_loadingTriggerEditor) return;
-        if (TriggerTaskCombo.SelectedItem is not TaskEntity task) return;
-        var row = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);
-        if (row is not null)
-        {
-            TriggerRulesList.SelectedItem = row;
-            LoadTriggerEditor(task);
-        }
-        else
-        {
-            SetTriggerEditorEnabled(false);
-        }
+        SetTriggerEditorEnabled(false);
     }
     private void LoadTriggerEditor(TaskEntity task)
     {
@@ -277,6 +267,19 @@ public partial class CommunicationPage : UserControl
             SetTriggerEditorEnabled(false);
             return;
         }
+        LoadTriggerRule(row);
+    }
+    private void TriggerRulesList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ItemsControl.ContainerFromElement(TriggerRulesList, e.OriginalSource as DependencyObject)
+            is ListBoxItem { DataContext: TriggerRuleRow row })
+        {
+            TriggerRulesList.SelectedItem = row;
+            LoadTriggerRule(row);
+        }
+    }
+    private void LoadTriggerRule(TriggerRuleRow row)
+    {
         var task = _triggerTasks.FirstOrDefault(item => item.Id == row.TaskId);
         if (task is null) return;
         _loadingTriggerEditor = true;

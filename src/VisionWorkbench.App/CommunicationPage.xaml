@@ -95,7 +95,9 @@
                         <StackPanel Margin="8">
                             <TextBlock Text="已配置的任务规则" FontWeight="SemiBold"/>
                             <ListBox x:Name="TriggerRulesList" DisplayMemberPath="DisplayText" MinHeight="90" MaxHeight="150"
-                                     SelectionChanged="TriggerRule_Changed" Margin="0,5,0,4"/>
+                                     SelectionChanged="TriggerRule_Changed"
+                                     PreviewMouseLeftButtonDown="TriggerRulesList_PreviewMouseLeftButtonDown"
+                                     Margin="0,5,0,4"/>
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="新增规则" Click="NewTaskTrigger_Click"/>
                                 <Button Content="删除规则" Click="DeleteTaskTrigger_Click"/>
