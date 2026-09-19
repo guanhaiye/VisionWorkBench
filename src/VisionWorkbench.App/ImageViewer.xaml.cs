@@ -171,8 +171,14 @@ public class ImageViewer : ContentControl
             return;
         }
 
-        var anchor = e.GetPosition(_viewer);
         var next = e.Delta > 0 ? Zoom * 1.15 : Zoom / 1.15;
+        // Keep the image point currently under the cursor fixed while zooming.
+        // Use the viewer's coordinate system (rather than the image/content
+        // coordinate system) because the ScrollViewer offset is also measured
+        // in viewer coordinates.
+        var anchor = e.GetPosition(_viewer);
+        anchor.X = Math.Clamp(anchor.X, 0, Math.Max(0, _viewer.ViewportWidth));
+        anchor.Y = Math.Clamp(anchor.Y, 0, Math.Max(0, _viewer.ViewportHeight));
         ZoomAt(next, anchor);
         e.Handled = true;
     }
@@ -233,14 +239,19 @@ public class ImageViewer : ContentControl
             return;
         }
 
+        // Convert the cursor position to unscaled content coordinates before
+        // changing the transform. After scaling, scroll back to the exact
+        // offset that places that same content point under the cursor.
         var contentX = (_viewer.HorizontalOffset + anchor.X) / oldZoom;
         var contentY = (_viewer.VerticalOffset + anchor.Y) / oldZoom;
         _contentScale.ScaleX = next;
         _contentScale.ScaleY = next;
         UpdateContentSize();
         _viewer.UpdateLayout();
-        _viewer.ScrollToHorizontalOffset(contentX * next - anchor.X);
-        _viewer.ScrollToVerticalOffset(contentY * next - anchor.Y);
+        var targetHorizontalOffset = contentX * next - anchor.X;
+        var targetVerticalOffset = contentY * next - anchor.Y;
+        _viewer.ScrollToHorizontalOffset(targetHorizontalOffset);
+        _viewer.ScrollToVerticalOffset(targetVerticalOffset);
         ZoomChanged?.Invoke(this, next);
     }
 
