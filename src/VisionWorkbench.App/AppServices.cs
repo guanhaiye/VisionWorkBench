@@ -32,6 +32,8 @@ public sealed class AppSettings
     public string DatasetDirectory { get; set; } = @"E:\";
     /// <summary>训练平台上次选择的数据集，重启后恢复该数据集以继续显示对应的模型节点。</summary>
     public string? LastTrainingDatasetId { get; set; }
+    /// <summary>TCP/IP 页面上次选择的项目编码，重启后恢复对应规则列表。</summary>
+    public string? LastTcpProjectCode { get; set; }
     public string? PluginsRoot { get; set; }
     public string? PythonExecutable { get; set; }
     public string? YoloeModelPath { get; set; }

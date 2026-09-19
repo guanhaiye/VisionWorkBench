@@ -62,22 +62,51 @@ public partial class CommunicationPage : UserControl
         _profiles = _profileStore.Load();
         ProjectCombo.ItemsSource = _profiles;
         ProjectList.ItemsSource = _profiles;
-        if (_profiles.Count > 0) ProjectCombo.SelectedIndex = 0;
-        if (_profiles.Count > 0) ProjectList.SelectedIndex = 0;
         _allTasks = await AppServices.Instance.Tasks.ListAsync();
+        var preferredCode = AppServices.Instance.Settings.LastTcpProjectCode;
+        var preferred = _profiles.FirstOrDefault(profile =>
+            string.Equals(profile.ProjectCode, preferredCode, StringComparison.OrdinalIgnoreCase));
+        if (preferred is null)
+        {
+            var projectWithRule = _allTasks
+                .Select(task => TryReadTrigger(task.TriggerJson)?.TcpProjectCode)
+                .FirstOrDefault(code => _profiles.Any(profile =>
+                    string.Equals(profile.ProjectCode, code, StringComparison.OrdinalIgnoreCase)));
+            preferred = _profiles.FirstOrDefault(profile =>
+                string.Equals(profile.ProjectCode, projectWithRule, StringComparison.OrdinalIgnoreCase));
+        }
+        preferred ??= _profiles.FirstOrDefault();
+        if (preferred is not null)
+        {
+            ProjectCombo.SelectedItem = preferred;
+            ProjectList.SelectedItem = preferred;
+            AppServices.Instance.Settings.LastTcpProjectCode = preferred.ProjectCode;
+            AppServices.Instance.SaveUserSettings();
+        }
         RefreshBoundTasks();
     }
     private void Project_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (ProjectCombo.SelectedItem is ProjectCommunicationConfig profile)
+        {
             ProjectList.SelectedItem = profile;
+            RememberSelectedProject(profile);
+        }
         LoadConfig();
     }
     private void ProjectList_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (ProjectList.SelectedItem is not ProjectCommunicationConfig profile) return;
         ProjectCombo.SelectedItem = profile;
+        RememberSelectedProject(profile);
         LoadConfig();
+    }
+    private static void RememberSelectedProject(ProjectCommunicationConfig profile)
+    {
+        if (string.Equals(AppServices.Instance.Settings.LastTcpProjectCode, profile.ProjectCode, StringComparison.OrdinalIgnoreCase))
+            return;
+        AppServices.Instance.Settings.LastTcpProjectCode = profile.ProjectCode;
+        AppServices.Instance.SaveUserSettings();
     }
     private void Load_Click(object sender, RoutedEventArgs e) => LoadConfig();
     private void LoadConfig()
