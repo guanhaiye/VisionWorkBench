@@ -1007,15 +1007,16 @@ public partial class Shell : Window
             if (string.IsNullOrWhiteSpace(executable))
                 throw new InvalidOperationException("无法确定当前软件路径");
 
-            var escapedExecutable = executable.Replace("\"", "\\\"");
-            Process.Start(new ProcessStartInfo
+            var restartInfo = new ProcessStartInfo
             {
-                FileName = "cmd.exe",
-                Arguments = $"/d /c timeout /t 2 /nobreak >nul & start \"\" \"{escapedExecutable}\"",
-                CreateNoWindow = true,
+                FileName = executable,
+                WorkingDirectory = AppContext.BaseDirectory,
                 UseShellExecute = false,
                 WindowStyle = ProcessWindowStyle.Hidden,
-            });
+            };
+            restartInfo.ArgumentList.Add("--restart-wait-pid");
+            restartInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+            Process.Start(restartInfo);
             System.Windows.Application.Current.Shutdown();
         }
         catch (Exception ex)

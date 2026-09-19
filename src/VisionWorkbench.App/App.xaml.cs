@@ -29,6 +29,7 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
         var environmentCheck = e.Args.Any(argument =>
             string.Equals(argument, "--environment-check", StringComparison.OrdinalIgnoreCase));
+        WaitForRestartProcess(e.Args);
         _environmentCheckMode = environmentCheck;
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName,
             out _ownsSingleInstanceMutex);
@@ -276,6 +277,42 @@ public partial class App : System.Windows.Application
             // 由后续互斥体获取结果决定是否继续启动。
         }
         return false;
+    }
+
+    private static void WaitForRestartProcess(string[] args)
+    {
+        var index = Array.FindIndex(args, argument =>
+            string.Equals(argument, "--restart-wait-pid", StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= args.Length || !int.TryParse(args[index + 1], out var processId)
+            || processId == Environment.ProcessId)
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.WaitForExit(TimeSpan.FromSeconds(15)))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(TimeSpan.FromSeconds(5));
+                }
+                catch (InvalidOperationException)
+                {
+                    // 旧进程已经退出。
+                }
+            }
+        }
+        catch (ArgumentException)
+        {
+            // 旧进程已经退出。
+        }
+        catch (InvalidOperationException)
+        {
+            // 旧进程已经退出或句柄不可用。
+        }
     }
 
     [DllImport("user32.dll")]
