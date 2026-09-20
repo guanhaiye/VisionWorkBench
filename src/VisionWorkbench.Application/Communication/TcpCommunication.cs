@@ -529,6 +529,18 @@ public sealed class TcpFrameDecoder(ProjectCommunicationConfig config)
 
 public static class TcpMessageCodec
 {
+    /// <summary>TCP 报文 JSON 序列化选项：中文等非 ASCII 字符不转义为 \uXXXX，使其按项目配置的 Encoding(utf-8/gb18030)原样输出。</summary>
+    public static JsonSerializerOptions TextJsonOptions { get; } = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    static TcpMessageCodec()
+    {
+        // .NET 默认仅内置 UTF 系列编码，GBK/GB2312/GB18030 等代码页需注册 CodePagesEncodingProvider 后才能使用。
+        Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+    }
+
     public static Encoding GetEncoding(ProjectCommunicationConfig config) =>
         System.Text.Encoding.GetEncoding(config.Encoding switch { "gbk" or "gb2312" => "gb18030", _ => config.Encoding });
 
@@ -1181,7 +1193,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 requestId = request.RequestId,
                 task = task.Name,
                 message = ex.Message,
-            });
+            }, TcpMessageCodec.TextJsonOptions);
             _completed[cacheKey] = response;
             await CompletePersistedRequestAsync(persistedRequest, response);
             Log("WARN", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行超时: {task.Name}, requestId={request.RequestId}");
@@ -1205,7 +1217,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 requestId = request.RequestId,
                 task = task.Name,
                 message = ex.Message,
-            });
+            }, TcpMessageCodec.TextJsonOptions);
             _completed[cacheKey] = response;
             await CompletePersistedRequestAsync(persistedRequest, response);
             Log("ERROR", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务执行失败: {task.Name}, {ex.Message}");
@@ -1236,7 +1248,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             requestId,
             task = task.Name,
             message,
-        });
+        }, TcpMessageCodec.TextJsonOptions);
         _completed[cacheKey] = response;
         await CompletePersistedRequestAsync(persistedRequest, response);
         Log("WARN", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 请求终结: {code}, requestId={requestId}");
@@ -1265,7 +1277,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             requestId,
             task = task.Name,
             message = $"工位任务超过 {Math.Max(1, timeoutSeconds)} 秒执行超时",
-        });
+        }, TcpMessageCodec.TextJsonOptions);
     private static IReadOnlyList<TaskTcpTriggerConfig> ParseTriggers(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return [];
@@ -1318,7 +1330,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             .Replace("{decision}", result.Decision, StringComparison.Ordinal)
             .Replace("{count}", result.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
             .Replace("{recordId}", result.RecordId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
-    private async Task SendJsonAsync(ProjectRuntime runtime, string connectionId, object value) => await SendTextAsync(runtime, connectionId, JsonSerializer.Serialize(value));
+    private async Task SendJsonAsync(ProjectRuntime runtime, string connectionId, object value) => await SendTextAsync(runtime, connectionId, JsonSerializer.Serialize(value, TcpMessageCodec.TextJsonOptions));
     private bool AllowRate(ProjectRuntime runtime, string endpoint)
     {
         var limit = Math.Max(1, runtime.Config.MaxRequestsPerMinute);
