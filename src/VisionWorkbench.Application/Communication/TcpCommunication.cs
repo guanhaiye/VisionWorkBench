@@ -1023,6 +1023,16 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             if (string.Equals(command, "ping", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(runtime, connectionId, new { ok = true, code = "pong", message = "TCP服务正常", requestId, timestamp = DateTimeOffset.UtcNow }); return; }
             if (string.IsNullOrWhiteSpace(requestId)) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "request_id_required", message = "execute 必须提供 requestId" }); return; }
             var clientId = root.TryGetProperty("clientId", out var client) && client.ValueKind == JsonValueKind.String ? client.GetString() : endpoint;
+            // 校验失败在 BeginAsync 之前返回，避免非法指令/未配置任务留下永久 processing 记录。
+            if (!string.Equals(command, "execute", StringComparison.OrdinalIgnoreCase) && !string.Equals(command, "task", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "unsupported_command", requestId }); return; }
+            var taskKey = root.TryGetProperty("task", out var t) ? t.GetString() : null;
+            var matched = TcpTaskMatcher.Match(command ?? "", taskKey, tasks);
+            if (matched is null) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "task_not_configured", requestId, task = taskKey }); return; }
+            var matchedTask = tasks.First(task => string.Equals(task.StationCode, matched, StringComparison.OrdinalIgnoreCase));
+            var trigger = ParseTriggers(matchedTask.TriggerJson).FirstOrDefault(item => item.Enabled)
+                ?? new TaskTcpTriggerConfig();
+            var cacheKey = $"{runtime.Config.ProjectCode}:{requestId}";
+            if (_completed.TryGetValue(cacheKey, out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
             Persistence.CommunicationRequestEntity? persistedRequest = null;
             if (_requestStore is not null)
             {
@@ -1032,14 +1042,6 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 if (persisted.State == Persistence.CommunicationRequestState.Processing) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "request_processing", requestId }); return; }
                 persistedRequest = persisted.Request;
             }
-            if (_completed.TryGetValue($"{runtime.Config.ProjectCode}:{requestId}", out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
-            if (!string.Equals(command, "execute", StringComparison.OrdinalIgnoreCase) && !string.Equals(command, "task", StringComparison.OrdinalIgnoreCase)) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "unsupported_command", requestId }); return; }
-            var taskKey = root.TryGetProperty("task", out var t) ? t.GetString() : null;
-            var matched = TcpTaskMatcher.Match(command ?? "", taskKey, tasks);
-            if (matched is null) { await SendJsonAsync(runtime, connectionId, new { ok = false, code = "task_not_configured", requestId, task = taskKey }); return; }
-            var matchedTask = tasks.First(task => string.Equals(task.StationCode, matched, StringComparison.OrdinalIgnoreCase));
-            var trigger = ParseTriggers(matchedTask.TriggerJson).FirstOrDefault(item => item.Enabled)
-                ?? new TaskTcpTriggerConfig();
             await ExecuteConfiguredTaskAsync(runtime, connectionId, text, matchedTask, trigger, persistedRequest);
         }
     }
@@ -1047,7 +1049,12 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     {
         var requestId = TryReadRequestId(text) ?? Guid.NewGuid().ToString("N");
         var cacheKey = $"{runtime.Config.ProjectCode}:{requestId}";
-        if (_completed.TryGetValue(cacheKey, out var cached)) { await SendTextAsync(runtime, connectionId, cached); return; }
+        if (_completed.TryGetValue(cacheKey, out var cached))
+        {
+            await CompletePersistedRequestAsync(persistedRequest, cached);
+            await SendTextAsync(runtime, connectionId, cached);
+            return;
+        }
         if (!_processing.TryAdd(cacheKey, 0))
         {
             await SendJsonAsync(runtime, connectionId, new { ok = true, code = "processing", requestId });
@@ -1057,7 +1064,8 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         if (TaskExecutor is null)
         {
             _processing.TryRemove(cacheKey, out _);
-            await SendJsonAsync(runtime, connectionId, new { ok = false, code = "execution_unavailable", requestId, task = task.Name });
+            await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
+                "execution_unavailable", "检测执行器未就绪", persistedRequest);
             return;
         }
 
@@ -1082,7 +1090,8 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         if (submission.Admission == TcpExecutionAdmission.QueueFull)
         {
             _processing.TryRemove(cacheKey, out _);
-            await SendJsonAsync(runtime, connectionId, new { ok = false, code = "station_queue_full", requestId, task = task.Name });
+            await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
+                "station_queue_full", $"工位队列已满(上限 {runtime.Config.StationQueueLength})", persistedRequest);
             return;
         }
         if (submission.Admission == TcpExecutionAdmission.Completed && submission.CachedResult is { } completed)
@@ -1098,7 +1107,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         {
             _processing.TryRemove(cacheKey, out _);
             if (_completed.TryGetValue(cacheKey, out var completedResponse))
+            {
+                await CompletePersistedRequestAsync(persistedRequest, completedResponse);
                 await SendTextAsync(runtime, connectionId, completedResponse);
+            }
             else if (submission.TerminalCode == "execution_timeout")
             {
                 var timeoutResponse = BuildTimeoutResponse(requestId, task, runtime.Config.StationExecutionTimeoutSeconds);
@@ -1133,6 +1145,8 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         {
             submission.Cancel?.Invoke();
             _processing.TryRemove(cacheKey, out _);
+            await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
+                "execution_canceled", "accepted 响应发送失败，任务已取消", persistedRequest);
             throw;
         }
         _ = ObserveExecutionAsync(runtime, connectionId, task, trigger, request, submission.Completion!, cacheKey, persistedRequest);
@@ -1176,7 +1190,11 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务已取消: {task.Name}, requestId={request.RequestId}");
+            var projectStopped = !_runtimes.ContainsKey(runtime.Config.ProjectCode);
+            var code = projectStopped ? "project_stopped" : "execution_canceled";
+            await TerminalizeRequestAsync(runtime, connectionId, task, request.RequestId, cacheKey,
+                code, projectStopped ? "项目已停止，任务执行被取消" : "任务执行被取消", persistedRequest);
+            Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务已取消: {task.Name}, requestId={request.RequestId}, code={code}");
         }
         catch (Exception ex)
         {
@@ -1198,6 +1216,32 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         {
             _processing.TryRemove(cacheKey, out _);
         }
+    }
+
+    /// <summary>集中终结一个请求：构造终态 JSON、写内存缓存、持久化 request store，并在项目仍运行时回传。任何异常都不会阻止数据库落终态。</summary>
+    private async Task TerminalizeRequestAsync(
+        ProjectRuntime runtime,
+        string connectionId,
+        Persistence.TaskEntity task,
+        string requestId,
+        string cacheKey,
+        string code,
+        string message,
+        Persistence.CommunicationRequestEntity? persistedRequest)
+    {
+        var response = JsonSerializer.Serialize(new
+        {
+            ok = false,
+            code,
+            requestId,
+            task = task.Name,
+            message,
+        });
+        _completed[cacheKey] = response;
+        await CompletePersistedRequestAsync(persistedRequest, response);
+        Log("WARN", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 请求终结: {code}, requestId={requestId}");
+        if (_runtimes.ContainsKey(runtime.Config.ProjectCode))
+            await TrySendTextAsync(runtime, connectionId, response);
     }
 
     private async Task CompletePersistedRequestAsync(Persistence.CommunicationRequestEntity? request, string response)
