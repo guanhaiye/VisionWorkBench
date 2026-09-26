@@ -40,8 +40,14 @@ public sealed class AppSettings
     public string? Sam1ModelPath { get; set; }
     // 兼容早期预览版设置文件；新配置统一使用 Sam1ModelPath。
     public string? Sam3ModelPath { get; set; }
-    /// <summary>许可证验证公钥，仅允许放置公钥，不允许放置签发私钥。</summary>
-    public string? LicensePublicKey { get; set; }
+    /// <summary>
+    /// 许可证验证公钥，仅允许放置公钥，不允许放置签发私钥。
+    /// 缺省内置厂商官方公钥（与签发工具 %LOCALAPPDATA%\VisionWorkbenchLicenseIssuer 中的
+    /// license-signing-private.pem 私钥配对），appsettings.json 缺失该字段时也能正确验签；
+    /// 更换厂商密钥对时必须同步更新此默认值、appsettings.json 与签发工具的配对公钥。
+    /// </summary>
+    public string? LicensePublicKey { get; set; } =
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEks147MY/s3RH1OVtbQeaY0eKemW2N+gOXpMcqctBpzFOdDd8nvIm7SI7f/FNNtPiu4W7sAaeWw84TLTPPXW3mA==";
     public string ExecutionProvider { get; set; } = "cpu";
     public string CurrentRole { get; set; } = "engineer";
     public string OperatorName { get; set; } = "";
