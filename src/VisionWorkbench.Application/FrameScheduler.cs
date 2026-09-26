@@ -20,7 +20,7 @@ public enum FrameRoutingStrategy
 public sealed class FrameScheduler
 {
     private readonly object _latestLock = new();
-    private readonly SemaphoreSlim _latestSignal = new(0);
+    private readonly SemaphoreSlim _latestSignal = new(0, 1);
     private readonly Channel<VideoFrame>? _queue;
     private VideoFrame? _latest;
     private long _dropped;
@@ -46,7 +46,8 @@ public sealed class FrameScheduler
             ArgumentOutOfRangeException.ThrowIfLessThan(boundedCapacity, 1);
             _queue = Channel.CreateUnbounded<VideoFrame>(new UnboundedChannelOptions
             {
-                SingleReader = true,
+                // ClearPendingFrames can drain while inference is reading.
+                SingleReader = false,
                 SingleWriter = false,
             });
         }
@@ -61,7 +62,6 @@ public sealed class FrameScheduler
 
         if (_queue is not null)
         {
-            // DropOldest 满时丢最老；被丢的帧计入丢弃数
             if (!_queue.Writer.TryWrite(frame))
             {
                 Interlocked.Increment(ref _dropped);
@@ -81,22 +81,20 @@ public sealed class FrameScheduler
                 Interlocked.Increment(ref _dropped);
             }
             _latest = frame;
+            SignalLatest();
         }
-        _latestSignal.Release();
     }
 
     /// <summary>有限源（图片目录/视频）播完时调用；消费者最终会收到 null。</summary>
     public void Complete()
     {
-        if (_queue is not null)
-        {
-            _queue.Writer.TryComplete();
-        }
         lock (_latestLock)
         {
+            if (_completed) return;
             _completed = true;
+            _queue?.Writer.TryComplete();
+            SignalLatest();
         }
-        _latestSignal.Release();
         SourceCompleted?.Invoke(this, EventArgs.Empty);
     }
 
@@ -114,10 +112,16 @@ public sealed class FrameScheduler
         lock (_latestLock)
         {
             _latest = null;
+            // Drain atomically with publishing so a new frame cannot lose its wakeup.
+            _latestSignal.Wait(0);
+            if (_completed) SignalLatest();
         }
-        while (_latestSignal.Wait(0))
-        {
-        }
+    }
+
+    // Producers hold _latestLock. The latest-frame slot needs only one wakeup.
+    private void SignalLatest()
+    {
+        if (_latestSignal.CurrentCount == 0) _latestSignal.Release();
     }
 
     /// <summary>
@@ -151,25 +155,18 @@ public sealed class FrameScheduler
 
         while (true)
         {
-            await _latestSignal.WaitAsync(cancellationToken);
-            VideoFrame? frame;
-            bool completed;
+            cancellationToken.ThrowIfCancellationRequested();
             lock (_latestLock)
             {
-                frame = _latest;
-                _latest = null;
-                completed = _completed;
+                if (_latest is { } frame)
+                {
+                    _latest = null;
+                    return frame;
+                }
+                // Completion is persistent state; every later read must also finish.
+                if (_completed) return null;
             }
-            if (frame is not null)
-            {
-                return frame;
-            }
-            // 信号来自 Complete()：有限源结束
-            if (completed)
-            {
-                return null;
-            }
-            // 信号被并发消费者抢先，重新等待
+            await _latestSignal.WaitAsync(cancellationToken);
         }
     }
 }

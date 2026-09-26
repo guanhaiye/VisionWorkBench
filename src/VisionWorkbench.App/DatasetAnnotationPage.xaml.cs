@@ -30,6 +30,7 @@ public partial class DatasetAnnotationPage : UserControl
     private DatasetDefinition? _dataset;
     private DatasetImageItem? _image;
     private DatasetAnnotation? _annotation;
+    private int _imageLoadVersion;
     private Point _dragStart;
     private Rectangle? _draft;
     private bool _dragging;
@@ -867,18 +868,27 @@ public partial class DatasetAnnotationPage : UserControl
     {
         if (_refreshingImageList) return;
         if (_dataset is null || ImageList.SelectedItem is not DatasetImageItem image) return;
+        var loadVersion = ++_imageLoadVersion;
+        var dataset = _dataset;
         _eraserUndoSnapshot = null;
         var keepSam1Active = _sam1ClickMode;
         ResetSam1ImageState();
         ResetZoom();
         _image = image;
-        _annotation = AppServices.Instance.Datasets.LoadAnnotation(_dataset, image.RelativePath);
-        RefreshImageList(image.RelativePath, suppressSelectionChanged: true);
-        AnnotationList.ItemsSource = _annotation.Objects;
-        AnnotationList.SelectedIndex = -1;
+        _annotation = null;
+        AnnotationImage.Source = null;
+        AnnotationList.ItemsSource = null;
+        AnnotationCanvas.Children.Clear();
         try
         {
-            AnnotationImage.Source = await Task.Run(() => LoadBitmap(image.FullPath));
+            var annotation = AppServices.Instance.Datasets.LoadAnnotation(dataset, image.RelativePath);
+            RefreshImageList(image.RelativePath, suppressSelectionChanged: true);
+            var bitmap = await Task.Run(() => LoadBitmap(image.FullPath));
+            if (loadVersion != _imageLoadVersion || !ReferenceEquals(dataset, _dataset)) return;
+            _annotation = annotation;
+            AnnotationList.ItemsSource = annotation.Objects;
+            AnnotationList.SelectedIndex = -1;
+            AnnotationImage.Source = bitmap;
             ResetZoom();
             RenderAnnotations();
             if (keepSam1Active)
@@ -896,6 +906,7 @@ public partial class DatasetAnnotationPage : UserControl
         }
         catch (Exception ex)
         {
+            if (loadVersion != _imageLoadVersion || !ReferenceEquals(dataset, _dataset)) return;
             ClearImageView();
             StatusText.Text = $"图片加载失败：{ex.Message}";
         }
@@ -1879,6 +1890,7 @@ public partial class DatasetAnnotationPage : UserControl
 
     private void ClearImageView()
     {
+        ++_imageLoadVersion;
         ResetZoom();
         _image = null;
         _annotation = null;

@@ -22,9 +22,10 @@ public sealed class VideoFrame
 
     public VideoFrame(long sequence, DateTimeOffset timestamp, int width, int height, byte[] bgr24)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(width);
-        ArgumentOutOfRangeException.ThrowIfNegative(height);
-        if (bgr24.Length != width * height * 3)
+        ArgumentNullException.ThrowIfNull(bgr24);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (bgr24.LongLength != checked((long)width * height * 3))
         {
             throw new ArgumentException("像素缓冲长度必须等于 width*height*3（BGR24）");
         }

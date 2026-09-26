@@ -37,6 +37,7 @@ public sealed class StationRunCoordinator(
     private sealed record ActiveRun(StationStartRequest Request, DetectionRunService Run, BatchService Batch);
     private readonly Dictionary<long, ActiveRun> _active = [];
     private readonly HashSet<long> _startingStations = [];
+    private readonly HashSet<long> _stoppingStations = [];
     private readonly HashSet<string> _startingDevices = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
 
@@ -96,10 +97,10 @@ public sealed class StationRunCoordinator(
         {
             if (run is not null)
             {
-                await run.DisposeAsync();
+                await CleanupAsync(run.DisposeAsync, "检测运行");
             }
-            await request.Camera.DisposeAsync();
-            await request.Algorithm.DisposeAsync();
+            await CleanupAsync(request.Camera.DisposeAsync, "相机会话");
+            await CleanupAsync(request.Algorithm.DisposeAsync, "算法会话");
             throw;
         }
         finally
@@ -118,25 +119,51 @@ public sealed class StationRunCoordinator(
         ActiveRun? active;
         lock (_gate)
         {
-            _active.Remove(stationId, out active);
+            if (!_active.TryGetValue(stationId, out active))
+                return new StationOperationResult(stationId, "", false, "工位未运行");
+            if (!_stoppingStations.Add(stationId))
+                return new StationOperationResult(stationId, active.Request.Station.StationCode, false, "工位正在停止");
         }
-        if (active is null)
-        {
-            return new StationOperationResult(stationId, "", false, "工位未运行");
-        }
+
+        var errors = new List<Exception>();
         try
         {
             await active.Run.StopAsync();
             await active.Batch.EndAsync(active.Run.Counting.State.CurrentTotal, status, cancellationToken);
-            await active.Run.DisposeAsync();
-            await active.Request.Camera.DisposeAsync();
-            await active.Request.Algorithm.DisposeAsync();
-            return new StationOperationResult(stationId, active.Request.Station.StationCode, true);
         }
         catch (Exception ex)
         {
             logger?.LogError(ex, "停止工位失败 {Station}", active.Request.Station.StationCode);
-            return new StationOperationResult(stationId, active.Request.Station.StationCode, false, ex.Message);
+            errors.Add(ex);
+        }
+        finally
+        {
+            // A failed stop or database write must not skip later resource cleanup.
+            await CleanupAsync(active.Run.DisposeAsync, "检测运行", errors);
+            await CleanupAsync(active.Request.Camera.DisposeAsync, "相机会话", errors);
+            await CleanupAsync(active.Request.Algorithm.DisposeAsync, "算法会话", errors);
+            lock (_gate)
+            {
+                // Keep device ownership until all stop/dispose operations have finished.
+                _active.Remove(stationId);
+                _stoppingStations.Remove(stationId);
+            }
+        }
+
+        return new StationOperationResult(stationId, active.Request.Station.StationCode,
+            errors.Count == 0, errors.Count == 0 ? null : string.Join("; ", errors.Select(x => x.Message)));
+    }
+
+    private async Task CleanupAsync(Func<ValueTask> cleanup, string component, List<Exception>? errors = null)
+    {
+        try
+        {
+            await cleanup();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "释放工位资源失败 {Component}", component);
+            errors?.Add(ex);
         }
     }
 

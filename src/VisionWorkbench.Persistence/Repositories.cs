@@ -464,6 +464,7 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
     public async Task<IReadOnlyList<string>> DeleteAsync(long id, CancellationToken ct = default)
     {
         await using var db = factory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var record = await db.InspectionRecords.FirstOrDefaultAsync(r => r.Id == id, ct)
             ?? throw new InvalidOperationException($"检测记录不存在: {id}");
 
@@ -494,6 +495,7 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
         await db.VisionEvents.Where(e => e.RecordId == id).ExecuteDeleteAsync(ct);
         db.InspectionRecords.Remove(record);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
         return paths.ToArray();
 
         void AddPath(string? path)
@@ -509,6 +511,7 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
     public async Task<IReadOnlyList<string>> DeleteAllAsync(CancellationToken ct = default)
     {
         await using var db = factory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var recordPaths = await db.InspectionRecords.AsNoTracking()
             .Select(r => new { r.OriginalImagePath, r.AnnotatedImagePath })
@@ -541,6 +544,7 @@ public sealed class RecordRepository(IDbContextFactory<VisionDbContext> factory)
         await db.CountingEvents.ExecuteDeleteAsync(ct);
         await db.VisionEvents.ExecuteDeleteAsync(ct);
         await db.InspectionRecords.ExecuteDeleteAsync(ct);
+        await transaction.CommitAsync(ct);
         return paths.ToArray();
 
         void AddPath(string? path)
@@ -707,7 +711,8 @@ public sealed class SopRunRepository(IDbContextFactory<VisionDbContext> factory)
         CancellationToken ct = default)
     {
         await using var db = factory.CreateDbContext();
-        var existing = await db.SopRuns.FirstOrDefaultAsync(item => item.Id == runId, ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var existing = await db.SopRuns.AsNoTracking().FirstOrDefaultAsync(item => item.Id == runId, ct);
         if (existing is null)
         {
             return false;
@@ -729,11 +734,11 @@ public sealed class SopRunRepository(IDbContextFactory<VisionDbContext> factory)
                     .SetProperty(item => item.CompletedAtUtc, finalizedAt), ct);
             if (claimed == 1)
             {
-                existing = await db.SopRuns.FirstAsync(item => item.Id == runId, ct);
+                existing = await db.SopRuns.AsNoTracking().FirstAsync(item => item.Id == runId, ct);
             }
             else
             {
-                existing = await db.SopRuns.FirstOrDefaultAsync(item => item.Id == runId, ct);
+                existing = await db.SopRuns.AsNoTracking().FirstOrDefaultAsync(item => item.Id == runId, ct);
                 if (existing is null)
                 {
                     return false;
@@ -769,6 +774,7 @@ public sealed class SopRunRepository(IDbContextFactory<VisionDbContext> factory)
         {
             return false;
         }
+        await transaction.CommitAsync(ct);
         return publishClaimId is null
             || await TryClaimPendingFinalizationAsync(runId, publishClaimId, ct: ct);
     }

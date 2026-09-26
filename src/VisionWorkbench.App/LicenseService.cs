@@ -35,11 +35,16 @@ public sealed record LicenseActivationRequest(
     string Product,
     string MachineFingerprint,
     string RequestedAtUtc,
-    string RequestId);
+    string RequestId,
+    string? PublicKeyId = null);
 
 /// <summary>客户端只持有公钥，离线校验签名和设备绑定；正式运行必须提供有效许可证。</summary>
-public sealed class LicenseService
+public sealed class LicenseService : IDisposable
 {
+    public const string OfficialPublicKey =
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEks147MY/s3RH1OVtbQeaY0eKemW2N+gOXpMcqctBpzFOdDd8nvIm7SI7f/FNNtPiu4W7sAaeWw84TLTPPXW3mA==";
+    private const long MaximumLicenseBytes = 1024 * 1024;
+    private bool _disposed;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false,
@@ -56,7 +61,8 @@ public sealed class LicenseService
     private readonly long _processStartTimestamp = Stopwatch.GetTimestamp();
     private readonly System.Threading.Timer _backgroundValidationTimer;
     private readonly object _validationGate = new();
-    private LicenseStatus? _cached;
+    private volatile LicenseStatus? _cached;
+    private readonly SemaphoreSlim _importGate = new(1, 1);
 
     private const string ClockRegistryPath = @"Software\VisionWorkbench\License";
     private const string ClockRegistryValue = "ProtectedClock";
@@ -64,6 +70,7 @@ public sealed class LicenseService
 
     public LicenseService(string dataDirectory, string? publicKeyBase64 = null, VisionDbContextFactory? database = null)
     {
+        dataDirectory = Path.GetFullPath(dataDirectory);
         Directory.CreateDirectory(dataDirectory);
         _licensePath = Path.Combine(dataDirectory, "license.json");
         _clockStatePath = Path.Combine(dataDirectory, "license-clock.dat");
@@ -74,7 +81,7 @@ public sealed class LicenseService
         _clockBackupStatePath = Path.Combine(localClockDirectory, "license-clock.dat");
         _clockTopologyMarkerPath = Path.Combine(dataDirectory, "license-clock.v2");
         _legacyClockStatePath = Path.Combine(dataDirectory, "license-clock.json");
-        _publicKeyBase64 = publicKeyBase64;
+        _publicKeyBase64 = publicKeyBase64 ?? OfficialPublicKey;
         _database = database;
         _backgroundValidationTimer = new System.Threading.Timer(
             _ => RunBackgroundValidation(),
@@ -90,63 +97,77 @@ public sealed class LicenseService
         get
         {
             var now = DateTime.UtcNow;
-            if (_cached is null || now < _cached.CheckedAtUtc ||
-                now - _cached.CheckedAtUtc >= TimeSpan.FromMinutes(1))
-            {
+            var cached = _cached;
+            if (cached is null || now < cached.CheckedAtUtc ||
+                now - cached.CheckedAtUtc >= TimeSpan.FromMinutes(1) ||
+                (cached.IsValid && now >= cached.Payload!.ExpiresAtUtc))
                 return Validate();
-            }
-            return _cached;
+            return cached;
         }
     }
+
+    public string PublicKeyId => Convert.ToHexString(
+        SHA256.HashData(Convert.FromBase64String(_publicKeyBase64!)))[..16];
 
     public LicenseStatus Validate()
     {
         lock (_validationGate)
         {
-            return ValidateCore();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _cached = ValidateFile(_licensePath, saveClock: true);
         }
     }
 
-    private LicenseStatus ValidateCore()
+    // Candidate validation has no side effects: an invalid import must never destroy
+    // the installed license or advance/reset the protected anti-rollback clock.
+    private LicenseStatus ValidateFile(string path, bool saveClock)
     {
         var now = DateTime.UtcNow;
         var monotonicNow = _processStartUtc + Stopwatch.GetElapsedTime(_processStartTimestamp);
         if (now < monotonicNow.AddMinutes(-5))
-        {
-            return _cached = Invalid("检测到运行期间系统时间回拨，许可证暂时受限", now);
-        }
-        if (!File.Exists(_licensePath))
-        {
-            SaveClock(now);
-            return _cached = new LicenseStatus(false, false, "missing", "缺少许可证，请导入有效许可证", null, now);
-        }
+            return Invalid("检测到运行期间系统时间回拨，许可证暂时受限", now);
         try
         {
-            var document = JsonSerializer.Deserialize<LicenseDocument>(File.ReadAllText(_licensePath), JsonOptions)
+            if (!File.Exists(path))
+                return new LicenseStatus(false, false, "missing", "缺少许可证，请导入有效许可证", null, now);
+            if (new FileInfo(path).Length > MaximumLicenseBytes)
+                return Invalid("许可证文件超过 1 MB 大小限制", now);
+            var document = JsonSerializer.Deserialize<LicenseDocument>(File.ReadAllText(path), JsonOptions)
                 ?? throw new InvalidDataException("许可证为空");
             var payload = document.Payload;
-            if (!string.Equals(document.SignatureAlgorithm, "ECDSA_P256_SHA256", StringComparison.OrdinalIgnoreCase))
+            if (payload is null || string.IsNullOrWhiteSpace(document.Signature) ||
+                string.IsNullOrWhiteSpace(payload.LicenseId) ||
+                string.IsNullOrWhiteSpace(payload.MachineFingerprint) ||
+                payload.Features is null || payload.Features.Any(string.IsNullOrWhiteSpace) ||
+                payload.Limits?.Any(item => string.IsNullOrWhiteSpace(item.Key) || item.Value < 0) == true)
+                throw new InvalidDataException("许可证缺少必要字段或包含无效功能/数量限制");
+            if (payload.NotBeforeUtc.Kind != DateTimeKind.Utc || payload.ExpiresAtUtc.Kind != DateTimeKind.Utc ||
+                payload.ExpiresAtUtc <= payload.NotBeforeUtc)
+                throw new InvalidDataException("许可证有效期格式无效，须为 UTC 且到期时间晚于生效时间");
+            if (!string.Equals(document.SignatureAlgorithm, "ECDSA_P256_SHA256", StringComparison.Ordinal))
                 throw new InvalidDataException("不支持的许可证签名算法");
             if (string.IsNullOrWhiteSpace(_publicKeyBase64))
-                return _cached = Invalid("客户端未配置许可证公钥", now);
-            if (!Verify(document)) return _cached = Invalid("许可证签名校验失败", now);
+                return Invalid("客户端未配置许可证公钥", now);
+            if (!Verify(document))
+                return Invalid($"许可证签名校验失败（客户端公钥标识：{PublicKeyId}）。请确认签发工具使用配对私钥，且许可证内容未经修改。", now);
             if (!string.Equals(payload.Product, "VisionWorkbench", StringComparison.OrdinalIgnoreCase))
-                return _cached = Invalid("许可证产品不匹配", now);
+                return Invalid("许可证产品不匹配", now);
             if (!string.Equals(payload.MachineFingerprint, MachineFingerprint(), StringComparison.OrdinalIgnoreCase))
-                return _cached = Invalid("许可证未绑定当前设备", now);
+                return Invalid("许可证未绑定当前设备", now);
             var last = ReadClock();
             if (last is null && HasProtectedClockState())
-                return _cached = Invalid("本机许可证时间状态无效，请重新导入许可证", now);
+                return Invalid("本机许可证时间状态无效，请联系授权方恢复时间状态", now);
             if (last is not null && now < last.Value.AddMinutes(-5))
-                return _cached = Invalid("检测到系统时间回拨，许可证暂时受限", now);
-            SaveClock(now);
-            if (now < payload.NotBeforeUtc) return _cached = Invalid("许可证尚未生效", now, payload);
-            if (now > payload.ExpiresAtUtc) return _cached = Invalid("许可证已过期", now, payload);
-            return _cached = new LicenseStatus(true, false, "valid", $"许可证有效期至 {payload.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC", payload, now);
+                return Invalid("检测到系统时间回拨，许可证暂时受限", now);
+            if (now < payload.NotBeforeUtc) return Invalid("许可证尚未生效", now, payload);
+            if (now >= payload.ExpiresAtUtc) return Invalid("许可证已过期", now, payload);
+            if (saveClock) SaveClock(now);
+            return new LicenseStatus(true, false, "valid", $"许可证有效期至 {payload.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC", payload, now);
         }
-        catch (Exception ex) when (ex is IOException or JsonException or FormatException or CryptographicException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   ArgumentException or FormatException or CryptographicException or InvalidDataException)
         {
-            return _cached = Invalid($"许可证无效：{ex.Message}", now);
+            return Invalid($"许可证无效：{ex.Message}", now);
         }
     }
 
@@ -168,63 +189,42 @@ public sealed class LicenseService
     public async Task<LicenseStatus> ImportAsync(string licenseFile, CancellationToken cancellationToken = default)
     {
         var source = Path.GetFullPath(licenseFile);
-        if (!File.Exists(source)) throw new FileNotFoundException("许可证文件不存在", source);
-        if (string.Equals(source, _licensePath, StringComparison.OrdinalIgnoreCase))
-        {
-            _cached = null;
-            var current = Validate();
-            await RecordEventAsync(current, "import", cancellationToken);
-            if (!current.IsValid || current.IsDevelopment) throw new InvalidDataException(current.Message);
-            return current;
-        }
+        await _importGate.WaitAsync(cancellationToken);
         var temp = _licensePath + ".new-" + Guid.NewGuid().ToString("N");
         try
         {
-            // 先完整复制并释放源文件和临时文件句柄，再替换正式许可证。
-            for (var attempt = 0; ; attempt++)
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!File.Exists(source)) throw new FileNotFoundException("许可证文件不存在", source);
+            if (new FileInfo(source).Length > MaximumLicenseBytes)
+                throw new InvalidDataException("许可证文件超过 1 MB 大小限制");
+            // Open with read sharing only so an issuer cannot change the file during copying.
+            await using (var input = File.Open(source, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await using (var output = File.Create(temp))
             {
-                try
-                {
-                    await using (var input = File.Open(source, FileMode.Open, FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete))
-                    await using (var output = File.Create(temp))
-                    {
-                        await input.CopyToAsync(output, cancellationToken);
-                    }
-                    break;
-                }
-                catch (IOException) when (attempt < 4)
-                {
-                    await Task.Delay(150, cancellationToken);
-                }
+                await input.CopyToAsync(output, cancellationToken);
             }
-
-            IOException? lastIoException = null;
-            for (var attempt = 0; attempt < 5; attempt++)
+            LicenseStatus status;
+            lock (_validationGate)
             {
-                try
-                {
-                    File.Move(temp, _licensePath, overwrite: true);
-                    lastIoException = null;
-                    break;
-                }
-                catch (IOException ex) when (attempt < 4)
-                {
-                    lastIoException = ex;
-                    await Task.Delay(150, cancellationToken);
-                }
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                cancellationToken.ThrowIfCancellationRequested();
+                status = ValidateFile(temp, saveClock: false);
+                if (!status.IsValid) throw new InvalidDataException(status.Message);
+                // Validate the exact bytes that will be installed before replacing anything.
+                File.Move(temp, _licensePath, overwrite: true);
+                _cached = status;
+                SaveClock(status.CheckedAtUtc);
             }
-            if (lastIoException is not null) throw lastIoException;
-
-            _cached = null;
-            var status = Validate();
-            await RecordEventAsync(status, "import", cancellationToken);
-            if (!status.IsValid || status.IsDevelopment) throw new InvalidDataException(status.Message);
+            // Commit has completed. Cancellation/audit failure must not report a failed
+            // activation while leaving a newly installed valid license on disk.
+            try { await RecordEventAsync(status, "import", CancellationToken.None); }
+            catch (Exception ex) { Trace.TraceError($"许可证已激活，但记录导入事件失败：{ex}"); }
             return status;
         }
         finally
         {
-            try { File.Delete(temp); } catch { }
+            try { File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            _importGate.Release();
         }
     }
 
@@ -235,21 +235,30 @@ public sealed class LicenseService
             "VisionWorkbench",
             MachineFingerprint(),
             DateTime.UtcNow.ToString("O"),
-            Guid.NewGuid().ToString("N"));
+            Guid.NewGuid().ToString("N"),
+            PublicKeyId);
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, JsonOptions)));
     }
 
-    public bool HasFeature(string feature) => Current.IsValid &&
-        Current.Payload?.Features.Contains(feature, StringComparer.OrdinalIgnoreCase) == true;
+    public bool HasFeature(string feature)
+    {
+        var status = Current;
+        return status.IsValid && status.Payload?.Features.Contains(feature, StringComparer.OrdinalIgnoreCase) == true;
+    }
 
     public void EnsureFeature(string feature)
     {
         if (!HasFeature(feature)) throw new UnauthorizedAccessException($"当前许可证不包含功能：{feature}");
     }
 
-    public bool EnsureWithinLimit(string name, int value) => Current.IsValid &&
-        (Current.Payload?.Limits is null ||
-         (Current.Payload.Limits.TryGetValue(name, out var limit) && value <= limit));
+    public bool EnsureWithinLimit(string name, int value)
+    {
+        var status = Current;
+        if (!status.IsValid || value < 0) return false;
+        var entry = status.Payload?.Limits?.FirstOrDefault(item =>
+            string.Equals(item.Key, name, StringComparison.OrdinalIgnoreCase));
+        return entry is null || entry.Value.Key is null || value <= entry.Value.Value;
+    }
 
     public static string MachineFingerprint()
     {
@@ -262,9 +271,11 @@ public sealed class LicenseService
     private bool Verify(LicenseDocument document)
     {
         using var ecdsa = ECDsa.Create();
-        ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(_publicKeyBase64!), out _);
+        var publicKey = Convert.FromBase64String(_publicKeyBase64!);
+        ecdsa.ImportSubjectPublicKeyInfo(publicKey, out var consumed);
+        if (consumed != publicKey.Length || ecdsa.KeySize != 256) return false;
         return ecdsa.VerifyData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(document.Payload, JsonOptions)),
-            Convert.FromBase64String(document.Signature), HashAlgorithmName.SHA256);
+            Convert.FromBase64String(document.Signature), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
     }
 
     private LicenseStatus Invalid(string message, DateTime now, LicensePayload? payload = null) =>
@@ -314,7 +325,6 @@ public sealed class LicenseService
                 var value = JsonSerializer.Deserialize<DateTime?>(File.ReadAllText(_legacyClockStatePath));
                 if (value is not null)
                 {
-                    SaveClock(value.Value);
                     return value.Value;
                 }
             }
@@ -362,20 +372,30 @@ public sealed class LicenseService
 
     private void SaveClock(DateTime value)
     {
-        var protectedBytes = ProtectedData.Protect(
-            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)),
-            optionalEntropy: null, DataProtectionScope.LocalMachine);
+        byte[] protectedBytes;
+        try
+        {
+            protectedBytes = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)),
+                optionalEntropy: null, DataProtectionScope.LocalMachine);
+        }
+        catch (CryptographicException ex)
+        {
+            Trace.TraceError($"许可证时间状态保存失败：{ex.Message}");
+            return;
+        }
 
         var allFilesWritten = true;
         foreach (var path in new[] { _clockStatePath, _clockBackupStatePath })
         {
+            var temp = path + ".new-" + Guid.NewGuid().ToString("N");
             try
             {
-                var temp = path + ".new-" + Guid.NewGuid().ToString("N");
                 File.WriteAllBytes(temp, protectedBytes);
                 File.Move(temp, path, overwrite: true);
             }
             catch { allFilesWritten = false; }
+            finally { try { File.Delete(temp); } catch { } }
         }
 
         var registryWritten = false;
@@ -421,4 +441,15 @@ public sealed class LicenseService
         }
         catch { return false; }
     }
+    public void Dispose()
+    {
+        lock (_validationGate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _backgroundValidationTimer.Dispose();
+            SystemEvents.TimeChanged -= OnSystemTimeChanged;
+        }
+    }
+
 }

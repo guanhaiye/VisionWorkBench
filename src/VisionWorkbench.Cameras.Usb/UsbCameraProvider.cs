@@ -98,6 +98,8 @@ internal sealed class UsbCameraSession(
 {
     private readonly CancellationTokenSource _cts = new();
     private readonly AsyncPauseGate _pauseGate = new();
+    private readonly object _lifecycleGate = new();
+    private Task? _disposeTask;
     private Task? _loopTask;
     private VideoCapture? _capture;
     private long _sequence;
@@ -113,112 +115,147 @@ internal sealed class UsbCameraSession(
 
     public Task OpenAsync(CameraOpenOptions options, CancellationToken cancellationToken)
     {
-        var index = int.Parse(Descriptor.DeviceId);
-        var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
-        if (!capture.IsOpened() || !capture.Grab())
+        lock (_lifecycleGate)
         {
-            capture.Dispose();
-            Fault(CameraErrorCodes.OpenFailed, $"USB 相机打开失败（索引 {index}，可能被占用或已拔出）", recoverable: true);
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_capture is not null || _loopTask is not null)
+            {
+                throw new InvalidOperationException("相机会话已打开，请创建新会话重新打开设备");
+            }
+            var index = int.Parse(Descriptor.DeviceId);
+            var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
+            if (!capture.IsOpened() || !capture.Grab())
+            {
+                capture.Dispose();
+                Fault(CameraErrorCodes.OpenFailed, $"USB 相机打开失败（索引 {index}，可能被占用或已拔出）", recoverable: true);
+                return Task.CompletedTask;
+            }
+            if (options.DesiredWidth is { } w && w > 0)
+            {
+                capture.Set(VideoCaptureProperties.FrameWidth, w);
+            }
+            if (options.DesiredHeight is { } h && h > 0)
+            {
+                capture.Set(VideoCaptureProperties.FrameHeight, h);
+            }
+            _desiredFps = options.DesiredFps ?? 0;
+            if (_desiredFps > 0)
+            {
+                capture.Set(VideoCaptureProperties.Fps, _desiredFps);
+            }
+            _capture = capture;
+            Capabilities = new CameraCapabilities
+            {
+                SupportedModes =
+                [
+                    new CameraMode
+                    {
+                        Width = (int)capture.Get(VideoCaptureProperties.FrameWidth),
+                        Height = (int)capture.Get(VideoCaptureProperties.FrameHeight),
+                        Fps = capture.Get(VideoCaptureProperties.Fps),
+                    },
+                ],
+            };
+            State = CameraSessionState.Idle;
             return Task.CompletedTask;
         }
-        if (options.DesiredWidth is { } w && w > 0)
-        {
-            capture.Set(VideoCaptureProperties.FrameWidth, w);
-        }
-        if (options.DesiredHeight is { } h && h > 0)
-        {
-            capture.Set(VideoCaptureProperties.FrameHeight, h);
-        }
-        _desiredFps = options.DesiredFps ?? 0;
-        if (_desiredFps > 0)
-        {
-            capture.Set(VideoCaptureProperties.Fps, _desiredFps);
-        }
-        _capture = capture;
-        Capabilities = new CameraCapabilities
-        {
-            SupportedModes =
-            [
-                new CameraMode
-                {
-                    Width = (int)capture.Get(VideoCaptureProperties.FrameWidth),
-                    Height = (int)capture.Get(VideoCaptureProperties.FrameHeight),
-                    Fps = capture.Get(VideoCaptureProperties.Fps),
-                },
-            ],
-        };
-        State = CameraSessionState.Idle;
-        return Task.CompletedTask;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (State == CameraSessionState.Streaming || _loopTask is not null)
+        lock (_lifecycleGate)
         {
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (State == CameraSessionState.Streaming || _loopTask is not null)
+            {
+                return Task.CompletedTask;
+            }
+            if (_capture is null)
+            {
+                Fault(CameraErrorCodes.OpenFailed, "会话未打开", recoverable: false);
+                return Task.CompletedTask;
+            }
+            State = CameraSessionState.Streaming;
+            _loopTask = Task.Run(() => RunAsync(_capture, _cts.Token));
             return Task.CompletedTask;
         }
-        if (_capture is null)
-        {
-            Fault(CameraErrorCodes.OpenFailed, "会话未打开", recoverable: false);
-            return Task.CompletedTask;
-        }
-        State = CameraSessionState.Streaming;
-        _loopTask = Task.Run(() => RunAsync(_capture, _cts.Token));
-        return Task.CompletedTask;
     }
 
     public Task PauseAsync(CancellationToken cancellationToken)
     {
-        if (State == CameraSessionState.Streaming)
+        lock (_lifecycleGate)
         {
-            _pauseGate.Pause();
-            State = CameraSessionState.Paused;
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (State == CameraSessionState.Streaming)
+            {
+                _pauseGate.Pause();
+                State = CameraSessionState.Paused;
+            }
+            return Task.CompletedTask;
         }
-        return Task.CompletedTask;
     }
 
     public Task ResumeAsync(CancellationToken cancellationToken)
     {
-        if (State == CameraSessionState.Paused)
+        lock (_lifecycleGate)
         {
-            _pauseGate.Resume();
-            State = CameraSessionState.Streaming;
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (State == CameraSessionState.Paused)
+            {
+                _pauseGate.Resume();
+                State = CameraSessionState.Streaming;
+            }
+            return Task.CompletedTask;
         }
-        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        _cts.Cancel();
-        if (State == CameraSessionState.Streaming)
+        lock (_lifecycleGate)
         {
-            State = CameraSessionState.Paused;
+            if (_disposeTask is not null) return Task.CompletedTask;
+            _cts.Cancel();
+            if (State == CameraSessionState.Streaming)
+            {
+                State = CameraSessionState.Paused;
+            }
+            return Task.CompletedTask;
         }
-        return Task.CompletedTask;
     }
 
     public Task ApplyParametersAsync(CameraParameterSet parameters, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
+    {
+        lock (_lifecycleGate)
+        {
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        }
+    }
+
+    private async Task DisposeCoreAsync()
     {
         _cts.Cancel();
-        if (_loopTask is not null)
+        State = CameraSessionState.Closed;
+        var released = await CameraSessionCleanup.ReleaseAfterLoopAsync(_loopTask, () =>
         {
             try
             {
-                await _loopTask.WaitAsync(TimeSpan.FromSeconds(3));
+                _capture?.Dispose();
             }
-            catch (Exception)
+            finally
             {
-                // 采集线程自行退出
+                _capture = null;
+                _pauseGate.Dispose();
+                _cts.Dispose();
             }
-        }
-        _capture?.Dispose();
-        _capture = null;
-        _cts.Dispose();
-        _pauseGate.Dispose();
-        State = CameraSessionState.Closed;
+        }, TimeSpan.FromSeconds(3), ex => logger?.LogWarning(ex, "关闭相机会话时清理资源失败"));
+        if (!released) logger?.LogWarning("采集线程仍未退出，原生资源将在采集结束后释放: {Device}", Descriptor.DeviceId);
     }
 
     private async Task RunAsync(VideoCapture capture, CancellationToken ct)
@@ -231,7 +268,9 @@ internal sealed class UsbCameraSession(
 
         while (!ct.IsCancellationRequested)
         {
-            await _pauseGate.WaitIfPausedAsync(ct);
+            try { await _pauseGate.WaitIfPausedAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            if (ct.IsCancellationRequested) break;
             var readOk = false;
             try
             {
@@ -241,6 +280,7 @@ internal sealed class UsbCameraSession(
             {
                 logger?.LogWarning(ex, "USB 采集帧失败");
             }
+            if (ct.IsCancellationRequested) break;
             if (!readOk || mat.Empty())
             {
                 if (++consecutiveReadFailures >= 50)

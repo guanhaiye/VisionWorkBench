@@ -13,7 +13,6 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
     private readonly WorkerProcess _process;
     private readonly PluginManifest _manifest;
     private readonly ILogger _logger;
-    private AlgorithmInitialization? _initialization;
     private int _disposeRequested;
 
     public WorkerAlgorithmSession(WorkerProcess process, PluginManifest manifest, ILogger logger)
@@ -51,11 +50,22 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
                 executionProvider = initialization.ExecutionProvider,
                 settings = initialization.Settings,
             };
-            await _process.RequestAsync(
+            var response = await _process.RequestAsync(
                 MessageType.Initialize, payload,
                 timeout: TimeSpan.FromSeconds(30), cancellationToken);
-            _initialization = initialization;
+            var ready = ProtocolMessage.DeserializePayload<ReadyPayload>(response.Payload);
+            if (response.Type != MessageType.Ready || ready?.Success != true)
+            {
+                throw new AlgorithmFaultException(
+                    ready?.ErrorCode ?? WorkerErrorCodes.ModelLoadFailed,
+                    ready?.Error ?? "Worker 初始化失败或未返回 ready 响应");
+            }
             State = AlgorithmSessionState.Ready;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            State = AlgorithmSessionState.Faulted;
+            throw;
         }
         catch (Exception ex)
         {
@@ -102,6 +112,10 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
             OutputReceived?.Invoke(this, new AlgorithmOutputEventArgs(output));
             return output;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) when (ex is not AlgorithmFaultException)
         {
             State = AlgorithmSessionState.Faulted;
@@ -116,7 +130,7 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
             throw new ArgumentException("消息类型不能为空", nameof(messageType));
         }
         EnsureReady();
-        // worker 即时 ack，无推理耗时 → 不设超时
+        // 使用进程默认请求超时，避免失去响应的 Worker 挂住控制命令。
         await _process.RequestAsync(messageType, payload, null, cancellationToken);
     }
 
@@ -148,16 +162,16 @@ public sealed class WorkerAlgorithmSession : IAlgorithmSession
         }
         // stop_session 只结束本次检测，不卸载 Worker 中已初始化的模型；保留 Ready
         // 状态，后续开始检测可直接复用，不必再次加载模型。
-        State = AlgorithmSessionState.Ready;
+        State = _process.HasExited ? AlgorithmSessionState.Faulted : AlgorithmSessionState.Ready;
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposeRequested, 1) != 0) return;
         if (State is AlgorithmSessionState.Running or AlgorithmSessionState.Ready)
         {
             await StopAsync(CancellationToken.None);
         }
-        Interlocked.Exchange(ref _disposeRequested, 1);
         await _process.DisposeAsync();
         State = AlgorithmSessionState.Stopped;
     }

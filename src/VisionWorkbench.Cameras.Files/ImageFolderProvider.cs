@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using OpenCvSharp;
 using VisionWorkbench.Cameras.Abstractions;
 
 namespace VisionWorkbench.Cameras.Files;
@@ -35,6 +36,7 @@ internal sealed class ImageFolderSession(
     private bool _loop;
     private int? _maxFrames;
     private int _startFrameIndex;
+    private int _disposed;
 
     public CameraDescriptor Descriptor { get; } = descriptor;
     public CameraSessionState State { get; private set; } = CameraSessionState.Idle;
@@ -47,6 +49,8 @@ internal sealed class ImageFolderSession(
 
     public Task OpenAsync(CameraOpenOptions options, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var dir = Descriptor.DeviceId;
         if (!Directory.Exists(dir))
         {
@@ -69,6 +73,8 @@ internal sealed class ImageFolderSession(
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         if (State == CameraSessionState.Streaming || _loopTask is not null)
         {
             return Task.CompletedTask;
@@ -117,6 +123,7 @@ internal sealed class ImageFolderSession(
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
         if (_loopTask is not null)
         {
@@ -136,10 +143,42 @@ internal sealed class ImageFolderSession(
 
     private async Task RunAsync(string dir, TimeSpan interval, bool loop, CancellationToken ct)
     {
+        try
+        {
+            await PlayAsync(dir, interval, loop, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 停止或释放时退出暂停等待。
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "图片目录播放失败: {Directory}", dir);
+            State = CameraSessionState.Faulted;
+            Faulted?.Invoke(this, new CameraFaultedEventArgs(new CameraFault
+            {
+                Code = CameraErrorCodes.OpenFailed,
+                Message = $"图片目录播放失败: {ex.Message}",
+                Recoverable = true,
+            }));
+        }
+        finally
+        {
+            if (State is CameraSessionState.Streaming or CameraSessionState.Paused)
+            {
+                State = CameraSessionState.Idle;
+            }
+            Completed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private async Task PlayAsync(string dir, TimeSpan interval, bool loop, CancellationToken ct)
+    {
         var emittedFrames = 0;
         var startFrameIndex = _startFrameIndex;
         while (!ct.IsCancellationRequested)
         {
+            var framesBeforePass = emittedFrames;
             foreach (var file in EnumerateImages(dir).Skip(startFrameIndex))
             {
                 if (ct.IsCancellationRequested)
@@ -147,7 +186,17 @@ internal sealed class ImageFolderSession(
                     return;
                 }
                 await _pauseGate.WaitIfPausedAsync(ct);
-                var mat = FrameConvert.DecodeFile(file);
+                Mat? mat;
+                try
+                {
+                    mat = FrameConvert.DecodeFile(file);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OpenCVException)
+                {
+                    Interlocked.Increment(ref _badFiles);
+                    logger?.LogWarning(ex, "跳过无法读取的图片（CAM-010）: {File}", file);
+                    continue;
+                }
                 if (mat is null || mat.Empty())
                 {
                     Interlocked.Increment(ref _badFiles);
@@ -185,12 +234,12 @@ internal sealed class ImageFolderSession(
                 break;
             }
             startFrameIndex = 0;
+            if (emittedFrames == framesBeforePass)
+            {
+                // 空目录或全部坏图时也应退避，避免循环模式持续占满 CPU。
+                await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
+            }
         }
-        if (State == CameraSessionState.Streaming)
-        {
-            State = CameraSessionState.Idle;
-        }
-        Completed?.Invoke(this, EventArgs.Empty);
     }
 
     internal static IEnumerable<string> EnumerateImages(string dir) =>

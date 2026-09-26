@@ -54,7 +54,7 @@ public static class LogSetup
     }
 
     /// <summary>插件专属日志（文档 §23 plugin-{id}.log；stderr 输出写这里）。</summary>
-    public static Microsoft.Extensions.Logging.ILogger CreatePluginLogger(string logsDirectory, string pluginId)
+    public static ILoggerFactory CreatePluginLoggerFactory(string logsDirectory, string pluginId)
     {
         Directory.CreateDirectory(logsDirectory);
         var safeId = string.Concat(pluginId.Select(c =>
@@ -67,8 +67,7 @@ public static class LogSetup
                 fileSizeLimitBytes: FileSizeLimitBytes, rollOnFileSizeLimit: true,
                 retainedFileCountLimit: RetainedFileCountLimit)
             .CreateLogger();
-        return new Serilog.Extensions.Logging.SerilogLoggerFactory(logger)
-            .CreateLogger($"Plugin.{pluginId}");
+        return new Serilog.Extensions.Logging.SerilogLoggerFactory(logger, dispose: true);
     }
 
     public static void CloseAndFlush() => Serilog.Log.CloseAndFlush();

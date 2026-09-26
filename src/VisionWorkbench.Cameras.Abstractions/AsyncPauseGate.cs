@@ -3,28 +3,58 @@ namespace VisionWorkbench.Cameras.Abstractions;
 /// <summary>暂停采集线程但保留会话，供开始按钮恢复。</summary>
 public sealed class AsyncPauseGate : IDisposable
 {
-    private readonly SemaphoreSlim _resumeSignal = new(0, 1);
-    private int _paused;
+    private readonly object _gate = new();
+    private TaskCompletionSource? _resumeSignal;
+    private bool _disposed;
 
-    public bool IsPaused => Volatile.Read(ref _paused) != 0;
+    public bool IsPaused
+    {
+        get { lock (_gate) return _resumeSignal is not null; }
+    }
 
-    public void Pause() => Interlocked.Exchange(ref _paused, 1);
+    public void Pause()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _resumeSignal ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
 
     public void Resume()
     {
-        if (Interlocked.Exchange(ref _paused, 0) == 1)
+        lock (_gate)
         {
-            _resumeSignal.Release();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _resumeSignal?.TrySetResult();
+            _resumeSignal = null;
         }
     }
 
     public async Task WaitIfPausedAsync(CancellationToken cancellationToken)
     {
-        while (IsPaused)
+        while (true)
         {
-            await _resumeSignal.WaitAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            Task? resume;
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                resume = _resumeSignal?.Task;
+            }
+            if (resume is null) return;
+            await resume.WaitAsync(cancellationToken);
         }
     }
 
-    public void Dispose() => _resumeSignal.Dispose();
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _resumeSignal?.TrySetException(new ObjectDisposedException(nameof(AsyncPauseGate)));
+            _resumeSignal = null;
+        }
+    }
 }

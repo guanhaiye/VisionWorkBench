@@ -44,8 +44,14 @@ internal static class PythonProcessSupport
         try
         {
             document = JsonDocument.Parse(line);
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                   && document.RootElement.TryGetProperty("event", out _);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("event", out _))
+            {
+                return true;
+            }
+            document.Dispose();
+            document = null!;
+            return false;
         }
         catch (JsonException)
         {

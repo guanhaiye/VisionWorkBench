@@ -41,6 +41,9 @@ function Get-FileIndex {
 function Test-InScopePath {
   param([string]$RelativePath)
   $p = $RelativePath.ToLowerInvariant()
+  if ($p -match '(^|/)(data|config|logs|datasets|recordings|backups|custom-models|__pycache__|\.venv)(/|$)' -or
+      $p -match '\.(db|db-wal|db-shm|sqlite|sqlite3|vwlicense|vwbackup|log)$' -or
+      $p -match '(^|/)(appsettings|settings)(\.[^/]*)?\.json$') { return $false }
   if ($p -eq 'update-manifest.json' -or $p -eq '.update-last-success.json' -or $p -like '.update-backups/*') { return $false }
   switch ($Component) {
     'models' { return $p -like 'plugins/*/models/*' -or $p -eq 'model-manifest.json' }
@@ -78,6 +81,7 @@ $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 
 $fromVersion = Get-ReleaseVersion $baseRoot ''
 $toVersion = Get-ReleaseVersion $currentRoot $Version
+if ($fromVersion -eq 'unknown') { throw 'Baseline release version is missing.' }
 if ($toVersion -eq 'unknown') { throw 'Target release version is missing. Use -Version or provide release-manifest.json.' }
 $safeFrom = $fromVersion -replace '[^0-9A-Za-z._-]', '_'
 $safeTo = $toVersion -replace '[^0-9A-Za-z._-]', '_'
@@ -134,12 +138,17 @@ try {
     deletedFiles = @($deleted).Count
     sizeBytes = (Get-Item -LiteralPath $archivePath).Length
     sha256 = $hash
-    manifest = $manifestPath
+    manifest = 'update-manifest.json (inside package)'
   }
   $summary | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot ($packageName + '.json')) -Encoding UTF8
   Write-Host "Incremental update: $archivePath"
   Write-Host "Changed files: $(@($changed).Count); deleted files: $(@($deleted).Count)"
   Write-Host "SHA-256: $hash"
 } finally {
-  Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
+  $resolvedWorkRoot = [IO.Path]::GetFullPath($workRoot)
+  $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+  if ($resolvedWorkRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+      [IO.Path]::GetFileName($resolvedWorkRoot).StartsWith($packageName + '-')) {
+    Remove-Item -LiteralPath $resolvedWorkRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }

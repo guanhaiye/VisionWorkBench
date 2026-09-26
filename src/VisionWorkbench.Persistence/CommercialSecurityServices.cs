@@ -27,6 +27,7 @@ public sealed class AuditService(VisionDbContextFactory factory)
         try
         {
             await using var db = factory.CreateDbContext();
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
             var previous = await db.AuditEvents.AsNoTracking()
                 .OrderByDescending(item => item.Id)
                 .Select(item => item.Hash)
@@ -44,7 +45,6 @@ public sealed class AuditService(VisionDbContextFactory factory)
                 OccurredAtUtc = DateTime.UtcNow,
             };
             db.AuditEvents.Add(item);
-            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             // SQLite 的 DateTime 转换可能调整 Kind/精度；先让 provider 完成往返，再计算链哈希。
             item.Hash = ComputeHash(item);

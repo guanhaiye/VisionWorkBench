@@ -28,7 +28,7 @@ public sealed class SmartAnnotationImageResult
 /// <summary>
 /// 智能标注适配层。C# 负责生命周期、超时和错误呈现，模型运行由 workers 下的隔离 Python 适配器完成。
 /// </summary>
-public sealed class SmartAnnotationService
+public sealed class SmartAnnotationService : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _yoloeScript;
@@ -37,6 +37,8 @@ public sealed class SmartAnnotationService
     private readonly string _sam1Python;
     private readonly SemaphoreSlim _yoloeGate = new(1, 1);
     private readonly SemaphoreSlim _sam1Gate = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private int _disposed;
     private Process? _yoloeProcess;
     private StreamWriter? _yoloeWriter;
     private StreamReader? _yoloeReader;
@@ -72,12 +74,14 @@ public sealed class SmartAnnotationService
 
     public async Task WarmupSam1Async(CancellationToken cancellationToken = default)
     {
-        await _sam1Gate.WaitAsync(cancellationToken);
+        using var operation = CreateOperationCancellation(cancellationToken);
+        cancellationToken = operation.Token;
+        await _sam1Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(3));
-            var response = await RunPersistentSam1Async(new { type = "warmup", modelPath = Sam1ModelPath }, timeout.Token);
+            var response = await RunPersistentSam1Async(new { type = "warmup", modelPath = Sam1ModelPath }, timeout.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(response.Error)) throw new InvalidOperationException(response.Error);
             if (!response.Ready) throw new InvalidOperationException("SAM1 启动预热没有返回 ready 状态。");
         }
@@ -86,7 +90,9 @@ public sealed class SmartAnnotationService
 
     public async Task WarmupYoloEAsync(CancellationToken cancellationToken = default)
     {
-        await _yoloeGate.WaitAsync(cancellationToken);
+        using var operation = CreateOperationCancellation(cancellationToken);
+        cancellationToken = operation.Token;
+        await _yoloeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             using var warmupTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -95,7 +101,7 @@ public sealed class SmartAnnotationService
             {
                 Type = "warmup",
                 ModelPath = YoloeModelPath,
-            }, warmupTimeout.Token);
+            }, warmupTimeout.Token).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(response.Error))
                 throw new InvalidOperationException(response.Error);
             if (!response.Ready)
@@ -115,7 +121,9 @@ public sealed class SmartAnnotationService
         string outputMode = "both",
         CancellationToken cancellationToken = default)
     {
-        await _yoloeGate.WaitAsync(cancellationToken);
+        using var operation = CreateOperationCancellation(cancellationToken);
+        cancellationToken = operation.Token;
+        await _yoloeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var response = await RunPersistentYoloEAsync(new YoloERequest
@@ -126,7 +134,7 @@ public sealed class SmartAnnotationService
                 Targets = targetImages,
                 Confidence = confidence,
                 OutputMode = outputMode,
-            }, cancellationToken);
+            }, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(response.Error))
                 throw new InvalidOperationException(response.Error);
             return response.Results ?? [];
@@ -143,7 +151,9 @@ public sealed class SmartAnnotationService
         string className,
         CancellationToken cancellationToken = default)
     {
-        await _sam1Gate.WaitAsync(cancellationToken);
+        using var operation = CreateOperationCancellation(cancellationToken);
+        cancellationToken = operation.Token;
+        await _sam1Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var response = await RunPersistentSam1Async(
@@ -158,7 +168,7 @@ public sealed class SmartAnnotationService
                         Y = point.Y,
                         Label = point.Label,
                     }).ToArray(),
-                }, cancellationToken);
+                }, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(response.Error))
                 throw new InvalidOperationException(response.Error);
             return response.Results?.SelectMany(x => x.Objects).FirstOrDefault();
@@ -168,15 +178,16 @@ public sealed class SmartAnnotationService
 
     private async Task<SmartAnnotationResponse> RunPersistentSam1Async(object request, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureSam1Process();
-        await _sam1Writer!.WriteLineAsync(JsonSerializer.Serialize(request, JsonOptions));
-        await _sam1Writer.FlushAsync(cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(15));
         string? line;
         try
         {
-            line = await _sam1Reader!.ReadLineAsync(timeout.Token);
+            await _sam1Writer!.WriteLineAsync(JsonSerializer.Serialize(request, JsonOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
+            await _sam1Writer.FlushAsync(timeout.Token).ConfigureAwait(false);
+            line = await _sam1Reader!.ReadLineAsync(timeout.Token).ConfigureAwait(false);
         }
         catch
         {
@@ -223,7 +234,7 @@ public sealed class SmartAnnotationService
         if (!_sam1Process.Start()) throw new InvalidOperationException("无法启动 SAM1 常驻 Worker。");
         _sam1Writer = _sam1Process.StandardInput;
         _sam1Reader = _sam1Process.StandardOutput;
-        _ = _sam1Process.StandardError.ReadToEndAsync();
+        _ = DrainErrorAsync(_sam1Process.StandardError);
     }
 
     private void StopSam1Process()
@@ -237,80 +248,17 @@ public sealed class SmartAnnotationService
         _sam1Process = null;
     }
 
-    private static async Task<TResponse> RunAsync<TRequest, TResponse>(
-        string python,
-        string script,
-        TRequest request,
-        CancellationToken cancellationToken)
+    private static async Task DrainErrorAsync(StreamReader reader)
     {
-        if (!File.Exists(script))
-            throw new InvalidOperationException($"智能标注适配器不存在：{script}");
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = python,
-            WorkingDirectory = Path.GetDirectoryName(script)!,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
-        startInfo.ArgumentList.Add(script);
-        using var process = new Process { StartInfo = startInfo };
+        // Persistent workers can log indefinitely; consume stderr without retaining its history.
+        var buffer = new char[4096];
         try
         {
-            if (!process.Start()) throw new InvalidOperationException("无法启动 Python 智能标注进程");
+            while (await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false) != 0) { }
         }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            throw new InvalidOperationException($"无法启动 Python：{python}。请检查模型对应的虚拟环境。", ex);
-        }
-
-        await using (var writer = process.StandardInput)
-        {
-            await writer.WriteAsync(JsonSerializer.Serialize(request, JsonOptions));
-        }
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(15));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            PythonProcessSupport.TryKill(process);
-            throw new TimeoutException("智能标注超过 15 分钟未完成，已终止任务。");
-        }
-        catch
-        {
-            PythonProcessSupport.TryKill(process);
-            throw;
-        }
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        if (process.ExitCode != 0)
-        {
-            var detail = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
-            throw new InvalidOperationException($"智能标注进程失败（退出码 {process.ExitCode}）：{detail.Trim()}");
-        }
-
-        var json = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .LastOrDefault(line => line.TrimStart().StartsWith('{'));
-        if (string.IsNullOrWhiteSpace(json))
-            throw new InvalidOperationException($"智能标注没有返回 JSON。{stderr.Trim()}");
-        try
-        {
-            var response = JsonSerializer.Deserialize<TResponse>(json, JsonOptions);
-            return response ?? throw new InvalidOperationException("智能标注返回为空。");
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException($"智能标注返回格式无效：{json}", ex);
+            // Stopping/restarting the worker closes its redirected pipe.
         }
     }
 
@@ -318,17 +266,18 @@ public sealed class SmartAnnotationService
         object request,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureYoloEProcess();
-        await _yoloeWriter!.WriteLineAsync(JsonSerializer.Serialize(request, JsonOptions));
-        await _yoloeWriter.FlushAsync(cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(15));
         string? line;
         try
         {
+            await _yoloeWriter!.WriteLineAsync(JsonSerializer.Serialize(request, JsonOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
+            await _yoloeWriter.FlushAsync(timeout.Token).ConfigureAwait(false);
             do
             {
-                line = await _yoloeReader!.ReadLineAsync(timeout.Token);
+                line = await _yoloeReader!.ReadLineAsync(timeout.Token).ConfigureAwait(false);
             } while (line is not null && !line.TrimStart().StartsWith('{'));
         }
         catch
@@ -377,7 +326,7 @@ public sealed class SmartAnnotationService
         if (!_yoloeProcess.Start()) throw new InvalidOperationException("无法启动 YOLOE 常驻 Worker。");
         _yoloeWriter = _yoloeProcess.StandardInput;
         _yoloeReader = _yoloeProcess.StandardOutput;
-        _ = _yoloeProcess.StandardError.ReadToEndAsync();
+        _ = DrainErrorAsync(_yoloeProcess.StandardError);
     }
 
     private void StopYoloEProcess()
@@ -391,8 +340,17 @@ public sealed class SmartAnnotationService
         _yoloeProcess = null;
     }
 
+    private CancellationTokenSource CreateOperationCancellation(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        return CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+    }
+
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        // Cancel owners and queued calls before waiting; library continuations never need the UI thread.
+        _shutdown.Cancel();
         _yoloeGate.Wait();
         _sam1Gate.Wait();
         try { StopYoloEProcess(); StopSam1Process(); }
@@ -402,6 +360,7 @@ public sealed class SmartAnnotationService
             _yoloeGate.Release();
             _sam1Gate.Dispose();
             _yoloeGate.Dispose();
+            _shutdown.Dispose();
         }
     }
 

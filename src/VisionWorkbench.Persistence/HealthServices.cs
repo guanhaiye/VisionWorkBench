@@ -42,6 +42,7 @@ public sealed class HealthService(VisionDbContextFactory factory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         await using var db = factory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var now = DateTime.UtcNow;
         var alert = await db.Alerts.FirstOrDefaultAsync(item => item.Code == code && item.Status == "active", cancellationToken);
         if (alert is null)
@@ -63,6 +64,7 @@ public sealed class HealthService(VisionDbContextFactory factory)
             alert.RecoveredAtUtc = null;
         }
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return alert;
     }
 

@@ -135,7 +135,7 @@ public sealed class VisionDbContext(DbContextOptions<VisionDbContext> options) :
         modelBuilder.Entity<AuditEventEntity>(e => { e.ToTable("AuditEvents"); e.HasIndex(x => x.OccurredAtUtc); e.HasIndex(x => new { x.ObjectType, x.ObjectId }); e.HasIndex(x => x.Hash); });
         modelBuilder.Entity<BackupRecordEntity>(e => { e.ToTable("BackupRecords"); e.HasIndex(x => x.CreatedAtUtc); });
         modelBuilder.Entity<HealthSnapshotEntity>(e => { e.ToTable("HealthSnapshots"); e.HasIndex(x => x.CapturedAtUtc); });
-        modelBuilder.Entity<AlertEntity>(e => { e.ToTable("Alerts"); e.HasIndex(x => new { x.Code, x.Status }).IsUnique(); e.HasIndex(x => x.LastSeenAtUtc); });
+        modelBuilder.Entity<AlertEntity>(e => { e.ToTable("Alerts"); e.HasIndex(x => x.Code).HasDatabaseName("IX_Alerts_ActiveCode").IsUnique().HasFilter("Status = 'active'"); e.HasIndex(x => x.LastSeenAtUtc); });
         modelBuilder.Entity<CommunicationRequestEntity>(e =>
         {
             e.ToTable("CommunicationRequests");
@@ -162,7 +162,7 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
     public VisionDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<VisionDbContext>()
-            .UseSqlite($"Data Source={DbPath}")
+            .UseSqlite(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = DbPath }.ToString())
             .Options;
         return new VisionDbContext(options);
     }
@@ -421,7 +421,8 @@ public sealed class VisionDbContextFactory(string dbPath) : IDbContextFactory<Vi
                 LastSeenAtUtc TEXT NOT NULL, AcknowledgedAtUtc TEXT NULL,
                 RecoveredAtUtc TEXT NULL, AcknowledgedBy TEXT NULL
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS IX_Alerts_Code_Status ON Alerts(Code, Status);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Alerts_ActiveCode ON Alerts(Code) WHERE Status = 'active';
+            DROP INDEX IF EXISTS IX_Alerts_Code_Status;
             CREATE INDEX IF NOT EXISTS IX_Alerts_LastSeenAtUtc ON Alerts(LastSeenAtUtc);
             INSERT OR IGNORE INTO SchemaMigrations(Version, AppliedAtUtc, Description)
                 VALUES ('20260906-commercial-foundation', CURRENT_TIMESTAMP, '商用化数据安全底座');

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.IO.Compression;
+using System.Text.Json;
 using System.Security.Cryptography;
 
 namespace VisionWorkbench.Persistence;
@@ -17,6 +19,7 @@ public sealed class BackupRetentionService
         foreach (var file in files.Take(Math.Max(1, daily))) keep.Add(file.FullName);
         foreach (var file in files.GroupBy(x => ISOWeek.GetYear(x.LastWriteTimeUtc) + "-" + ISOWeek.GetWeekOfYear(x.LastWriteTimeUtc)).Take(Math.Max(1, weekly)).Select(g => g.First())) keep.Add(file.FullName);
         if (files.Count > 0) keep.Add(files[0].FullName);
+        KeepNewestValidBackup(files, keep);
         var deleted = new List<string>();
         foreach (var file in files.Where(x => !keep.Contains(x.FullName)))
         {
@@ -35,12 +38,45 @@ public sealed class BackupRetentionService
             .ToList();
         var keep = files.Take(Math.Max(1, maxCount)).Select(x => x.FullName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        KeepNewestValidBackup(files, keep);
         var deleted = new List<string>();
         foreach (var file in files.Where(x => !keep.Contains(x.FullName)))
         {
             try { File.Delete(file.FullName); deleted.Add(file.FullName); } catch (IOException) { }
         }
         return new BackupRetentionResult(deleted, keep.OrderBy(x => x).ToArray());
+    }
+    private static void KeepNewestValidBackup(IEnumerable<FileInfo> files, HashSet<string> keep)
+    {
+        foreach (var file in files)
+        {
+            try
+            {
+                using var archive = ZipFile.OpenRead(file.FullName);
+                var entry = archive.GetEntry("manifest.json");
+                if (entry is null) continue;
+                using var manifestStream = entry.Open();
+                var manifest = JsonSerializer.Deserialize<BackupPackageManifest>(manifestStream);
+                if (manifest is null || manifest.FormatVersion != 1 || manifest.Product != "VisionWorkbench"
+                    || manifest.FileHashes is null || !manifest.FileHashes.ContainsKey("database/visionworkbench.db")) continue;
+                var valid = true;
+                foreach (var item in manifest.FileHashes)
+                {
+                    var payload = archive.GetEntry(item.Key);
+                    if (payload is null) { valid = false; break; }
+                    using var stream = payload.Open();
+                    if (!string.Equals(Convert.ToHexString(SHA256.HashData(stream)), item.Value, StringComparison.OrdinalIgnoreCase))
+                    { valid = false; break; }
+                }
+                if (!valid) continue;
+                keep.Add(file.FullName);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+            {
+                // A corrupt newest archive must not evict the last recoverable backup.
+            }
+        }
     }
 }
 
@@ -53,6 +89,7 @@ public sealed class AutomaticBackupService : IDisposable
     private readonly BackupRetentionService _retention = new();
     private readonly Timer _timer;
     private readonly object _scheduleGate = new();
+    private readonly SemaphoreSlim _backupGate = new(1, 1);
     private bool _enabled;
     private int _intervalMinutes;
     private int _retentionCount;
@@ -101,12 +138,17 @@ public sealed class AutomaticBackupService : IDisposable
 
     private async Task RunCoreAsync(CancellationToken ct)
     {
-        Directory.CreateDirectory(_backupDirectory);
-        var path = Path.Combine(_backupDirectory, $"automatic-{DateTime.UtcNow:yyyyMMdd-HHmmss}.vwbackup");
-        await _packages.CreateAsync(path, _settingsPath, _dataDirectory, "automatic", ct);
-        int retentionCount;
-        lock (_scheduleGate) retentionCount = _retentionCount;
-        _retention.Apply(_backupDirectory, retentionCount);
+        await _backupGate.WaitAsync(ct);
+        try
+        {
+            Directory.CreateDirectory(_backupDirectory);
+            var path = Path.Combine(_backupDirectory, $"automatic-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.vwbackup");
+            await _packages.CreateAsync(path, _settingsPath, _dataDirectory, "automatic", ct);
+            int retentionCount;
+            lock (_scheduleGate) retentionCount = _retentionCount;
+            _retention.Apply(_backupDirectory, retentionCount);
+        }
+        finally { _backupGate.Release(); }
     }
 
     public void Dispose() => _timer.Dispose();

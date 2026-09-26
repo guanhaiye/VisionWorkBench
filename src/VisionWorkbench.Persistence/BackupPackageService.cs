@@ -53,6 +53,7 @@ public sealed class BackupPackageService
         var tempRoot = Path.Combine(Path.GetTempPath(), "VisionWorkbench-backup", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         var tempDb = Path.Combine(tempRoot, "visionworkbench.db");
+        var temporaryPackage = destination + ".creating-" + Guid.NewGuid().ToString("N");
         try
         {
             new DatabaseBackupService(_factory).BackupTo(tempDb);
@@ -104,6 +105,15 @@ public sealed class BackupPackageService
                 }
             }
 
+            files = files.DistinctBy(item => Path.GetFullPath(item.Source), StringComparer.OrdinalIgnoreCase).ToList();
+            for (var index = 0; index < files.Count; index++)
+            {
+                var file = files[index];
+                if (file.Source == tempDb) continue;
+                var snapshot = Path.Combine(tempRoot, "snapshot-" + index);
+                File.Copy(file.Source, snapshot);
+                files[index] = (file.Entry, snapshot);
+            }
             var hashes = files.ToDictionary(item => item.Entry, item => ComputeSha256(item.Source), StringComparer.Ordinal);
             var manifest = new BackupPackageManifest(
                 1,
@@ -112,8 +122,7 @@ public sealed class BackupPackageService
                 DateTime.UtcNow,
                 "database/visionworkbench.db",
                 hashes);
-            if (File.Exists(destination)) File.Delete(destination);
-            using (var archive = ZipFile.Open(destination, ZipArchiveMode.Create))
+            using (var archive = ZipFile.Open(temporaryPackage, ZipArchiveMode.Create))
             {
                 foreach (var file in files)
                 {
@@ -127,6 +136,8 @@ public sealed class BackupPackageService
                 foreach (var item in hashes.OrderBy(x => x.Key, StringComparer.Ordinal))
                     await checksumStream.WriteLineAsync($"{item.Value}  {item.Key}");
             }
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryPackage, destination, overwrite: true);
             var result = new BackupPackageResult(destination, ComputeSha256(destination), new FileInfo(destination).Length,
                 files.Select(item => item.Entry).Append("manifest.json").Append("checksums.sha256").ToArray());
             await RecordAsync(result, kind, null, cancellationToken);
@@ -134,11 +145,12 @@ public sealed class BackupPackageService
         }
         catch (Exception ex)
         {
-            await RecordAsync(new BackupPackageResult(destination, "", 0, []), kind, ex.Message, cancellationToken);
+            try { await RecordAsync(new BackupPackageResult(destination, "", 0, []), kind, ex.Message, CancellationToken.None); } catch { }
             throw;
         }
         finally
         {
+            try { File.Delete(temporaryPackage); } catch { }
             try { Directory.Delete(tempRoot, recursive: true); } catch { }
         }
     }
@@ -147,6 +159,7 @@ public sealed class BackupPackageService
     {
         var source = Path.GetFullPath(packagePath);
         if (!File.Exists(source)) throw new FileNotFoundException("备份包不存在", source);
+        var preserveRecoveryFiles = false;
         var tempRoot = Path.Combine(Path.GetTempPath(), "VisionWorkbench-restore", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         try
@@ -154,17 +167,25 @@ public sealed class BackupPackageService
             BackupPackageManifest manifest;
             using (var archive = ZipFile.OpenRead(source))
             {
-                foreach (var entry in archive.Entries) ValidateEntryName(entry.FullName);
+                var entryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in archive.Entries)
+                {
+                    ValidateEntryName(entry.FullName);
+                    if (!entryNames.Add(entry.FullName)) throw new InvalidDataException("备份包包含重复路径");
+                }
                 var manifestEntry = archive.GetEntry("manifest.json")
                     ?? throw new InvalidDataException("备份包缺少 manifest.json");
                 await using var stream = manifestEntry.Open();
                 manifest = await JsonSerializer.DeserializeAsync<BackupPackageManifest>(stream, cancellationToken: cancellationToken)
                     ?? throw new InvalidDataException("备份清单无效");
-                if (manifest.FormatVersion != 1 || !string.Equals(manifest.DatabaseEntry, "database/visionworkbench.db", StringComparison.Ordinal))
+                if (manifest.FormatVersion != 1 || manifest.Product != "VisionWorkbench" || manifest.FileHashes is null
+                    || !manifest.FileHashes.ContainsKey("database/visionworkbench.db")
+                    || !string.Equals(manifest.DatabaseEntry, "database/visionworkbench.db", StringComparison.Ordinal))
                     throw new InvalidDataException("不支持的备份包版本");
 
                 foreach (var file in manifest.FileHashes)
                 {
+                    ValidateEntryName(file.Key);
                     var entry = archive.GetEntry(file.Key) ?? throw new InvalidDataException($"备份包缺少 {file.Key}");
                     var extracted = Path.Combine(tempRoot, file.Key.Replace('/', Path.DirectorySeparatorChar));
                     Directory.CreateDirectory(Path.GetDirectoryName(extracted)!);
@@ -204,18 +225,19 @@ public sealed class BackupPackageService
             if (PreRestoreBackup is not null)
                 await PreRestoreBackup(cancellationToken);
 
-            new DatabaseBackupService(_factory).RestoreFrom(database);
-            await RestoreFilesAsync(tempRoot, manifest, cancellationToken);
+            await RestoreFilesAsync(tempRoot, manifest, database, cancellationToken);
             await RecordRestoreAuditAsync(source, "success", null, cancellationToken);
         }
         catch (Exception ex)
         {
-            await RecordRestoreAuditAsync(source, "failed", ex.Message, cancellationToken);
+            preserveRecoveryFiles = ex is AggregateException;
+            await RecordRestoreAuditAsync(source, "failed", ex.Message, CancellationToken.None);
             throw;
         }
         finally
         {
-            try { Directory.Delete(tempRoot, recursive: true); } catch { }
+            if (!preserveRecoveryFiles)
+                try { Directory.Delete(tempRoot, recursive: true); } catch { }
         }
     }
 
@@ -230,39 +252,109 @@ public sealed class BackupPackageService
         catch { }
     }
 
-    private async Task RestoreFilesAsync(string tempRoot, BackupPackageManifest manifest, CancellationToken cancellationToken)
+    private async Task RestoreFilesAsync(string tempRoot, BackupPackageManifest manifest, string database, CancellationToken cancellationToken)
     {
-        foreach (var entry in manifest.FileHashes.Keys.Where(x => !string.Equals(x, manifest.DatabaseEntry, StringComparison.OrdinalIgnoreCase)))
+        var plan = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in manifest.FileHashes.Keys.Where(x => x != manifest.DatabaseEntry))
         {
-            var source = Path.Combine(tempRoot, entry.Replace('/', Path.DirectorySeparatorChar));
             string? destination = null;
-            if (string.Equals(entry, "settings/settings.json", StringComparison.OrdinalIgnoreCase))
-            {
-                destination = _defaultSettingsPath;
-            }
+            if (entry == "settings/settings.json") destination = _defaultSettingsPath;
             else if (!string.IsNullOrWhiteSpace(_defaultDataDirectory))
             {
                 var slash = entry.IndexOf('/');
-                if (slash > 0)
-                {
-                    var relative = entry[(slash + 1)..].Replace('/', Path.DirectorySeparatorChar);
-                    destination = Path.Combine(_defaultDataDirectory, relative);
-                }
+                if (slash <= 0) throw new InvalidDataException("备份条目类型无效");
+                var prefix = entry[..slash];
+                if (prefix is not ("config" or "communication" or "recipes" or "models" or "plugins" or "metadata"))
+                    throw new InvalidDataException("备份条目类型无效");
+                var relative = entry[(slash + 1)..].Replace('/', Path.DirectorySeparatorChar);
+                if (prefix == "config") relative = Path.Combine("Config", relative);
+                destination = Path.Combine(_defaultDataDirectory, relative);
             }
             if (string.IsNullOrWhiteSpace(destination)) continue;
             var fullDestination = Path.GetFullPath(destination);
-            var root = Path.GetFullPath(_defaultDataDirectory ?? Path.GetDirectoryName(fullDestination) ?? AppContext.BaseDirectory);
-            if (!IsInside(fullDestination, root) && !string.Equals(fullDestination, Path.GetFullPath(_defaultSettingsPath ?? ""), StringComparison.OrdinalIgnoreCase))
+            var root = Path.GetFullPath(_defaultDataDirectory ?? Path.GetDirectoryName(fullDestination)!);
+            var isSettings = !string.IsNullOrWhiteSpace(_defaultSettingsPath)
+                && string.Equals(fullDestination, Path.GetFullPath(_defaultSettingsPath), StringComparison.OrdinalIgnoreCase);
+            if ((!IsInside(fullDestination, root) && !isSettings)
+                || string.Equals(fullDestination, Path.GetFullPath(_factory.DbPath), StringComparison.OrdinalIgnoreCase)
+                || IsDatabaseFile(Path.GetFileName(fullDestination)))
                 throw new InvalidDataException("恢复目标路径不安全");
-            Directory.CreateDirectory(Path.GetDirectoryName(fullDestination)!);
-            await using var input = File.OpenRead(source);
-            await using var output = File.Create(fullDestination);
-            await input.CopyToAsync(output, cancellationToken);
+            for (var parent = new DirectoryInfo(Path.GetDirectoryName(fullDestination)!); parent is not null; parent = parent.Parent)
+            {
+                if (parent.Exists && (parent.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("恢复目标不能包含目录链接");
+            }
+            var source = Path.Combine(tempRoot, entry.Replace('/', Path.DirectorySeparatorChar));
+            if (plan.TryGetValue(fullDestination, out var previous))
+            {
+                if (!string.Equals(ComputeSha256(previous), ComputeSha256(source), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("备份条目指向冲突的恢复目标");
+            }
+            else plan.Add(fullDestination, source);
+        }
+
+        var rollback = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        // Stage every previous file before changing anything. Restore the database last;
+        // SQLite rolls its own transaction back on failure, while we restore the files.
+        foreach (var destination in plan.Keys)
+        {
+            if (File.Exists(destination))
+            {
+                var backup = Path.Combine(tempRoot, "rollback-" + Guid.NewGuid().ToString("N"));
+                File.Copy(destination, backup);
+                rollback.Add(destination, backup);
+            }
+            else rollback.Add(destination, null);
+        }
+        var changed = new List<string>();
+        try
+        {
+            foreach (var item in plan)
+            {
+                await ReplaceFileAsync(item.Value, item.Key, cancellationToken);
+                changed.Add(item.Key);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            new DatabaseBackupService(_factory).RestoreFrom(database);
+        }
+        catch (Exception restoreError)
+        {
+            var errors = new List<Exception> { restoreError };
+            foreach (var destination in changed.AsEnumerable().Reverse())
+            {
+                try
+                {
+                    if (rollback[destination] is { } backup)
+                        await ReplaceFileAsync(backup, destination, CancellationToken.None);
+                    else File.Delete(destination);
+                }
+                catch (Exception rollbackError) { errors.Add(rollbackError); }
+            }
+            if (errors.Count > 1) throw new AggregateException($"备份恢复失败，部分文件回滚失败；恢复文件保留于 {tempRoot}", errors);
+            throw;
         }
     }
 
-    public static string ComputeSha256(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+    private static async Task ReplaceFileAsync(string source, string destination, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporary = destination + ".restoring-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var input = File.OpenRead(source))
+            await using (var output = File.Create(temporary))
+                await input.CopyToAsync(output, ct);
+            ct.ThrowIfCancellationRequested();
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally { try { File.Delete(temporary); } catch { } }
+    }
 
+    public static string ComputeSha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
     private async Task RecordAsync(BackupPackageResult result, string kind, string? error, CancellationToken cancellationToken)
     {
         await using var db = _factory.CreateDbContext();
@@ -290,7 +382,7 @@ public sealed class BackupPackageService
     private static void ValidateEntryName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) || Path.IsPathRooted(name) || name.Contains('\\')
-            || name.Split('/').Any(part => part is "" or "." or ".."))
+            || name.Split('/').Any(part => part is "" or "." or ".." || part.EndsWith('.') || part.EndsWith(' ') || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
             throw new InvalidDataException($"备份包包含不安全路径：{name}");
     }
 

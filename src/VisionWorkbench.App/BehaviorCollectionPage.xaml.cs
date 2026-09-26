@@ -25,7 +25,8 @@ public partial class BehaviorCollectionPage : UserControl
     private readonly PreviewRenderer _previewRenderer = new();
     private readonly object _recordLock = new();
     private readonly object _recordWriteLock = new();
-    private readonly List<Task> _recordWrites = new();
+    private Task _recordWriteTail = Task.CompletedTask;
+    private Task? _stopRecordingTask;
     private BehaviorDatasetDefinition? _dataset;
     private ICameraSession? _session;
     private VideoWriter? _writer;
@@ -33,7 +34,7 @@ public partial class BehaviorCollectionPage : UserControl
     private string? _recordFramesDirectory;
     private string? _recordSourceId;
     private int _recordedFrames;
-    private bool _recording;
+    private volatile bool _recording;
     private bool _videoEncodingFallback;
     private bool _loaded;
     private double _recordFps = 10;
@@ -57,6 +58,7 @@ public partial class BehaviorCollectionPage : UserControl
 
     private void NewDataset_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanChangeRecordingDataset()) return;
         var dialog = new OpenFolderDialog { Title = "选择行为数据集目录" };
         if (dialog.ShowDialog() != true) return;
         var root = Path.GetFullPath(dialog.FolderName);
@@ -69,6 +71,7 @@ public partial class BehaviorCollectionPage : UserControl
 
     private void LoadDataset_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanChangeRecordingDataset()) return;
         var dialog = new OpenFolderDialog { Title = "选择包含行为数据集文件的目录" };
         if (dialog.ShowDialog() != true) return;
         if (!BehaviorDatasetStore.TryLoadFromRoot(dialog.FolderName, out var dataset) || dataset is null)
@@ -253,7 +256,7 @@ public partial class BehaviorCollectionPage : UserControl
 
     private async Task StopPreviewAsync()
     {
-        if (_recording) await StopRecordingAsync();
+        if (_recording || _stopRecordingTask is { IsCompleted: false }) await StopRecordingAsync();
         var session = _session;
         _session = null;
         RecordButton.IsEnabled = CameraCombo.SelectedItem is CameraDescriptor;
@@ -268,55 +271,10 @@ public partial class BehaviorCollectionPage : UserControl
     private void Session_Faulted(object? sender, CameraFaultedEventArgs e) =>
         Dispatcher.BeginInvoke(() => CameraStatusText.Text = $"相机故障：{e.Fault.Message}");
 
-    private void Session_FrameReceived(object? sender, VideoFrameReceivedEventArgs e)
-    {
-        if (QueueFrameForRecording(e.Frame)) return;
-        Dispatcher.BeginInvoke(() => _previewRenderer.Render(PreviewImage, e.Frame, maxFps: 15, force: true));
-        if (!_recording) return;
-        lock (_recordLock)
-        {
-            try
-            {
-                try
-                {
-                    EnsureRecorder(e.Frame);
-                }
-                catch (Exception)
-                {
-                    // 视频编码器不可用时仍保留 JPG 帧，不能让整次采集失败。
-                    _writer?.Dispose();
-                    _writer = null;
-                    if (_recordVideoPath is not null && File.Exists(_recordVideoPath)) File.Delete(_recordVideoPath);
-                    _videoEncodingFallback = true;
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        RecordStatusText.Text = "视频编码器不可用，已切换为帧序列采集";
-                        StatusText.Text = "当前系统没有可用的视频编码器；采集仍会保存 JPG 帧。";
-                    });
-                }
-                using var mat = Mat.FromPixelData(e.Frame.Height, e.Frame.Width, MatType.CV_8UC3, e.Frame.Pixels, e.Frame.Stride);
-                _writer?.Write(mat);
-                if (_recordFramesDirectory is not null)
-                {
-                    var framePath = Path.Combine(_recordFramesDirectory, $"frame_{_recordedFrames:000000}.jpg");
-                    Cv2.ImWrite(framePath, mat);
-                }
-                _recordedFrames++;
-            }
-            catch (Exception ex)
-            {
-                _recording = false;
-                Dispatcher.BeginInvoke(() => ThemedMessageBox.Show(ex.Message, "录制失败", MessageBoxButton.OK, MessageBoxImage.Warning));
-            }
-        }
-        Dispatcher.BeginInvoke(() =>
-        {
-            _previewRenderer.Render(PreviewImage, e.Frame, maxFps: 15);
-            if (_recording) RecordStatusText.Text = $"录制中：{_recordedFrames} 帧";
-        });
-    }
+    private void Session_FrameReceived(object? sender, VideoFrameReceivedEventArgs e) =>
+        QueueFrameForRecording(e.Frame);
 
-    private bool QueueFrameForRecording(VideoFrame frame)
+    private void QueueFrameForRecording(VideoFrame frame)
     {
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() =>
         {
@@ -326,11 +284,13 @@ public partial class BehaviorCollectionPage : UserControl
 
         lock (_recordLock)
         {
-            if (!_recording) return true;
+            if (!_recording) return;
             var frameNumber = Interlocked.Increment(ref _recordedFrames);
-            _recordWrites.Add(Task.Run(() => SaveRecordedFrame(frame, frameNumber)));
+            // Serialize in capture order. Retain only the tail instead of every completed task.
+            _recordWriteTail = _recordWriteTail.ContinueWith(
+                _ => SaveRecordedFrame(frame, frameNumber),
+                CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
-        return true;
     }
 
     private void SaveRecordedFrame(VideoFrame frame, int frameNumber)
@@ -373,7 +333,7 @@ public partial class BehaviorCollectionPage : UserControl
 
     private void EnsureRecorder(VideoFrame frame)
     {
-        if (_writer is not null) return;
+        if (_writer is not null || _videoEncodingFallback) return;
         if (_recordVideoPath is null || _recordFramesDirectory is null) throw new InvalidOperationException("录制目录未准备好。");
         Directory.CreateDirectory(_recordFramesDirectory);
         _writer = TryCreateVideoWriter(_recordVideoPath, _recordFps, new OpenCvSharp.Size(frame.Width, frame.Height)) ?? throw new InvalidOperationException();
@@ -400,8 +360,16 @@ public partial class BehaviorCollectionPage : UserControl
         return null;
     }
 
+    private bool CanChangeRecordingDataset()
+    {
+        if (!_recording && _stopRecordingTask is not { IsCompleted: false }) return true;
+        StatusText.Text = "请先停止录制并等待保存完成，再切换数据集。";
+        return false;
+    }
+
     private async void RecordButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_stopRecordingTask is { IsCompleted: false }) return;
         if (_recording)
         {
             await StopRecordingAsync();
@@ -444,17 +412,23 @@ public partial class BehaviorCollectionPage : UserControl
             await Dispatcher.InvokeAsync(StopRecordingAsync);
     }
 
-    private async Task StopRecordingAsync()
+    private Task StopRecordingAsync()
+    {
+        if (_stopRecordingTask is { IsCompleted: false }) return _stopRecordingTask;
+        return _stopRecordingTask = StopRecordingCoreAsync();
+    }
+
+    private async Task StopRecordingCoreAsync()
     {
         BehaviorSequenceSource? source = null;
-        List<Task> pendingWrites;
+        Task pendingWrites;
         lock (_recordLock)
         {
+            if (!_recording) return;
             _recording = false;
-            pendingWrites = new List<Task>(_recordWrites);
-            _recordWrites.Clear();
+            pendingWrites = _recordWriteTail;
         }
-        try { await Task.WhenAll(pendingWrites); } catch { }
+        await pendingWrites;
         lock (_recordWriteLock)
         {
             _writer?.Release();

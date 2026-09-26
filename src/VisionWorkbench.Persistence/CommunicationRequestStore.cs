@@ -19,11 +19,13 @@ public sealed class CommunicationRequestStore(VisionDbContextFactory factory)
         try
         {
             await using var db = factory.CreateDbContext();
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
             var existing = await db.CommunicationRequests.FirstOrDefaultAsync(item =>
                 item.ProjectCode == projectCode && item.ClientId == clientId && item.RequestId == requestId, cancellationToken);
             if (existing is not null)
             {
-                if (!string.Equals(existing.RequestHash, hash, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(existing.RequestHash, hash, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(existing.Command, command, StringComparison.Ordinal))
                     return new CommunicationRequestResult(CommunicationRequestState.Conflict, null, existing);
                 if (existing.Status == "completed" && existing.ExpiresAtUtc > DateTime.UtcNow)
                     return new CommunicationRequestResult(CommunicationRequestState.Cached, existing.ResponseJson, existing);
@@ -36,6 +38,8 @@ public sealed class CommunicationRequestStore(VisionDbContextFactory factory)
                 Command = command, RequestHash = hash, ReceivedAtUtc = DateTime.UtcNow,
                 ExpiresAtUtc = DateTime.UtcNow.AddDays(7),
             };
+            request.ReceivedAtUtc = DateTime.UtcNow;
+            request.ExpiresAtUtc = request.ReceivedAtUtc.AddDays(7);
             request.Command = command;
             request.RequestHash = hash;
             request.Status = "processing";
@@ -43,6 +47,7 @@ public sealed class CommunicationRequestStore(VisionDbContextFactory factory)
             request.CompletedAtUtc = null;
             if (existing is null) db.CommunicationRequests.Add(request);
             await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return new CommunicationRequestResult(CommunicationRequestState.New, null, request);
         }
         finally { Gate.Release(); }
@@ -62,9 +67,8 @@ public sealed class CommunicationRequestStore(VisionDbContextFactory factory)
     public async Task<int> PurgeExpiredAsync(DateTime? nowUtc = null, CancellationToken cancellationToken = default)
     {
         await using var db = factory.CreateDbContext();
-        var expired = await db.CommunicationRequests.Where(item => item.ExpiresAtUtc < (nowUtc ?? DateTime.UtcNow)).ToListAsync(cancellationToken);
-        if (expired.Count == 0) return 0;
-        db.CommunicationRequests.RemoveRange(expired);
-        return await db.SaveChangesAsync(cancellationToken);
+        var cutoff = nowUtc ?? DateTime.UtcNow;
+        return await db.CommunicationRequests.Where(item => item.Status != "processing" && item.ExpiresAtUtc < cutoff)
+            .ExecuteDeleteAsync(cancellationToken);
     }
 }

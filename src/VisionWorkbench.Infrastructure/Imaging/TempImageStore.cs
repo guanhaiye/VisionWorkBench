@@ -28,6 +28,13 @@ public sealed class TempImageStore(string rootDirectory)
 
     public static void WritePng(byte[] bgr24, int width, int height, string path)
     {
+        ArgumentNullException.ThrowIfNull(bgr24);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (bgr24.LongLength != checked((long)width * height * 3))
+        {
+            throw new ArgumentException("像素缓冲长度必须等于 width*height*3（BGR24）", nameof(bgr24));
+        }
         using var mat = new Mat(height, width, MatType.CV_8UC3);
         Marshal.Copy(bgr24, 0, mat.Data, bgr24.Length);
         // ImEncode + WriteAllBytes：非 ASCII 路径安全（APP-003），ImWrite 对中文路径不稳

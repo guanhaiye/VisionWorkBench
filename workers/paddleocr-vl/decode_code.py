@@ -16,6 +16,8 @@ def decode_qr(image):
         if ok and values:
             results.extend(value for value in values if value)
     except (AttributeError, cv2.error):
+        pass
+    if not results:
         value, _, _ = detector.detectAndDecode(image)
         if value:
             results.append(value)
@@ -28,8 +30,13 @@ def decode_barcode(image):
     if not hasattr(cv2, "barcode"):
         raise RuntimeError("当前 OpenCV 未包含 BarcodeDetector，请安装 opencv-contrib-python-headless。")
     detector = cv2.barcode.BarcodeDetector()
-    result = detector.detectAndDecode(image)
-    values = result[1] if len(result) >= 2 else []
+    if hasattr(detector, "detectAndDecodeWithType"):
+        _, values, _, _ = detector.detectAndDecodeWithType(image)
+    else:
+        result = detector.detectAndDecode(image)
+        # Older barcode-specific APIs return (success, values, types, points).
+        # Newer inherited GraphicalCodeDetector APIs return (text, points, image).
+        values = result[1] if len(result) == 4 else result[0]
     if isinstance(values, str):
         values = [values] if values else []
     return [value for value in values if value]
@@ -46,8 +53,9 @@ def main() -> int:
         return 2
     try:
         import cv2
+        import numpy as np
 
-        image = cv2.imread(str(image_path))
+        image = cv2.imdecode(np.frombuffer(image_path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise RuntimeError("图片无法读取。")
         values = decode_barcode(image) if kind == "barcode" else decode_qr(image)

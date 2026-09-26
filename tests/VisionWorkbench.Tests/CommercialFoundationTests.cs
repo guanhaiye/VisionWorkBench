@@ -101,7 +101,7 @@ public sealed class CommercialFoundationTests : IDisposable
             Convert.ToBase64String(key.SignData(bytes, HashAlgorithmName.SHA256)));
         var source = Path.Combine(_root, "license.json");
         await File.WriteAllTextAsync(source, JsonSerializer.Serialize(document, options));
-        var service = new LicenseService(_root, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()), _factory);
+        using var service = new LicenseService(_root, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()), _factory);
 
         var valid = await service.ImportAsync(source);
         Assert.True(valid.IsValid);

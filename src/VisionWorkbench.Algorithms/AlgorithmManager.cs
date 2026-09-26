@@ -45,6 +45,7 @@ public sealed class AlgorithmManager
 
     public AlgorithmManager(AlgorithmManagerOptions options, ILogger<AlgorithmManager> logger)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxStartAttempts);
         _options = options;
         _logger = logger;
         _scanner = new PluginScanner(logger);
@@ -72,6 +73,7 @@ public sealed class AlgorithmManager
         Exception? lastError = null;
         for (var attempt = 1; attempt <= _options.MaxStartAttempts; attempt++)
         {
+            var pluginLoggerFactory = LogSetup.CreatePluginLoggerFactory(_options.LogsDirectory, manifest.Id);
             var process = new WorkerProcess(
                 new WorkerProcessOptions
                 {
@@ -79,7 +81,7 @@ public sealed class AlgorithmManager
                     Arguments = args,
                     WorkingDirectory = plugin.Directory,
                 },
-                LogSetup.CreatePluginLogger(_options.LogsDirectory, manifest.Id));
+                pluginLoggerFactory.CreateLogger($"Plugin.{manifest.Id}"), pluginLoggerFactory);
             process.StderrLine += (_, line) =>
                 _logger.LogWarning("Worker {Plugin} stderr: {Line}", manifest.Id, line);
 
@@ -98,6 +100,7 @@ public sealed class AlgorithmManager
             {
                 lastError = ex;
                 await process.DisposeAsync();
+                cancellationToken.ThrowIfCancellationRequested();
                 _logger.LogWarning("Worker 启动第 {Attempt}/{Max} 次失败: {Error}",
                     attempt, _options.MaxStartAttempts, ex.Message);
                 if (attempt < _options.MaxStartAttempts)

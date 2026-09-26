@@ -55,6 +55,42 @@ public sealed class FrameSchedulerTests
     }
 
     [Fact]
+    public async Task LatestOnly_Completed_Source_Allows_Repeated_End_Reads()
+    {
+        var scheduler = new FrameScheduler();
+        scheduler.Complete();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        Assert.Null(await scheduler.TakeNextAsync(timeout.Token));
+        Assert.Null(await scheduler.TakeNextAsync(timeout.Token));
+    }
+
+    [Fact]
+    public async Task LatestOnly_Clearing_Completed_Source_Does_Not_Lose_Completion()
+    {
+        var scheduler = new FrameScheduler();
+        scheduler.OnFrame(Frame(1));
+        scheduler.Complete();
+        scheduler.ClearPendingFrames();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        Assert.Null(await scheduler.TakeNextAsync(timeout.Token));
+    }
+
+    [Fact]
+    public void Complete_Notifies_Source_Only_Once()
+    {
+        var scheduler = new FrameScheduler();
+        var completed = 0;
+        scheduler.SourceCompleted += (_, _) => completed++;
+
+        scheduler.Complete();
+        scheduler.Complete();
+
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
     public async Task Bounded_Queue_Delivers_In_Order()
     {
         var scheduler = new FrameScheduler(FrameRoutingStrategy.Bounded, boundedCapacity: 4);

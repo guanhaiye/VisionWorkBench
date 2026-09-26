@@ -20,11 +20,14 @@ public sealed class CounterState
     public CounterState(string counterId) => CounterId = counterId;
 
     /// <summary>应用一条计数事件并更新累计值。</summary>
-    public void Apply(CountingEvent evt)
+    public void Apply(CountingEvent evt) => ApplyWithTotals(evt);
+
+    internal (long Before, long After) ApplyWithTotals(CountingEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
         lock (_lock)
         {
+            var before = Total;
             switch (evt.Type)
             {
                 case CountingEventType.CounterReset:
@@ -63,6 +66,7 @@ public sealed class CounterState
                     break;
             }
             UpdatedAt = DateTimeOffset.UtcNow;
+            return (before, Total);
         }
     }
 
@@ -147,7 +151,6 @@ public sealed class CountingService
         {
             throw new ArgumentException("人工修正必须填写原因（CNT-S-010）", nameof(reason));
         }
-        var before = _state.CurrentTotal;
         var evt = new CountingEvent
         {
             EventId = $"corr-{Guid.NewGuid():N}",
@@ -158,12 +161,12 @@ public sealed class CountingService
             FrameSequence = frameSequence,
             OccurredAt = DateTimeOffset.UtcNow,
         };
-        _state.Apply(evt);
+        var (before, after) = _state.ApplyWithTotals(evt);
         return new CountingAdjustment
         {
             Event = evt,
             Before = before,
-            After = _state.CurrentTotal,
+            After = after,
             Reason = reason,
             Operator = @operator,
         };
@@ -176,7 +179,6 @@ public sealed class CountingService
         {
             throw new ArgumentException("清零必须填写原因（CNT-S-010）", nameof(reason));
         }
-        var before = _state.CurrentTotal;
         var evt = new CountingEvent
         {
             EventId = $"reset-{Guid.NewGuid():N}",
@@ -187,12 +189,12 @@ public sealed class CountingService
             FrameSequence = frameSequence,
             OccurredAt = DateTimeOffset.UtcNow,
         };
-        _state.Apply(evt);
+        var (before, after) = _state.ApplyWithTotals(evt);
         return new CountingAdjustment
         {
             Event = evt,
             Before = before,
-            After = _state.CurrentTotal,
+            After = after,
             Reason = reason,
             Operator = @operator,
         };

@@ -88,6 +88,9 @@ internal sealed class HikvisionCameraSession(CameraDescriptor descriptor, ILogge
     private readonly CancellationTokenSource _cts = new();
     private readonly AsyncPauseGate _pauseGate = new();
     private readonly object _nativeGate = new();
+    private readonly object _lifecycleGate = new();
+    private Task? _disposeTask;
+    private int _disposeRequested;
     private Task? _loopTask;
     private IntPtr _handle;
     private IntPtr _buffer;
@@ -107,161 +110,212 @@ internal sealed class HikvisionCameraSession(CameraDescriptor descriptor, ILogge
 
     public Task OpenAsync(CameraOpenOptions options, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        _options = options;
-        if (!MvsNative.TryEnsureLoaded())
+        lock (_lifecycleGate)
         {
-            Fault(CameraErrorCodes.SdkNotInstalled, "未安装海康 MVS Runtime，无法打开工业相机", recoverable: false);
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            if (_handle != IntPtr.Zero || _loopTask is not null)
+            {
+                throw new InvalidOperationException("相机会话已打开，请创建新会话重新打开设备");
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            _options = options;
+            if (!MvsNative.TryEnsureLoaded())
+            {
+                Fault(CameraErrorCodes.SdkNotInstalled, "未安装海康 MVS Runtime，无法打开工业相机", recoverable: false);
+                return Task.CompletedTask;
+            }
+
+            try
+            {
+                OpenNative(options);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "打开海康工业相机失败: {DeviceId}", Descriptor.DeviceId);
+                ReleaseNative();
+                Fault(MapException(ex), $"海康工业相机打开失败：{ex.Message}", recoverable: true);
+            }
             return Task.CompletedTask;
         }
-
-        try
-        {
-            OpenNative(options);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "打开海康工业相机失败: {DeviceId}", Descriptor.DeviceId);
-            ReleaseNative();
-            Fault(MapException(ex), $"海康工业相机打开失败：{ex.Message}", recoverable: true);
-        }
-        return Task.CompletedTask;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (State == CameraSessionState.Streaming || _loopTask is not null) return Task.CompletedTask;
-        if (_handle == IntPtr.Zero || !_deviceOpened)
+        lock (_lifecycleGate)
         {
-            Fault(CameraErrorCodes.OpenFailed, "海康工业相机会话未打开", recoverable: false);
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (State == CameraSessionState.Streaming || _loopTask is not null) return Task.CompletedTask;
+            if (_handle == IntPtr.Zero || !_deviceOpened)
+            {
+                Fault(CameraErrorCodes.OpenFailed, "海康工业相机会话未打开", recoverable: false);
+                return Task.CompletedTask;
+            }
+            var code = MvsNative.MV_CC_StartGrabbing(_handle);
+            if (code != MvsNative.Ok)
+            {
+                Fault(CameraErrorCodes.StreamStartFailed, $"海康相机开始取流失败：{MvsNative.Error(code)}", recoverable: true);
+                return Task.CompletedTask;
+            }
+            State = CameraSessionState.Streaming;
+            _loopTask = Task.Run(() => CaptureLoopAsync(_cts.Token), CancellationToken.None);
             return Task.CompletedTask;
         }
-        var code = MvsNative.MV_CC_StartGrabbing(_handle);
-        if (code != MvsNative.Ok)
-        {
-            Fault(CameraErrorCodes.StreamStartFailed, $"海康相机开始取流失败：{MvsNative.Error(code)}", recoverable: true);
-            return Task.CompletedTask;
-        }
-        State = CameraSessionState.Streaming;
-        _loopTask = Task.Run(() => CaptureLoopAsync(_cts.Token), CancellationToken.None);
-        return Task.CompletedTask;
     }
 
     public Task PauseAsync(CancellationToken cancellationToken)
     {
-        if (State == CameraSessionState.Streaming)
+        lock (_lifecycleGate)
         {
-            _pauseGate.Pause();
-            State = CameraSessionState.Paused;
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            if (State == CameraSessionState.Streaming)
+            {
+                _pauseGate.Pause();
+                State = CameraSessionState.Paused;
+            }
+            return Task.CompletedTask;
         }
-        return Task.CompletedTask;
     }
 
     public Task ResumeAsync(CancellationToken cancellationToken)
     {
-        if (State == CameraSessionState.Paused)
+        lock (_lifecycleGate)
         {
-            _pauseGate.Resume();
-            State = CameraSessionState.Streaming;
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            if (State == CameraSessionState.Paused)
+            {
+                _pauseGate.Resume();
+                State = CameraSessionState.Streaming;
+            }
+            return Task.CompletedTask;
         }
-        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        _cts.Cancel();
-        lock (_nativeGate)
+        lock (_lifecycleGate)
         {
-            if (_handle != IntPtr.Zero && _deviceOpened)
+            if (_disposeTask is not null) return Task.CompletedTask;
+            _cts.Cancel();
+            lock (_nativeGate)
             {
-                _ = MvsNative.MV_CC_StopGrabbing(_handle);
+                if (_handle != IntPtr.Zero && _deviceOpened)
+                {
+                    _ = MvsNative.MV_CC_StopGrabbing(_handle);
+                }
             }
+            if (State is CameraSessionState.Streaming or CameraSessionState.Paused) State = CameraSessionState.Idle;
+            return Task.CompletedTask;
         }
-        if (State is CameraSessionState.Streaming or CameraSessionState.Paused) State = CameraSessionState.Idle;
-        return Task.CompletedTask;
     }
 
     public Task ApplyParametersAsync(CameraParameterSet parameters, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(parameters);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_handle == IntPtr.Zero) return Task.CompletedTask;
-        ApplyParameters(parameters, throwOnError: true);
-        return Task.CompletedTask;
+        lock (_nativeGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeRequested) != 0, this);
+            ArgumentNullException.ThrowIfNull(parameters);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_handle == IntPtr.Zero) return Task.CompletedTask;
+            ApplyParameters(parameters, throwOnError: true);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>软件触发一次；仅在 TriggerMode=true 且 TriggerSource=Software 时有效。</summary>
     public Task TriggerSoftwareAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_handle == IntPtr.Zero) throw new InvalidOperationException("海康相机尚未打开");
-        var code = MvsNative.MV_CC_TriggerSoftwareExecute(_handle);
-        if (code != MvsNative.Ok) throw new InvalidOperationException($"海康软件触发失败：{MvsNative.Error(code)}");
-        return Task.CompletedTask;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _cts.Cancel();
         lock (_nativeGate)
         {
-            if (_handle != IntPtr.Zero && _deviceOpened) _ = MvsNative.MV_CC_StopGrabbing(_handle);
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeRequested) != 0, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_handle == IntPtr.Zero) throw new InvalidOperationException("海康相机尚未打开");
+            var code = MvsNative.MV_CC_TriggerSoftwareExecute(_handle);
+            if (code != MvsNative.Ok) throw new InvalidOperationException($"海康软件触发失败：{MvsNative.Error(code)}");
+            return Task.CompletedTask;
         }
-        if (_loopTask is not null)
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_lifecycleGate)
         {
-            try { await _loopTask.WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch (Exception) { }
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
         }
-        ReleaseNative();
-        _pauseGate.Dispose();
-        _cts.Dispose();
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Interlocked.Exchange(ref _disposeRequested, 1);
+        _cts.Cancel();
         State = CameraSessionState.Closed;
+        var stopTask = Task.Run(() =>
+        {
+            lock (_nativeGate)
+            {
+                if (_handle != IntPtr.Zero && _deviceOpened) _ = MvsNative.MV_CC_StopGrabbing(_handle);
+            }
+        });
+        var released = await CameraSessionCleanup.ReleaseAfterLoopAsync(
+            Task.WhenAll(_loopTask ?? Task.CompletedTask, stopTask), () =>
+            {
+                try { ReleaseNative(); }
+                finally
+                {
+                    _pauseGate.Dispose();
+                    _cts.Dispose();
+                }
+            }, TimeSpan.FromSeconds(5), ex => logger?.LogWarning(ex, "关闭海康相机会话时清理资源失败"));
+        if (!released) logger?.LogWarning("海康采集线程仍未退出，句柄和图像缓冲将在采集结束后释放: {Device}", Descriptor.DeviceId);
     }
 
     private void OpenNative(CameraOpenOptions options)
     {
-        var list = MvsNative.DeviceList.Create();
-        var code = MvsNative.MV_CC_EnumDevices(MvsNative.GigeDevice | MvsNative.UsbDevice, ref list);
-        EnsureOk(code, "枚举海康设备");
-        var (device, layerType) = FindDevice(list);
-        if (device == IntPtr.Zero) throw new InvalidOperationException("设备已断开或未找到");
-
-        code = MvsNative.MV_CC_CreateHandle(out _handle, device);
-        EnsureOk(code, "创建海康相机句柄");
-        code = MvsNative.MV_CC_OpenDevice(_handle, MvsNative.AccessExclusive, 0);
-        EnsureOk(code, "打开海康相机");
-        _deviceOpened = true;
-        _ = layerType;
-
-        code = MvsNative.MV_CC_SetImageNodeNum(_handle, 5);
-        if (code != MvsNative.Ok) logger?.LogDebug("海康设置缓存节点失败: {Error}", MvsNative.Error(code));
-
-        // 连续采集是实时检测默认模式；触发模式通过 CameraParameterSet 显式开启。
-        SetEnumIfSupported("AcquisitionMode", MvsNative.AcquisitionContinuous);
-        var parameters = options.Parameters ?? new CameraParameterSet
+        lock (_nativeGate)
         {
-            Width = options.DesiredWidth,
-            Height = options.DesiredHeight,
-            FrameRate = options.DesiredFps,
-        };
-        ApplyParameters(parameters, throwOnError: false);
-        if (parameters.TriggerMode is null) SetEnumIfSupported("TriggerMode", MvsNative.TriggerOff);
+            _cts.Token.ThrowIfCancellationRequested();
+            var list = MvsNative.DeviceList.Create();
+            var code = MvsNative.MV_CC_EnumDevices(MvsNative.GigeDevice | MvsNative.UsbDevice, ref list);
+            EnsureOk(code, "枚举海康设备");
+            var (device, layerType) = FindDevice(list);
+            if (device == IntPtr.Zero) throw new InvalidOperationException("设备已断开或未找到");
 
-        var width = ReadInt("Width", 0);
-        var height = ReadInt("Height", 0);
-        var payload = ReadInt("PayloadSize", 0);
-        if (width <= 0 || height <= 0) throw new InvalidOperationException("无法读取海康相机图像尺寸");
-        _bufferSize = checked(Math.Max(width * height * 3, Math.Max(payload * 3, 4 * 1024 * 1024)));
-        _buffer = Marshal.AllocHGlobal(_bufferSize);
-        Capabilities = new CameraCapabilities
-        {
-            SupportedModes = [new CameraMode { Width = width, Height = height, Fps = ReadFloat("AcquisitionFrameRate", options.DesiredFps ?? 0) }],
-            SupportsExposureControl = true,
-            SupportsGainControl = true,
-            SupportsTrigger = true,
-        };
-        State = CameraSessionState.Idle;
+            code = MvsNative.MV_CC_CreateHandle(out _handle, device);
+            EnsureOk(code, "创建海康相机句柄");
+            code = MvsNative.MV_CC_OpenDevice(_handle, MvsNative.AccessExclusive, 0);
+            EnsureOk(code, "打开海康相机");
+            _deviceOpened = true;
+            _ = layerType;
+
+            code = MvsNative.MV_CC_SetImageNodeNum(_handle, 5);
+            if (code != MvsNative.Ok) logger?.LogDebug("海康设置缓存节点失败: {Error}", MvsNative.Error(code));
+
+            // 连续采集是实时检测默认模式；触发模式通过 CameraParameterSet 显式开启。
+            SetEnumIfSupported("AcquisitionMode", MvsNative.AcquisitionContinuous);
+            var parameters = options.Parameters ?? new CameraParameterSet
+            {
+                Width = options.DesiredWidth,
+                Height = options.DesiredHeight,
+                FrameRate = options.DesiredFps,
+            };
+            ApplyParameters(parameters, throwOnError: false);
+            if (parameters.TriggerMode is null) SetEnumIfSupported("TriggerMode", MvsNative.TriggerOff);
+
+            var width = ReadInt("Width", 0);
+            var height = ReadInt("Height", 0);
+            var payload = ReadInt("PayloadSize", 0);
+            if (width <= 0 || height <= 0) throw new InvalidOperationException("无法读取海康相机图像尺寸");
+            _bufferSize = checked(Math.Max(width * height * 3, Math.Max(payload * 3, 4 * 1024 * 1024)));
+            _buffer = Marshal.AllocHGlobal(_bufferSize);
+            Capabilities = new CameraCapabilities
+            {
+                SupportedModes = [new CameraMode { Width = width, Height = height, Fps = ReadFloat("AcquisitionFrameRate", options.DesiredFps ?? 0) }],
+                SupportsExposureControl = true,
+                SupportsGainControl = true,
+                SupportsTrigger = true,
+            };
+            State = CameraSessionState.Idle;
+        }
     }
 
     private async Task CaptureLoopAsync(CancellationToken cancellationToken)
@@ -271,15 +325,17 @@ internal sealed class HikvisionCameraSession(CameraDescriptor descriptor, ILogge
         {
             try { await _pauseGate.WaitIfPausedAsync(cancellationToken); }
             catch (OperationCanceledException) { break; }
-            if (_handle == IntPtr.Zero || !_deviceOpened) break;
+            if (cancellationToken.IsCancellationRequested || _handle == IntPtr.Zero || !_deviceOpened) break;
 
             var info = new MvsNative.FrameInfoEx();
             var code = MvsNative.MV_CC_GetImageForBGR(_handle, _buffer, checked((uint)_bufferSize), ref info, 1000);
+            if (cancellationToken.IsCancellationRequested) break;
             if (code != MvsNative.Ok)
             {
                 failures++;
                 if (failures >= 5 && !await TryReconnectAsync(cancellationToken))
                 {
+                    if (cancellationToken.IsCancellationRequested) break;
                     Fault(CameraErrorCodes.DeviceDisconnected,
                         $"海康相机取流失败，已尝试自动重连：{MvsNative.Error(code)}", recoverable: true);
                     break;
@@ -309,15 +365,26 @@ internal sealed class HikvisionCameraSession(CameraDescriptor descriptor, ILogge
             try
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(2000, attempt * 200)), cancellationToken);
-                OpenNative(_options);
-                var code = MvsNative.MV_CC_StartGrabbing(_handle);
-                if (code == MvsNative.Ok)
+                lock (_nativeGate)
                 {
-                    State = CameraSessionState.Streaming;
-                    logger?.LogInformation("海康相机自动重连成功，第 {Attempt} 次尝试", attempt);
-                    return true;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    OpenNative(_options);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var code = MvsNative.MV_CC_StartGrabbing(_handle);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (code == MvsNative.Ok)
+                    {
+                        State = CameraSessionState.Streaming;
+                        logger?.LogInformation("海康相机自动重连成功，第 {Attempt} 次尝试", attempt);
+                        return true;
+                    }
+                    ReleaseNative();
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
                 ReleaseNative();
+                return false;
             }
             catch (Exception ex)
             {
@@ -422,6 +489,7 @@ internal sealed class HikvisionCameraSession(CameraDescriptor descriptor, ILogge
 
     private void Fault(string code, string message, bool recoverable)
     {
+        if (Volatile.Read(ref _disposeRequested) != 0 || _cts.IsCancellationRequested) return;
         State = CameraSessionState.Faulted;
         if (Interlocked.Exchange(ref _faultRaised, 1) == 0)
         {

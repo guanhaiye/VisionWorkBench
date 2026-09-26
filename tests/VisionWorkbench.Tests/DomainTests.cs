@@ -290,6 +290,21 @@ public sealed class DomainTests
     }
 
     [Fact]
+    public void Concurrent_Adjustments_Audit_Only_Their_Own_Change()
+    {
+        const int count = 10000;
+        var service = new CountingService("c1");
+        var adjustments = new CountingAdjustment[count];
+
+        Parallel.For(0, count, index =>
+            adjustments[index] = service.Adjust(1, "并发修正", "operator"));
+
+        Assert.Equal(count, service.State.CurrentTotal);
+        Assert.All(adjustments, change => Assert.Equal(1, change.After - change.Before));
+        Assert.Equal(count, adjustments.Select(change => change.Before).Distinct().Count());
+    }
+
+    [Fact]
     public void ApplyOutput_Feeds_Counter_From_Algorithm_Events()
     {
         var service = new CountingService("c1");

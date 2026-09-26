@@ -39,19 +39,28 @@ public sealed class WorkerProcess : IAsyncDisposable
 {
     private readonly WorkerProcessOptions _options;
     private readonly ILogger _logger;
+    private readonly IDisposable? _loggerLifetime;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<ProtocolEnvelope<JsonElement>>> _pending = new();
     private readonly TaskCompletionSource<HelloPayload> _hello =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource _loopsCts = new();
-    private readonly object _writeLock = new();
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly object _lifecycleLock = new();
+    private Task? _stdoutTask;
+    private Task? _stderrTask;
+    private Task? _shutdownTask;
+    private Task? _disposeTask;
+    private int _started;
+    private int _disposeRequested;
     private Process? _process;
     private long _messageCounter;
     private long _garbageLines;
 
-    public WorkerProcess(WorkerProcessOptions options, ILogger logger)
+    public WorkerProcess(WorkerProcessOptions options, ILogger logger, IDisposable? loggerLifetime = null)
     {
         _options = options;
         _logger = logger;
+        _loggerLifetime = loggerLifetime;
     }
 
     /// <summary>Worker 主动推送的事件消息（type=event，无 correlationId）。</summary>
@@ -70,8 +79,14 @@ public sealed class WorkerProcess : IAsyncDisposable
     public int PendingRequestCount => _pending.Count;
 
     /// <summary>启动进程并等待 hello，校验协议版本（文档 §13.4）。</summary>
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeRequested) != 0, this);
+        if (Interlocked.Exchange(ref _started, 1) != 0)
+        {
+            throw new InvalidOperationException("Worker 进程不能重复启动");
+        }
         var psi = new ProcessStartInfo
         {
             FileName = _options.ExecutablePath,
@@ -97,19 +112,29 @@ public sealed class WorkerProcess : IAsyncDisposable
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _process.Exited += (_, _) => OnProcessExited();
-        _process.Start();
+        try
+        {
+            _process.Start();
+        }
+        catch
+        {
+            _process.Dispose();
+            _process = null;
+            throw;
+        }
         _logger.LogInformation("Worker 进程已启动 PID={Pid}: {Exe} {Args}",
             _process.Id, _options.ExecutablePath, _options.Arguments);
 
-        _ = Task.Run(() => ReadStdoutLoopAsync(_loopsCts.Token));
-        _ = Task.Run(() => ReadStderrLoopAsync(_loopsCts.Token));
+        _stdoutTask = ReadStdoutLoopAsync(_loopsCts.Token);
+        _stderrTask = ReadStderrLoopAsync(_loopsCts.Token);
+        return Task.CompletedTask;
     }
 
     /// <summary>启动 → hello 的完整握手。</summary>
     public async Task<HelloPayload> StartAndWaitHelloAsync(CancellationToken cancellationToken)
     {
         await StartAsync(cancellationToken);
-        var hello = await WithTimeoutAsync(_hello.Task, _options.HelloTimeout, "hello");
+        var hello = await WithTimeoutAsync(_hello.Task, _options.HelloTimeout, "hello", cancellationToken);
         if (!ProtocolVersions.IsSupported(hello.ProtocolVersion))
         {
             throw new AlgorithmFaultException(
@@ -127,7 +152,7 @@ public sealed class WorkerProcess : IAsyncDisposable
         var response = await RequestAsync(
             MessageType.Initialize, init, _options.ReadyTimeout, cancellationToken);
         var ready = ProtocolMessage.DeserializePayload<ReadyPayload>(response.Payload) ?? new ReadyPayload();
-        if (!ready.Success)
+        if (response.Type != MessageType.Ready || !ready.Success)
         {
             throw new AlgorithmFaultException(
                 ready.ErrorCode ?? WorkerErrorCodes.ModelLoadFailed,
@@ -140,22 +165,31 @@ public sealed class WorkerProcess : IAsyncDisposable
     public async Task<ProtocolEnvelope<JsonElement>> RequestAsync(
         string type, object payload, TimeSpan? timeout, CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_loopsCts.IsCancellationRequested && _process is null, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeRequested) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
         var messageId = NextMessageId();
         var completion = new TaskCompletionSource<ProtocolEnvelope<JsonElement>>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var requestTimeout = timeout ?? _options.RequestTimeout;
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestCancellation.CancelAfter(requestTimeout);
         _pending[messageId] = completion;
         try
         {
-            await SendMessageAsync(type, messageId, payload, null, cancellationToken);
-            var envelope = await WithTimeoutAsync(
-                completion.Task, timeout ?? _options.RequestTimeout, messageId);
+            await SendMessageAsync(type, messageId, payload, null, requestCancellation.Token)
+                .WaitAsync(requestCancellation.Token);
+            var envelope = await completion.Task.WaitAsync(requestCancellation.Token);
             if (envelope.Type == MessageType.Error)
             {
                 var error = ProtocolMessage.DeserializePayload<ErrorPayload>(envelope.Payload) ?? new();
                 throw new AlgorithmFaultException(error.Code, error.Message);
             }
             return envelope;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested
+            && requestCancellation.IsCancellationRequested)
+        {
+            throw new TimeoutException($"请求 {messageId} 超时（{requestTimeout.TotalSeconds:F0}s）");
         }
         finally
         {
@@ -185,16 +219,19 @@ public sealed class WorkerProcess : IAsyncDisposable
         }
         try
         {
-            // 管道写入本身极短，同步加锁写避免多请求行交错
-            await Task.Run(() =>
+            // 只取消排队等待；已开始的 JSON 行必须写完，避免半行与下一请求拼接。
+            // 请求方通过 WaitAsync 取消等待，关闭时终止进程可解除堵塞的管道写入。
+            await _writeLock.WaitAsync(cancellationToken);
+            try
             {
-                lock (_writeLock)
-                {
-                    writer.Write(line);
-                    writer.Write('\n');
-                    writer.Flush();
-                }
-            }, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                await writer.WriteLineAsync(line.AsMemory());
+                await writer.FlushAsync();
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
@@ -204,49 +241,81 @@ public sealed class WorkerProcess : IAsyncDisposable
     }
 
     /// <summary>优雅关闭：发送 shutdown → 有限等待 → 强杀（PLG-011）。</summary>
-    public async Task ShutdownAsync()
+    public Task ShutdownAsync()
     {
-        var process = _process;
-        _loopsCts.Cancel();
-        if (process is null || process.HasExited)
+        lock (_lifecycleLock)
         {
-            return;
-        }
-        try
-        {
-            using var quick = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await SendMessageAsync(MessageType.Shutdown, NextMessageId(), new { }, null, quick.Token);
-        }
-        catch (Exception)
-        {
-            // 优雅关闭是尽力而为
-        }
-
-        try
-        {
-            using var wait = new CancellationTokenSource(_options.ShutdownTimeout);
-            await process.WaitForExitAsync(wait.Token);
-            _logger.LogInformation("Worker 已优雅退出 PID={Pid}", process.Id);
-        }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-                _logger.LogWarning("Worker 未响应 shutdown，已强制结束 PID={Pid}", process.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "强制结束 Worker 失败 PID={Pid}", process.Id);
-            }
+            return _shutdownTask ??= ShutdownCoreAsync();
         }
     }
 
-    public async ValueTask DisposeAsync()
+    private async Task ShutdownCoreAsync()
     {
-        await ShutdownAsync();
-        _process?.Dispose();
-        _loopsCts.Dispose();
+        var process = _process;
+        try
+        {
+            if (process is null || process.HasExited) return;
+            try
+            {
+                using var quick = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await SendMessageAsync(MessageType.Shutdown, NextMessageId(), new { }, null, quick.Token)
+                    .WaitAsync(quick.Token);
+            }
+            catch (Exception)
+            {
+                // 优雅关闭是尽力而为。
+            }
+
+            try
+            {
+                using var wait = new CancellationTokenSource(_options.ShutdownTimeout);
+                await process.WaitForExitAsync(wait.Token);
+                _logger.LogInformation("Worker 已优雅退出 PID={Pid}", process.Id);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                    _logger.LogWarning("Worker 未响应 shutdown，已强制结束 PID={Pid}", process.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "强制结束 Worker 失败 PID={Pid}", process.Id);
+                }
+            }
+        }
+        finally
+        {
+            // 退出前持续读取 stdout/stderr，否则 Worker 写日志时会填满管道、无法正常退出。
+            _loopsCts.Cancel();
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_lifecycleLock)
+        {
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Interlocked.Exchange(ref _disposeRequested, 1);
+        try
+        {
+            await ShutdownAsync();
+            await Task.WhenAll(_stdoutTask ?? Task.CompletedTask, _stderrTask ?? Task.CompletedTask);
+        }
+        finally
+        {
+            _process?.Dispose();
+            _process = null;
+            _loopsCts.Dispose();
+            _loggerLifetime?.Dispose();
+        }
     }
 
     private async Task ReadStdoutLoopAsync(CancellationToken cancellationToken)
@@ -303,22 +372,29 @@ public sealed class WorkerProcess : IAsyncDisposable
             }
             if (envelope.Type == MessageType.Hello)
             {
-                var hello = ProtocolMessage.DeserializePayload<HelloPayload>(envelope.Payload);
-                _hello.TrySetResult(hello ?? new HelloPayload());
+                try
+                {
+                    var hello = ProtocolMessage.DeserializePayload<HelloPayload>(envelope.Payload);
+                    _hello.TrySetResult(hello ?? new HelloPayload());
+                }
+                catch (JsonException ex)
+                {
+                    Interlocked.Increment(ref _garbageLines);
+                    _logger.LogWarning(ex, "Worker hello 负载无法解析");
+                }
                 continue;
             }
             if (envelope.Type == MessageType.Event)
             {
                 if (envelope.Payload is { } payload)
                 {
-                    EventReceived?.Invoke(this, payload);
+                    InvokeHandlers(EventReceived, payload);
                 }
                 continue;
             }
             if (envelope.Type == MessageType.Error)
             {
-                var error = ProtocolMessage.DeserializePayload<ErrorPayload>(envelope.Payload) ?? new();
-                _logger.LogWarning("Worker 未关联错误: {Code} {Message}", error.Code, error.Message);
+                _logger.LogWarning("Worker 未关联错误: {Payload}", envelope.Payload);
                 continue;
             }
             _logger.LogDebug("未关联的 Worker 消息 type={Type} id={Id}",
@@ -348,12 +424,16 @@ public sealed class WorkerProcess : IAsyncDisposable
             {
                 break;
             }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
 
             if (line is null)
             {
                 break;
             }
-            StderrLine?.Invoke(this, line);
+            InvokeHandlers(StderrLine, line);
         }
     }
 
@@ -379,20 +459,30 @@ public sealed class WorkerProcess : IAsyncDisposable
             }
         }
         _logger.LogWarning("Worker 进程退出 exit={Code}", code);
-        Exited?.Invoke(this, code);
+        InvokeHandlers(Exited, code);
+    }
+
+    private void InvokeHandlers<T>(EventHandler<T>? handlers, T value)
+    {
+        if (handlers is null) return;
+        foreach (EventHandler<T> handler in handlers.GetInvocationList())
+        {
+            try { handler(this, value); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Worker 事件订阅者处理失败"); }
+        }
     }
 
     private string NextMessageId() =>
         $"host-{Interlocked.Increment(ref _messageCounter):000000}";
 
-    private static async Task<T> WithTimeoutAsync<T>(Task<T> task, TimeSpan timeout, string id)
+    private static async Task<T> WithTimeoutAsync<T>(
+        Task<T> task, TimeSpan timeout, string id, CancellationToken cancellationToken)
     {
-        using var cts = new CancellationTokenSource(timeout);
         try
         {
-            return await task.WaitAsync(cts.Token);
+            return await task.WaitAsync(timeout, cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (TimeoutException)
         {
             throw new TimeoutException($"请求 {id} 超时（{timeout.TotalSeconds:F0}s）");
         }

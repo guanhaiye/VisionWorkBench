@@ -75,6 +75,19 @@ def polygon_from_mask(mask):
         return []
 
 
+def prompt_class_mapping(prompts: list[dict]) -> tuple[list[int], dict[int, dict]]:
+    """Use dense model classes while retaining each dataset class's label."""
+    dense_ids: dict[int, int] = {}
+    prompts_by_class: dict[int, dict] = {}
+    class_ids = []
+    for index, prompt in enumerate(prompts):
+        original_id = int(prompt.get("classId", index))
+        dense_id = dense_ids.setdefault(original_id, len(dense_ids))
+        prompts_by_class.setdefault(dense_id, prompt)
+        class_ids.append(dense_id)
+    return class_ids, prompts_by_class
+
+
 def main(payload: dict) -> dict:
     model_path = Path(payload.get("modelPath", ""))
     reference = Path(payload.get("referenceImage", ""))
@@ -84,16 +97,6 @@ def main(payload: dict) -> dict:
     if output_mode not in {"boxes", "contours", "both"}:
         output_mode = "both"
     model_path = ensure_model_path(model_path)
-    default_model_name = "yoloe-11s-seg.pt"
-    if not model_path.is_file() and model_path.name == default_model_name:
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        model_url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-11s-seg.pt"
-        try:
-            urllib.request.urlretrieve(model_url, model_path)
-        except Exception as error:
-            fail(f"YOLOE 默认权重自动下载失败：{error}")
-    if not model_path.is_file():
-        fail(f"YOLOE 模型不存在：{model_path}")
     if not reference.is_file():
         fail(f"参考图片不存在：{reference}")
     if not prompts:
@@ -109,20 +112,22 @@ def main(payload: dict) -> dict:
     except ImportError as error:
         fail(f"YOLOE 运行环境不完整，请安装新版 ultralytics、numpy、Pillow：{error}")
 
-    reference_width, reference_height = Image.open(reference).size
+    with Image.open(reference) as reference_image:
+        reference_width, reference_height = reference_image.size
     bboxes = []
-    class_ids = []
+    class_ids, prompts_by_class = prompt_class_mapping(prompts)
     for prompt in prompts:
         x = float(prompt["x"]) * reference_width
         y = float(prompt["y"]) * reference_height
         width = float(prompt["width"]) * reference_width
         height = float(prompt["height"]) * reference_height
         bboxes.append([x, y, x + width, y + height])
-        class_ids.append(int(prompt.get("classId", len(class_ids))))
 
     model = load_model(model_path)
     visual_prompts = {"bboxes": np.asarray(bboxes, dtype=np.float32), "cls": np.asarray(class_ids, dtype=np.int64)}
     valid_targets = [target for target in targets if target.is_file()]
+    if not valid_targets:
+        return {"results": []}
     predictions = model.predict(
         [str(target) for target in valid_targets],
         refer_image=str(reference),
@@ -143,16 +148,18 @@ def main(payload: dict) -> dict:
         classes = boxes.cls.cpu().numpy().astype(int)
         scores = boxes.conf.cpu().numpy() if getattr(boxes, "conf", None) is not None else [0.0] * len(xyxy)
         mask_values = masks.data.cpu().numpy() if masks is not None else []
-        image_width, image_height = Image.open(target).size
+        with Image.open(target) as target_image:
+            image_width, image_height = target_image.size
         for index, box in enumerate(xyxy):
             class_value = int(classes[index])
-            prompt_index = class_value if 0 <= class_value < len(prompts) else 0
-            prompt = prompts[prompt_index]
+            prompt = prompts_by_class.get(class_value)
+            if prompt is None:
+                continue
             left, top, right, bottom = [float(value) for value in box]
             x = max(0.0, min(1.0, left / image_width))
             y = max(0.0, min(1.0, top / image_height))
-            width = max(0.0, min(1.0, (right - left) / image_width))
-            height = max(0.0, min(1.0, (bottom - top) / image_height))
+            width = max(0.0, min(1.0, right / image_width) - x)
+            height = max(0.0, min(1.0, bottom / image_height) - y)
             polygon = polygon_from_mask(mask_values[index]) if index < len(mask_values) else []
             if output_mode == "contours" and len(polygon) < 3:
                 continue
