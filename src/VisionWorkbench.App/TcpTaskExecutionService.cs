@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using VisionWorkbench.Algorithms;
@@ -80,6 +81,66 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             await run.DisposeAsync();
             await modelPool.ReturnAsync(lease, lease.Session.State == AlgorithmSessionState.Ready);
         }
+    }
+
+    /// <summary>后台预热所有启用 TCP 触发的任务：提前完成算法 Worker 握手与模型加载，
+    /// 使首次 TCP 触发直接复用热会话，避免 Python/TensorRT 冷启动挤占 30 秒执行超时。单个任务失败只记录日志。</summary>
+    public async Task PrewarmConfiguredTasksAsync(CancellationToken cancellationToken = default)
+    {
+        var logger = services.LoggerFactory.CreateLogger<TcpTaskExecutionService>();
+        try
+        {
+            var tasks = await services.Tasks.ListAsync(cancellationToken);
+            foreach (var task in tasks)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsTcpTriggerEnabled(task.TriggerJson)) continue;
+                try
+                {
+                    await PrewarmTaskAsync(task.Id, cancellationToken);
+                    logger.LogInformation("TCP 任务模型预热完成: {Task} ({Station})", task.Name, task.StationCode);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "TCP 任务模型预热失败: {Task} ({Station})", task.Name, task.StationCode);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TCP 任务预热扫描失败");
+        }
+    }
+
+    /// <summary>预热单个任务的算法模型会话（幂等，重复调用不会重复创建）。相机在请求到达时再打开，避免与界面抢占物理相机。</summary>
+    public async Task PrewarmTaskAsync(long taskId, CancellationToken cancellationToken = default)
+    {
+        var task = await services.Tasks.FindAsync(taskId, cancellationToken);
+        if (task is null) return;
+        var found = await services.Recipes.FindAsync(task.Id, cancellationToken);
+        if (found?.Recipe is not { } recipe) return;
+
+        var modelPool = _models.GetOrAdd(task.Id, _ => new ModelSessionPool(services, recipe, 3));
+        await modelPool.PrewarmAsync(cancellationToken);
+    }
+
+    private static bool IsTcpTriggerEnabled(string? triggerJson)
+    {
+        if (string.IsNullOrWhiteSpace(triggerJson)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(triggerJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return false;
+            foreach (var rule in document.RootElement.EnumerateArray())
+            {
+                if (rule.TryGetProperty("Enabled", out var enabled) && enabled.ValueKind == JsonValueKind.True)
+                    return true;
+            }
+        }
+        catch (JsonException) { }
+        return false;
     }
 
     private static string CameraKey(Recipe recipe) => $"{recipe.CameraProviderId.Trim()}::{recipe.CameraDeviceId.Trim()}";
@@ -263,6 +324,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         private readonly Recipe _recipe;
         private readonly Channel<IAlgorithmSession> _available = Channel.CreateUnbounded<IAlgorithmSession>();
         private readonly SemaphoreSlim _leases;
+        private readonly SemaphoreSlim _coldStart = new(1, 1);
         private readonly Lock _gate = new();
         private readonly List<IAlgorithmSession> _all = [];
 
@@ -276,18 +338,59 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         public async Task<Lease> RentAsync(CancellationToken cancellationToken)
         {
             await _leases.WaitAsync(cancellationToken);
-            if (_available.Reader.TryRead(out var available)) return new Lease(available);
+            if (_available.Reader.TryRead(out var warmed)) return new Lease(warmed);
+            IAlgorithmSession? session = null;
             try
             {
-                var session = await _services.AlgorithmManager.CreateSessionAsync(_recipe.PluginId, cancellationToken);
-                lock (_gate) _all.Add(session);
+                // 与启动预热互斥：Worker 握手 + 模型加载全池同一时刻只允许一个，避免多个 Python 进程
+                // 同时冷启动互相拖慢而挤占 TCP 执行超时；预热完成后这里直接复用 Ready 会话。
+                await _coldStart.WaitAsync(cancellationToken);
+                try
+                {
+                    if (_available.Reader.TryRead(out warmed)) return new Lease(warmed);
+                    session = await CreateAndInitializeAsync(cancellationToken);
+                    lock (_gate) _all.Add(session);
+                }
+                finally { _coldStart.Release(); }
                 return new Lease(session);
             }
             catch
             {
+                if (session is not null) await session.DisposeAsync();
                 _leases.Release();
                 throw;
             }
+        }
+
+        /// <summary>提前创建一个 Worker 会话并完成模型加载（Ready），放入可用池。幂等。</summary>
+        public async Task PrewarmAsync(CancellationToken cancellationToken)
+        {
+            await _coldStart.WaitAsync(cancellationToken);
+            try
+            {
+                lock (_gate)
+                {
+                    if (_all.Count > 0) return;
+                }
+                var session = await CreateAndInitializeAsync(cancellationToken);
+                lock (_gate) _all.Add(session);
+                _available.Writer.TryWrite(session);
+            }
+            finally { _coldStart.Release(); }
+        }
+
+        private async Task<IAlgorithmSession> CreateAndInitializeAsync(CancellationToken cancellationToken)
+        {
+            var session = await _services.AlgorithmManager.CreateSessionAsync(_recipe.PluginId, cancellationToken);
+            if (session.State == AlgorithmSessionState.Uninitialized)
+            {
+                await session.InitializeAsync(new AlgorithmInitialization
+                {
+                    Settings = DetectionRunService.BuildAlgorithmSettings(_recipe),
+                    ExecutionProvider = _recipe.ExecutionProvider,
+                }, cancellationToken);
+            }
+            return session;
         }
 
         public async ValueTask ReturnAsync(Lease lease, bool reusable)
@@ -308,6 +411,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             lock (_gate) sessions = [.. _all];
             foreach (var session in sessions) await session.DisposeAsync();
             _leases.Dispose();
+            _coldStart.Dispose();
         }
 
         public sealed class Lease(IAlgorithmSession session)

@@ -119,6 +119,8 @@ public partial class App : System.Windows.Application
             }
             splash?.Close();
             await StartConfiguredTcpCommunicationAsync();
+            // 后台预热 TCP 任务的算法 Worker 与模型，避免重启后首次触发撞上 Python/模型冷启动超时。
+            _ = Task.Run(() => AppServices.Instance.TcpTaskExecution.PrewarmConfiguredTasksAsync(CancellationToken.None));
         }
         catch (Exception ex)
         {
