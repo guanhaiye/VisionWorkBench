@@ -17,9 +17,12 @@ from pathlib import Path
 _MODEL_CACHE = {}
 
 
+class WorkerError(Exception):
+    """An expected adapter failure that must be returned over the JSON protocol."""
+
+
 def fail(message: str) -> None:
-    print(message, file=sys.stderr)
-    raise SystemExit(2)
+    raise WorkerError(message)
 
 
 def ensure_model_path(model_path: Path) -> Path:
@@ -208,5 +211,9 @@ if __name__ == "__main__":
         print(json.dumps(main(request), ensure_ascii=False))
     except SystemExit:
         raise
+    except WorkerError as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(2)
     except Exception as error:
-        fail(f"YOLOE 智能标注失败：{type(error).__name__}: {error}")
+        print(f"YOLOE 智能标注失败：{type(error).__name__}: {error}", file=sys.stderr)
+        raise SystemExit(2)
