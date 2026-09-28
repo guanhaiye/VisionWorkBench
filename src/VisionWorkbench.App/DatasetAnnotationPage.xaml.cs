@@ -2177,8 +2177,6 @@ public partial class DatasetAnnotationPage : UserControl
         AnnotationScrollViewer.WheelZoomEnabled = !_eraserMode && !_brushMode;
         DatasetTaskTypeText.Text = $"标注类型：{typeName}";
         YoloeButton.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
-        YoloeOutputModeLabel.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
-        YoloeOutputModeCombo.Visibility = isDetection ? Visibility.Visible : Visibility.Collapsed;
         YoloeButton.IsEnabled = !_yoloeRunning;
         if (!_yoloeRunning)
         {
@@ -2813,8 +2811,7 @@ public partial class DatasetAnnotationPage : UserControl
         return true;
     }
 
-    private string GetYoloeOutputMode() =>
-        (YoloeOutputModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "both";
+    private static string GetYoloeOutputMode() => "boxes";
 
     private void ApplySmartResults(IReadOnlyList<SmartAnnotationImageResult> results, string scope, string outputMode = "both")
     {
