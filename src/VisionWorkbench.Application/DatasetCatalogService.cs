@@ -150,7 +150,7 @@ public sealed class DatasetCatalogService
             {
                 var relative = Path.GetRelativePath(dataset.RootDirectory, path);
                 var annotationPath = GetAnnotationPath(annotationDirectory, relative);
-                return new DatasetImageItem(path, relative, GetSplit(dataset, relative), File.Exists(annotationPath));
+                return new DatasetImageItem(path, relative, GetSplit(dataset, relative), File.Exists(annotationPath) && LoadAnnotation(dataset, relative).Objects.Count > 0);
             })
             .ToArray();
     }
