@@ -1210,6 +1210,18 @@ public partial class DatasetAnnotationPage : UserControl
         fit.Click += FitImageToWindow_Click;
         menu.Items.Add(fit);
 
+        if (_dataset is not null && _image is not null && _annotation is not null)
+        {
+            menu.Items.Add(new Separator());
+            var clear = new MenuItem
+            {
+                Header = "清空当前图片标注",
+                IsEnabled = _annotation.Objects.Count > 0,
+            };
+            clear.Click += ClearAnnotationsMenu_Click;
+            menu.Items.Add(clear);
+        }
+
         if (_sam1ClickMode && sam1NegativePoint is { } point)
         {
             var addNegativePoint = new MenuItem { Header = "添加排除点" };
@@ -1253,6 +1265,33 @@ public partial class DatasetAnnotationPage : UserControl
     }
 
     private void DeleteAnnotationMenu_Click(object sender, RoutedEventArgs e) => DeleteAnnotation_Click(sender, e);
+
+    private void ClearAnnotationsMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dataset is null || _image is null || _annotation is null) return;
+
+        var clearedCount = _annotation.Objects.Count;
+        if (clearedCount == 0)
+        {
+            StatusText.Text = "当前图片没有可清空的标注。";
+            return;
+        }
+
+        CancelCurrentDraw();
+        _eraserUndoSnapshot = null;
+        if (_sam1ClickMode)
+        {
+            ClearSam1HoverPreview();
+            ResetSam1Interaction();
+            Sam1Button.Content = "智能标注";
+        }
+
+        _annotation.Objects.Clear();
+        RefreshAnnotationList(-1);
+        RenderAnnotations();
+        AutoSaveAnnotation("清空标注");
+        StatusText.Text = $"已清空当前图片的 {clearedCount} 个标注，变更已自动保存。";
+    }
 
     private void FinishPolygon_Click(object sender, RoutedEventArgs e) => FinishPolygon();
 
