@@ -7,6 +7,7 @@ Ultralytics 自身的文本日志会同时输出，但宿主只消费带 event �
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -19,6 +20,51 @@ from typing import Any
 def emit(event: str, **values: Any) -> None:
     payload = {"event": event, **values}
     print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def install_checkpoint_write_retry(run_directory: Path):
+    """Atomically replace YOLO checkpoints and retry transient Windows file locks."""
+    original_write_bytes = Path.write_bytes
+    weights_directory = (run_directory / "weights").resolve()
+    max_attempts = 8
+
+    def write_bytes(path: Path, data: bytes) -> int:
+        if path.parent.resolve() != weights_directory or path.name not in {"last.pt", "best.pt"}:
+            return original_write_bytes(path, data)
+
+        for attempt in range(1, max_attempts + 1):
+            temporary_path: Path | None = None
+            try:
+                descriptor, temporary_name = tempfile.mkstemp(
+                    prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+                )
+                temporary_path = Path(temporary_name)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary_path, path)
+                return len(data)
+            except PermissionError as error:
+                if attempt == max_attempts:
+                    raise PermissionError(
+                        f"检查点 {path} 连续 {max_attempts} 次写入失败；请检查目录权限，"
+                        "并关闭正在读取该模型的程序后重试。原检查点已保留。"
+                    ) from error
+                delay = min(0.25 * (2 ** (attempt - 1)), 4.0)
+                emit("log", message=f"检查点 {path.name} 暂时无法替换，{delay:g} 秒后重试（{attempt}/{max_attempts}）。")
+                time.sleep(delay)
+            finally:
+                if temporary_path is not None:
+                    try:
+                        temporary_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+        raise RuntimeError("检查点重试逻辑异常退出。")
+
+    Path.write_bytes = write_bytes
+    return original_write_bytes
 
 
 def scalar(value: Any) -> float | None:
@@ -119,20 +165,24 @@ def train(request: dict[str, Any]) -> None:
         totalEpochs=total_epochs,
         message="YOLO11 训练已启动" + ("，正在继续已有模型" if request.get("resume") else ""),
     )
-    results = model.train(
-        data=str(data_yaml),
-        epochs=epochs,
-        batch=batch,
-        imgsz=imgsz,
-        device=device,
-        project=str(output_directory),
-        name=run_name,
-        exist_ok=True,
-        resume=bool(request.get("resume", False)),
-        save=True,
-        plots=True,
-        verbose=True,
-    )
+    original_write_bytes = install_checkpoint_write_retry(output_directory / run_name)
+    try:
+        results = model.train(
+            data=str(data_yaml),
+            epochs=epochs,
+            batch=batch,
+            imgsz=imgsz,
+            device=device,
+            project=str(output_directory),
+            name=run_name,
+            exist_ok=True,
+            resume=bool(request.get("resume", False)),
+            save=True,
+            plots=True,
+            verbose=True,
+        )
+    finally:
+        Path.write_bytes = original_write_bytes
     save_dir = Path(str(getattr(results, "save_dir", output_directory / run_name))).resolve()
     best_path = save_dir / "weights" / "best.pt"
     last_path = save_dir / "weights" / "last.pt"
