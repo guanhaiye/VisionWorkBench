@@ -335,7 +335,13 @@ public sealed class AppServices
             SopRuns,
             pendingReplayTrigger: SopProductResultReplayer);
         TcpTaskExecution = new TcpTaskExecutionService(this);
-        TcpCommunication.TaskExecutor = TcpTaskExecution.ExecuteAsync;
+        TcpCommunication.TaskExecutor = (request, cancellationToken) =>
+        {
+            var liveExecutor = LiveTaskTriggerExecutor;
+            return liveExecutor is null
+                ? TcpTaskExecution.ExecuteAsync(request, cancellationToken)
+                : liveExecutor(request, cancellationToken);
+        };
         TcpCommunication.ProjectStopped += projectCode => _ = TcpTaskExecution.ReleaseProjectAsync(projectCode);
         BackupPackages.RestoreGuard = () => StationRuns.RunningStationIds.Count == 0
             && !Yolo11Training.IsRunning
