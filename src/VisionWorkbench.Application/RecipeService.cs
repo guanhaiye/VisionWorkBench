@@ -84,6 +84,11 @@ public sealed class RecipeService(TaskRepository tasks)
             throw new ArgumentException("推理设备只能选择 cpu 或 cuda（CFG-006）");
         }
         var taskType = recipe.TaskType.Normalize();
+        if (string.Equals(recipe.PluginId.Trim(), "com.vision.atu5", StringComparison.OrdinalIgnoreCase)
+            && taskType != InspectionTaskType.SemanticSegmentation)
+        {
+            throw new ArgumentException("ATU5 仅支持语义分割任务；目标检测请使用 YOLO11 插件（CFG-005）");
+        }
         ValidateGeometry(recipe);
         ValidateSop(recipe.Sop);
         ValidateSettingsJson(recipe.SettingsJson);

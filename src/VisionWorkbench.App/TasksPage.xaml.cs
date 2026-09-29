@@ -615,6 +615,7 @@ public partial class TasksPage : UserControl
         _postProcessScript = recipe.PostProcess.Script ?? "";
         SelectPostProcessMode(_postProcessMode);
         LoadYoloSettings();
+        UpdateTaskTypeVisibility();
         RoiXText.Text = recipe.Roi?.X.ToString("0.###") ?? "0";
         RoiYText.Text = recipe.Roi?.Y.ToString("0.###") ?? "0";
         RoiWText.Text = recipe.Roi is { } r && r.Width > 0 ? r.Width.ToString("0.###") : "0";
@@ -1304,9 +1305,19 @@ public partial class TasksPage : UserControl
             _rules.Add(new RuleRow { RuleId = "count-check", Kind = nameof(RuleKind.CountEquals), ExpectedCount = 1 });
         }
         EnsureSemanticPluginBinding(isSemantic);
+        if (!isSemantic && (isCounting || isRegion || isBehavior) && IsAtu5Plugin)
+        {
+            EnsureYoloPluginBinding();
+        }
         GeneralPluginSelectorPanel.Visibility = isSemantic ? Visibility.Collapsed : Visibility.Visible;
         SemanticPluginFixedText.Visibility = isSemantic ? Visibility.Visible : Visibility.Collapsed;
-        if (isRegion && IsYoloPlugin)
+        if (isCounting && IsYoloPlugin)
+        {
+            var modelTaskItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, "detect", StringComparison.OrdinalIgnoreCase));
+            if (modelTaskItem is not null) YoloTaskCombo.SelectedItem = modelTaskItem;
+        }
+        else if (isRegion && IsYoloPlugin)
         {
             var modelTask = selectedType.Normalize() == InspectionTaskType.SemanticSegmentation ? "semantic" : "instance";
             var modelTaskItem = YoloTaskCombo.Items.OfType<ComboBoxItem>()
@@ -2054,6 +2065,30 @@ public partial class TasksPage : UserControl
     private bool IsAtu5Plugin => string.Equals(
         (PluginCombo.SelectedItem as string) ?? PluginCombo.Text,
         "com.vision.atu5", StringComparison.OrdinalIgnoreCase);
+
+    private void EnsureYoloPluginBinding()
+    {
+        if (_syncingSemanticPlugin || !IsAtu5Plugin || PluginCombo is null)
+        {
+            return;
+        }
+        var yolo = PluginCombo.Items.OfType<string>()
+            .FirstOrDefault(id => string.Equals(id, "com.vision.yolo11", StringComparison.OrdinalIgnoreCase));
+        if (yolo is null)
+        {
+            SemanticPluginFixedText.Text = "目标检测需要 YOLO11 插件，请检查 workers/yolo11。";
+            return;
+        }
+        try
+        {
+            _syncingSemanticPlugin = true;
+            PluginCombo.SelectedItem = yolo;
+        }
+        finally
+        {
+            _syncingSemanticPlugin = false;
+        }
+    }
 
     private void EnsureSemanticPluginBinding(bool isSemantic)
     {
