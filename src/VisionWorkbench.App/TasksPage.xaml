@@ -14,11 +14,19 @@
 
         <!-- 左：任务列表 -->
         <DockPanel Grid.Column="0" Margin="0,0,8,0">
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
-                <Button x:Name="NewButton" Content="新建" Click="New_Click" />
-                <Button Content="删除" Click="Delete_Click" />
-                <Button Content="刷新" Click="Refresh_Click" />
-            </StackPanel>
+            <Grid DockPanel.Dock="Top">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button x:Name="NewButton" Grid.Column="0" Content="新建" Click="New_Click"
+                        MinWidth="0" Padding="4,5" Margin="2,2" />
+                <Button Grid.Column="1" Content="删除" Click="Delete_Click"
+                        MinWidth="0" Padding="4,5" Margin="2,2" />
+                <Button Grid.Column="2" Content="刷新" Click="Refresh_Click"
+                        MinWidth="0" Padding="4,5" Margin="2,2" />
+            </Grid>
             <ListBox x:Name="TaskList" DisplayMemberPath="Name" SelectionChanged="TaskList_SelectionChanged" />
         </DockPanel>
 
