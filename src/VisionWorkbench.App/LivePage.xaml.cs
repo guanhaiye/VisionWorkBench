@@ -44,6 +44,7 @@ public partial class LivePage : UserControl
     {
         AppServices.Instance.LiveTaskTriggerExecutor = ExecuteTcpTriggerAsync;
         await LoadTasksAsync();
+        await ResumePanelsAsync();
     }
 
     private async void Page_Unloaded(object sender, RoutedEventArgs e)
@@ -54,7 +55,7 @@ public partial class LivePage : UserControl
         }
         SetRuntimeMode(false);
         SaveWorkspaceSettings();
-        await ShutdownPanelsAsync();
+        await SuspendPanelsAsync();
     }
 
     private Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken)
@@ -425,17 +426,33 @@ public partial class LivePage : UserControl
         WorkspaceStatusText.Text = $"当前工作区已添加 {_panels.Count} 个任务；可以在每个任务面板中独立开始、暂停、单次检测或结束批次。";
     }
 
-    private async Task ShutdownPanelsAsync()
+    private async Task SuspendPanelsAsync()
     {
         foreach (var panel in _panels.ToArray())
         {
             try
             {
-                await panel.ShutdownAsync();
+                await panel.SuspendAsync();
             }
             catch
             {
-                // 页面切换时尽力释放每个任务的资源，单个任务失败不影响其余任务。
+                // 页面切换时释放相机和运行实例，保留可复用的已加载模型。
+            }
+        }
+    }
+
+    private async Task ResumePanelsAsync()
+    {
+        foreach (var panel in _panels.ToArray())
+        {
+            try
+            {
+                await panel.ResumeAsync();
+            }
+            catch (Exception ex)
+            {
+                AppServices.Instance.LoggerFactory.CreateLogger<LivePage>()
+                    .LogWarning(ex, "恢复实时检测面板模型失败: {TaskId}", panel.TaskId);
             }
         }
     }

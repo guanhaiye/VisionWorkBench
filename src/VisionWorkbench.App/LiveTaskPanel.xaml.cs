@@ -192,6 +192,18 @@ public partial class LiveTaskPanel : UserControl
         TaskCombo.SelectedIndex = -1;
     }
 
+    public async Task SuspendAsync()
+    {
+        _statusTimer.Stop();
+        await CleanupAsync();
+    }
+
+    public async Task ResumeAsync()
+    {
+        _statusTimer.Start();
+        await PrepareModelAsync();
+    }
+
     public async Task ShutdownAsync()
     {
         _statusTimer.Stop();
