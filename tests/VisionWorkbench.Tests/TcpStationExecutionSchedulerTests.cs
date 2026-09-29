@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using VisionWorkbench.Application;
 using VisionWorkbench.Application.Communication;
 using VisionWorkbench.Cameras.Abstractions;
@@ -9,56 +8,39 @@ namespace VisionWorkbench.Tests;
 public sealed class TcpStationExecutionSchedulerTests
 {
     [Fact]
-    public async Task SameStation_ThreeSecondGap_AllowsFiveSecondExecutionsToOverlap()
+    public async Task SameStation_RequestsRunInOrderEvenWhenConcurrencySettingIsThree()
     {
         await using var scheduler = new TcpStationExecutionScheduler(new TcpStationExecutionScheduler.Options
         {
             MaxConcurrency = 3,
             MaxQueueLength = 20,
-            ExecutionTimeout = TimeSpan.FromSeconds(30),
+            ExecutionTimeout = TimeSpan.FromSeconds(5),
         });
         using var projectStop = new CancellationTokenSource();
-        var active = 0;
-        var maxActive = 0;
+        var firstEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        async Task<TcpTaskExecutionResult> Execute(TcpTaskExecutionRequest request, CancellationToken ct)
+        var first = scheduler.TryEnqueue(Request("req-001"), projectStop.Token, async ct =>
         {
-            var now = Interlocked.Increment(ref active);
-            while (true)
-            {
-                var previous = Volatile.Read(ref maxActive);
-                if (now <= previous || Interlocked.CompareExchange(ref maxActive, now, previous) == previous) break;
-            }
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-                return new TcpTaskExecutionResult("completed", request.TaskId, request.RequestId);
-            }
-            finally
-            {
-                Interlocked.Decrement(ref active);
-            }
-        }
-
-        var started = Stopwatch.StartNew();
-        var first = scheduler.TryEnqueue(
-            Request("req-001"), projectStop.Token, ct => Execute(Request("req-001"), ct));
-        Assert.Equal(TcpExecutionAdmission.Accepted, first.Admission);
+            firstEntered.TrySetResult(true);
+            await releaseFirst.Task.WaitAsync(ct);
+            return Result("req-001");
+        });
         first.Start!.Invoke();
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        await Task.Delay(TimeSpan.FromSeconds(3));
-        var second = scheduler.TryEnqueue(
-            Request("req-002"), projectStop.Token, ct => Execute(Request("req-002"), ct));
-        Assert.Equal(TcpExecutionAdmission.Accepted, second.Admission);
+        var second = scheduler.TryEnqueue(Request("req-002"), projectStop.Token, _ =>
+        {
+            secondEntered.TrySetResult(true);
+            return Task.FromResult(Result("req-002"));
+        });
         second.Start!.Invoke();
+        Assert.False(secondEntered.Task.IsCompleted);
+        releaseFirst.TrySetResult(true);
 
-        var results = await Task.WhenAll(first.Completion!, second.Completion!);
-        started.Stop();
-
-        Assert.True(maxActive >= 2, "同工位第二个请求没有和第一个请求重叠执行");
-        Assert.Contains(results, result => result.Decision == "req-001");
-        Assert.Contains(results, result => result.Decision == "req-002");
-        Assert.True(started.Elapsed < TimeSpan.FromSeconds(9), $"执行耗时 {started.Elapsed}");
+        Assert.Equal("req-001", (await first.Completion!).Decision);
+        Assert.Equal("req-002", (await second.Completion!).Decision);
     }
 
     [Fact]

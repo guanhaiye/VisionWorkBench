@@ -69,7 +69,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 {
     public sealed record Options
     {
-        public int MaxConcurrency { get; init; } = 3;
+        public int MaxConcurrency { get; init; } = 1;
         public int MaxQueueLength { get; init; } = 20;
         public TimeSpan ExecutionTimeout { get; init; } = TimeSpan.FromSeconds(30);
     }
@@ -189,7 +189,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         var station = new StationState
         {
             Queue = queue,
-            Workers = Enumerable.Range(0, options.MaxConcurrency)
+            Workers = Enumerable.Range(0, 1)
                 .Select(_ => WorkerLoopAsync(stationKey, queue.Reader))
                 .ToArray(),
         };
@@ -336,7 +336,7 @@ public sealed class ProjectCommunicationConfig
     public List<string> AllowedClientAddresses { get; set; } = [];
     public int MaxRequestsPerMinute { get; set; } = 1200;
     public int IdleTimeoutSeconds { get; set; } = 300;
-    public int StationMaxConcurrency { get; set; } = 3;
+    public int StationMaxConcurrency { get; set; } = 1;
     public int StationQueueLength { get; set; } = 20;
     public int StationExecutionTimeoutSeconds { get; set; } = 30;
 }
