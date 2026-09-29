@@ -18,6 +18,8 @@ public partial class CommunicationPage : UserControl
     private List<TaskEntity> _allTasks = [];
     private List<TaskEntity> _triggerTasks = [];
     private readonly HashSet<long> _pendingTriggerTaskIds = [];
+    private readonly HashSet<TcpLogEntry> _displayedTcpLogs = [];
+    private bool _tcpEventsSubscribed;
     private sealed record TriggerRuleRow(long TaskId, string DisplayText);
     private sealed class ProjectListRow(ProjectCommunicationConfig profile) : INotifyPropertyChanged
     {
@@ -43,14 +45,20 @@ public partial class CommunicationPage : UserControl
         MoveStateToBottomRight();
         ManualText.Text = "{\"command\":\"ping\",\"requestId\":\"PING-001\"}";
         _profileStore = new TcpCommunicationProfileStore(AppServices.Instance.Settings.ConfigDirectory);
-        AppServices.Instance.TcpCommunication.LogReceived += Tcp_LogReceived;
-        AppServices.Instance.TcpCommunication.StateChanged += Tcp_StateChanged;
         Loaded += CommunicationPage_Loaded;
         Unloaded += CommunicationPage_Unloaded;
     }
 
     private async void CommunicationPage_Loaded(object sender, RoutedEventArgs e)
     {
+        if (!_tcpEventsSubscribed)
+        {
+            AppServices.Instance.TcpCommunication.LogReceived += Tcp_LogReceived;
+            AppServices.Instance.TcpCommunication.StateChanged += Tcp_StateChanged;
+            _tcpEventsSubscribed = true;
+        }
+        foreach (var entry in AppServices.Instance.TcpCommunication.GetRecentLogs())
+            AppendTcpLog(entry);
         if (_profiles.Count == 0)
             await LoadProjectsAsync();
     }
@@ -59,8 +67,12 @@ public partial class CommunicationPage : UserControl
     {
         if (_profiles.Count > 0)
             TrySaveProjectParameters(refreshSelectors: false);
-        AppServices.Instance.TcpCommunication.LogReceived -= Tcp_LogReceived;
-        AppServices.Instance.TcpCommunication.StateChanged -= Tcp_StateChanged;
+        if (_tcpEventsSubscribed)
+        {
+            AppServices.Instance.TcpCommunication.LogReceived -= Tcp_LogReceived;
+            AppServices.Instance.TcpCommunication.StateChanged -= Tcp_StateChanged;
+            _tcpEventsSubscribed = false;
+        }
     }
 
     private void MoveStateToBottomRight()
@@ -601,7 +613,17 @@ public partial class CommunicationPage : UserControl
         TriggerResponseTemplateText.IsEnabled = enabled;
     }
     private void UpdateModeVisibility() { var tag = (ModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(); var server = tag == "Server"; ListenAddressText.IsEnabled = server; ListenPortText.IsEnabled = server; MaxConnectionsText.IsEnabled = server; RemoteAddressText.IsEnabled = tag == "Client"; RemotePortText.IsEnabled = tag == "Client"; }
-    private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() => { LogText.AppendText($"[{e.Timestamp:HH:mm:ss}] {e.Level} {e.Direction} {e.Message}{Environment.NewLine}"); LogText.ScrollToEnd(); ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.GetConnections(_config.ProjectCode).ToArray(); });
+    private void Tcp_LogReceived(object? sender, TcpLogEntry e) => Dispatcher.Invoke(() =>
+    {
+        AppendTcpLog(e);
+        ConnectionsList.ItemsSource = AppServices.Instance.TcpCommunication.GetConnections(_config.ProjectCode).ToArray();
+    });
+    private void AppendTcpLog(TcpLogEntry entry)
+    {
+        if (!_displayedTcpLogs.Add(entry)) return;
+        LogText.AppendText($"[{entry.Timestamp:HH:mm:ss}] {entry.Level} {entry.Direction} {entry.Message}{Environment.NewLine}");
+        LogText.ScrollToEnd();
+    }
     private void Tcp_StateChanged(object? sender, EventArgs e) => Dispatcher.Invoke(() =>
     {
         StateText.Text = AppServices.Instance.TcpCommunication.GetState(_config.ProjectCode).ToString();

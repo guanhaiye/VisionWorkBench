@@ -809,6 +809,9 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     private readonly ILogger<ProjectCommunicationManager>? _logger;
     private readonly string? _logDirectory;
     private readonly Persistence.CommunicationRequestStore? _requestStore;
+    private readonly object _logHistoryGate = new();
+    private readonly Queue<TcpLogEntry> _logHistory = new();
+    private const int LogHistoryLimit = 2000;
     private readonly ConcurrentDictionary<string, string> _completed = new();
     private readonly ConcurrentDictionary<string, byte> _processing = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> _rateWindows = new(StringComparer.Ordinal);
@@ -830,6 +833,11 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     public event EventHandler<TcpLogEntry>? LogReceived;
     public event EventHandler? StateChanged;
     public event Action<string>? ProjectStopped;
+    public IReadOnlyList<TcpLogEntry> GetRecentLogs(int maxCount = 500)
+    {
+        lock (_logHistoryGate)
+            return _logHistory.TakeLast(Math.Clamp(maxCount, 1, LogHistoryLimit)).ToArray();
+    }
     public Func<TcpTaskExecutionRequest, CancellationToken, Task<TcpTaskExecutionResult>>? TaskExecutor { get; set; }
     public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null, Persistence.CommunicationRequestStore? requestStore = null)
     {
@@ -1346,6 +1354,12 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
     private void Log(string level, string direction, string message)
     {
         var entry = new TcpLogEntry(DateTime.Now, level, direction, "", message);
+        lock (_logHistoryGate)
+        {
+            _logHistory.Enqueue(entry);
+            while (_logHistory.Count > LogHistoryLimit)
+                _logHistory.Dequeue();
+        }
         LogReceived?.Invoke(this, entry);
         if (!string.IsNullOrWhiteSpace(_logDirectory))
         {
