@@ -102,6 +102,7 @@ public sealed class AppServices
     public IServiceProvider Services { get; private set; } = null!;
     public ILoggerFactory LoggerFactory { get; private set; } = null!;
     public AlgorithmManager AlgorithmManager { get; private set; } = null!;
+    public AlgorithmSessionCache AlgorithmSessions { get; private set; } = null!;
     public CameraRegistry Cameras { get; private set; } = null!;
     public TempImageStore TempImages { get; private set; } = null!;
     public VisionDbContextFactory Database { get; private set; } = null!;
@@ -326,6 +327,7 @@ public sealed class AppServices
             LogsDirectory = logsDir,
             ExecutionProvider = Settings.ExecutionProvider,
         }, loggerFactory.CreateLogger<AlgorithmManager>());
+        AlgorithmSessions = new AlgorithmSessionCache(AlgorithmManager);
         ReInference = new ReInferenceService(Records, Recipes, AlgorithmManager);
         StationRuns = new StationRunCoordinator(
             Records, Batches, TempImages, ResultPublisher,

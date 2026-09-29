@@ -23,8 +23,7 @@ public sealed class ImageFolderProvider(ILogger? logger = null) : ICameraProvide
     }
 }
 
-internal sealed class ImageFolderSession(
-    CameraDescriptor descriptor, ILogger? logger) : ICameraSession
+internal sealed class ImageFolderSession(CameraDescriptor descriptor, ILogger? logger) : IImageFolderCameraSession
 {
     private static readonly string[] Extensions = [".jpg", ".jpeg", ".png", ".bmp"];
     private readonly CancellationTokenSource _cts = new();
@@ -32,6 +31,7 @@ internal sealed class ImageFolderSession(
     private Task? _loopTask;
     private long _sequence;
     private int _badFiles;
+    private IReadOnlyList<string> _fileSnapshot = [];
     private int _intervalMs;
     private bool _loop;
     private int? _maxFrames;
@@ -41,7 +41,8 @@ internal sealed class ImageFolderSession(
     public CameraDescriptor Descriptor { get; } = descriptor;
     public CameraSessionState State { get; private set; } = CameraSessionState.Idle;
     public CameraCapabilities Capabilities { get; } = new() { SupportsExposureControl = false };
-    public int SkippedFileCount => _badFiles;
+    public int SkippedFileCount => Volatile.Read(ref _badFiles);
+    public IReadOnlyList<string> FileSnapshot => _fileSnapshot;
 
     public event EventHandler<VideoFrameReceivedEventArgs>? FrameReceived;
     public event EventHandler<CameraFaultedEventArgs>? Faulted;
@@ -63,6 +64,7 @@ internal sealed class ImageFolderSession(
             }));
             return Task.CompletedTask;
         }
+        _fileSnapshot = options.ImageFiles?.ToArray() ?? EnumerateImages(dir).ToArray();
         _intervalMs = options.FrameIntervalMs;
         _loop = options.Loop;
         _maxFrames = options.MaxFrames;
@@ -81,7 +83,7 @@ internal sealed class ImageFolderSession(
         }
         State = CameraSessionState.Streaming;
         _loopTask = Task.Run(() => RunAsync(
-            Descriptor.DeviceId,
+            _fileSnapshot,
             TimeSpan.FromMilliseconds(Math.Max(0, _intervalMs)),
             _loop,
             _cts.Token));
@@ -141,11 +143,11 @@ internal sealed class ImageFolderSession(
         State = CameraSessionState.Closed;
     }
 
-    private async Task RunAsync(string dir, TimeSpan interval, bool loop, CancellationToken ct)
+    private async Task RunAsync(IReadOnlyList<string> files, TimeSpan interval, bool loop, CancellationToken ct)
     {
         try
         {
-            await PlayAsync(dir, interval, loop, ct);
+            await PlayAsync(files, interval, loop, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -153,7 +155,7 @@ internal sealed class ImageFolderSession(
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "图片目录播放失败: {Directory}", dir);
+            logger?.LogWarning(ex, "图片目录播放失败: {Directory}", Descriptor.DeviceId);
             State = CameraSessionState.Faulted;
             Faulted?.Invoke(this, new CameraFaultedEventArgs(new CameraFault
             {
@@ -172,14 +174,14 @@ internal sealed class ImageFolderSession(
         }
     }
 
-    private async Task PlayAsync(string dir, TimeSpan interval, bool loop, CancellationToken ct)
+    private async Task PlayAsync(IReadOnlyList<string> files, TimeSpan interval, bool loop, CancellationToken ct)
     {
         var emittedFrames = 0;
         var startFrameIndex = _startFrameIndex;
         while (!ct.IsCancellationRequested)
         {
             var framesBeforePass = emittedFrames;
-            foreach (var file in EnumerateImages(dir).Skip(startFrameIndex))
+            foreach (var file in files.Skip(startFrameIndex))
             {
                 if (ct.IsCancellationRequested)
                 {

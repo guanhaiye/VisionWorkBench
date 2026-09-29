@@ -81,7 +81,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         public required TaskCompletionSource<TcpTaskExecutionResult> Completion { get; init; }
         public TcpTaskExecutionResult? Result;
         public string? TerminalCode;
-        public bool Finished;
+        public int Finished;
     }
 
     private sealed class WorkItem
@@ -108,7 +108,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     private readonly Options _defaultOptions;
     private readonly CancellationTokenSource _stop = new();
-    private readonly ConcurrentDictionary<string, StationState> _stations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<StationState>> _stations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, RequestState> _requests = new(StringComparer.Ordinal);
 
     public TcpStationExecutionScheduler(Options? options = null)
@@ -132,7 +132,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         var key = $"{request.ProjectCode}:{request.RequestId}";
         if (_requests.TryGetValue(key, out var existing))
         {
-            return existing.Finished
+            return Volatile.Read(ref existing.Finished) == 1
                 ? new(TcpExecutionAdmission.Completed, CachedResult: existing.Result, TerminalCode: existing.TerminalCode)
                 : new(TcpExecutionAdmission.Processing);
         }
@@ -151,8 +151,8 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         var stationKey = string.IsNullOrWhiteSpace(request.StationCode)
             ? $"task:{request.TaskId}"
             : request.StationCode.Trim();
-        stationKey = $"{request.ProjectCode}\u001f{stationKey}";
-        var station = _stations.GetOrAdd(stationKey, _ => CreateStation(stationKey, options));
+        var station = _stations.GetOrAdd(stationKey, key => new Lazy<StationState>(
+            () => CreateStation(key, options), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
         var startGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var item = new WorkItem
         {
@@ -218,16 +218,16 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                     timeout.CancelAfter(item.Options.ExecutionTimeout);
                     var result = await item.Execute(timeout.Token);
                     item.Request.Result = result;
-                    item.Request.Finished = true;
+                    Volatile.Write(ref item.Request.Finished, 1);
                     item.Request.Completion.TrySetResult(result);
                 }
                 catch (OperationCanceledException)
                 {
                     if (!item.ProjectCancellation.IsCancellationRequested
                         && !_stop.IsCancellationRequested
-                        && !item.Request.Finished)
+                        && Volatile.Read(ref item.Request.Finished) == 0)
                     {
-                        item.Request.Finished = true;
+                        Volatile.Write(ref item.Request.Finished, 1);
                         item.Request.TerminalCode = "execution_timeout";
                         item.Request.Completion.TrySetException(new TcpExecutionTimeoutException(
                             $"工位任务超过 {item.Options.ExecutionTimeout.TotalSeconds:0.#} 秒执行超时"));
@@ -239,7 +239,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    item.Request.Finished = true;
+                    Volatile.Write(ref item.Request.Finished, 1);
                     item.Request.Completion.TrySetException(ex);
                 }
                 finally
@@ -259,20 +259,17 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     public async Task RemoveProjectAsync(string projectCode)
     {
-        var prefix = projectCode + "\u001f";
-        var removed = _stations
-            .Where(pair => pair.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            .Select(pair => pair.Key)
+        // Station queues are shared across TCP projects to preserve physical station
+        // order. The caller cancels this project's token first; wait for its active
+        // work to observe cancellation without tearing down another project's queue.
+        var pending = _requests.Values
+            .Where(state => string.Equals(state.ProjectCode, projectCode, StringComparison.OrdinalIgnoreCase)
+                && Volatile.Read(ref state.Finished) == 0)
+            .Select(state => state.Completion.Task)
             .ToArray();
-        var states = new List<StationState>();
-        foreach (var key in removed)
-            if (_stations.TryRemove(key, out var state))
-            {
-                state.Queue.Writer.TryComplete();
-                states.Add(state);
-            }
-        foreach (var state in states)
-            await state.DisposeAsync();
+        if (pending.Length == 0) return;
+        try { await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch { /* A stopped project may finish by cancellation or timeout. */ }
     }
 
     private static Options Normalize(Options options) => options with
@@ -286,9 +283,9 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
     {
         _stop.Cancel();
         foreach (var state in _stations.Values)
-            state.Queue.Writer.TryComplete();
+            state.Value.Queue.Writer.TryComplete();
         foreach (var state in _stations.Values)
-            await state.DisposeAsync();
+            await state.Value.DisposeAsync();
         foreach (var request in _requests.Values)
             request.Completion.TrySetCanceled();
         _requests.Clear();

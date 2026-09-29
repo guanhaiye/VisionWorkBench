@@ -86,6 +86,7 @@ public partial class LiveTaskPanel : UserControl
     private DetectionRunService? _run;
     private IAlgorithmSession? _algorithmSession;
     private readonly Dictionary<string, IAlgorithmSession> _sopAlgorithmSessions = new(StringComparer.Ordinal);
+    private readonly List<AlgorithmSessionCache.SessionUseLease> _algorithmSessionUses = [];
     private ICameraSession? _cameraSession;
     private long _okCount;
     private long _ngCount;
@@ -98,6 +99,8 @@ public partial class LiveTaskPanel : UserControl
     private int _reconnectInProgress;
     private int _singleFrameNextIndex;
     private int _offlineImageTotal;
+    private int _offlineProcessed;
+    private IReadOnlyList<string> _offlineImageFiles = [];
     private int _offlineImageStartIndex;
     // 仅用于界面“单帧检测”按钮；TCP 触发不再使用此锁。
     private bool _manualSingleFrameBusy;
@@ -228,12 +231,6 @@ public partial class LiveTaskPanel : UserControl
         await _modelPrepareGate.WaitAsync();
         try
         {
-            if (_algorithmSession is { State: AlgorithmSessionState.Ready }
-                && _preparedTaskId == item.Id)
-            {
-                return;
-            }
-
             await DisposePreparedModelsAsync();
 
             var found = await AppServices.Instance.Recipes.FindAsync(item.Id);
@@ -263,40 +260,26 @@ public partial class LiveTaskPanel : UserControl
                 })];
             }
 
-            var created = new List<IAlgorithmSession>();
-            try
+            foreach (var model in modelDefinitions)
             {
-                foreach (var model in modelDefinitions)
+                var modelRecipe = recipe with
                 {
-                    var session = await AppServices.Instance.AlgorithmManager.CreateSessionAsync(
-                        model.Execution.PluginId, CancellationToken.None);
-                    created.Add(session);
-                    var modelRecipe = recipe with
-                    {
-                        PluginId = model.Execution.PluginId,
-                        TaskType = model.Execution.TaskType,
-                        ExecutionProvider = model.Execution.ExecutionProvider,
-                        SettingsJson = model.Execution.SettingsJson,
-                        Roi = model.Execution.Roi,
-                        RoiPolicy = model.Execution.RoiPolicy,
-                        Rules = model.Execution.Rules,
-                    };
-                    await session.InitializeAsync(new AlgorithmInitialization
+                    PluginId = model.Execution.PluginId,
+                    TaskType = model.Execution.TaskType,
+                    ExecutionProvider = model.Execution.ExecutionProvider,
+                    SettingsJson = model.Execution.SettingsJson,
+                    Roi = model.Execution.Roi,
+                    RoiPolicy = model.Execution.RoiPolicy,
+                    Rules = model.Execution.Rules,
+                };
+                var session = await AppServices.Instance.AlgorithmSessions.GetOrInitializeAsync(
+                    model.Execution.PluginId,
+                    new AlgorithmInitialization
                     {
                         Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
                         ExecutionProvider = model.Execution.ExecutionProvider,
-                    }, CancellationToken.None);
-                    _sopAlgorithmSessions[model.Id] = session;
-                }
-            }
-            catch
-            {
-                foreach (var session in created)
-                {
-                    await session.DisposeAsync();
-                }
-                _sopAlgorithmSessions.Clear();
-                throw;
+                    });
+                _sopAlgorithmSessions[model.Id] = session;
             }
 
             _algorithmSession = _sopAlgorithmSessions.Values.First();
@@ -887,6 +870,12 @@ public partial class LiveTaskPanel : UserControl
             {
                 _run.SourceCompleted += async (_, _) => await Dispatcher.InvokeAsync(StopFromSourceEnd);
             }
+            foreach (var modelSession in _sopAlgorithmSessions.Values
+                .DistinctBy(session => session.SessionId)
+                .OrderBy(session => session.SessionId, StringComparer.Ordinal))
+            {
+                _algorithmSessionUses.Add(await svcs.AlgorithmSessions.AcquireUseAsync(modelSession));
+            }
             await _run.StartAsync(
                 recipe, entity.Id, _cameraSession, _algorithmSession, batch.Id,
                 routingStrategy: IsFiniteInputSource(recipe) ? FrameRoutingStrategy.Bounded : FrameRoutingStrategy.LatestOnly,
@@ -1072,14 +1061,17 @@ public partial class LiveTaskPanel : UserControl
                     StatusText.Text = "输入源已结束，但等待最后一帧处理超时。";
                 }
             }
-            var processed = _tcpOfflineProcessed;
+            var processed = Volatile.Read(ref _tcpOfflineProcessed);
             var lastRecord = _tcpOfflineLastRecord;
+            var skipped = (_cameraSession as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
+            if (_offlineImageTotal > 0)
+                OfflineProgressText.Text = $"离线图片：{Math.Min(_offlineImageTotal, processed + skipped)} / {_offlineImageTotal}";
             await StopBatchCoreAsync();
             if (_tcpOfflineCompletion is { } completion)
             {
-                if (lastRecord is null || processed != _offlineImageTotal)
+                if (lastRecord is null || processed + skipped != _offlineImageTotal)
                     completion.TrySetException(new InvalidOperationException(
-                        $"离线图片只完成 {processed}/{_offlineImageTotal} 张检测"));
+                        $"离线图片检测未完整完成：成功 {processed} 张，跳过 {skipped} 张，共 {_offlineImageTotal} 张"));
                 else
                     completion.TrySetResult(new TcpTaskExecutionResult(
                         "completed", lastRecord.CountAfter, lastRecord.Decision.Status.ToString(), lastRecord.Record.Id));
@@ -1106,6 +1098,9 @@ public partial class LiveTaskPanel : UserControl
             await _run.DisposeAsync();
             _run = null;
         }
+        for (var index = _algorithmSessionUses.Count - 1; index >= 0; index--)
+            await _algorithmSessionUses[index].DisposeAsync();
+        _algorithmSessionUses.Clear();
         if (disposeAlgorithm || _algorithmSession?.State == AlgorithmSessionState.Faulted)
         {
             await DisposePreparedModelsAsync();
@@ -1119,21 +1114,13 @@ public partial class LiveTaskPanel : UserControl
         await Dispatcher.InvokeAsync(() => SetButtons(running: false));
     }
 
-    private async Task DisposePreparedModelsAsync()
+    private Task DisposePreparedModelsAsync()
     {
-        var sessions = _sopAlgorithmSessions.Values
-            .Append(_algorithmSession)
-            .Where(session => session is not null)
-            .Cast<IAlgorithmSession>()
-            .Distinct()
-            .ToArray();
+        // The application cache owns session lifetime; this panel only drops its references.
         _sopAlgorithmSessions.Clear();
         _algorithmSession = null;
         _preparedTaskId = 0;
-        foreach (var session in sessions)
-        {
-            await session.DisposeAsync();
-        }
+        return Task.CompletedTask;
     }
 
     private async void OnRunFaulted(object? sender, RunFaultedEventArgs e)
@@ -1207,7 +1194,13 @@ public partial class LiveTaskPanel : UserControl
             DeviceId = recipe.CameraDeviceId,
             DisplayName = recipe.CameraDeviceId,
         };
-        var options = _cameraOptions with { Parameters = recipe.CameraParameters };
+        var options = _cameraOptions with
+        {
+            Parameters = recipe.CameraParameters,
+            ImageFiles = string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase)
+                ? _offlineImageFiles
+                : null,
+        };
         if (singleFrame && recipe.CameraProviderId is ("image-folder" or "video-file"))
         {
             options = options with { MaxFrames = 1, StartFrameIndex = _singleFrameNextIndex };
@@ -1242,13 +1235,6 @@ public partial class LiveTaskPanel : UserControl
             _preview.Render(PreviewImage, frame);
             FitPreviewAfterSourceLoaded();
             _lastRenderedPreviewSequence = frame.Sequence;
-            if (_offlineImageTotal > 0)
-            {
-                var currentIndex = Math.Min(
-                    (long)_offlineImageTotal,
-                    _offlineImageStartIndex + frame.Sequence);
-            OfflineProgressText.Text = $"离线图片：{currentIndex} / {_offlineImageTotal}";
-            }
         });
     }
 
@@ -1335,15 +1321,21 @@ public partial class LiveTaskPanel : UserControl
             || !Directory.Exists(recipe.CameraDeviceId))
         {
             _offlineImageTotal = 0;
+            _offlineImageFiles = [];
             _offlineImageStartIndex = 0;
             OfflineProgressText.Visibility = Visibility.Collapsed;
             return;
         }
 
-        _offlineImageTotal = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
-            .Count(file => OfflineImageExtensions.Contains(
-                System.IO.Path.GetExtension(file), StringComparer.OrdinalIgnoreCase));
+        _offlineImageFiles = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
+            .Where(file => OfflineImageExtensions.Contains(
+                System.IO.Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+            .OrderBy(file => file, StringComparer.Ordinal)
+            .ToArray();
+        _offlineImageTotal = _offlineImageFiles.Count;
+        Interlocked.Exchange(ref _offlineProcessed, 0);
         _offlineImageStartIndex = singleFrame ? _singleFrameNextIndex : 0;
+        if (!singleFrame) Interlocked.Exchange(ref _tcpOfflineProcessed, 0);
         OfflineProgressText.Text = $"离线图片：{_offlineImageStartIndex} / {_offlineImageTotal}";
         OfflineProgressText.Visibility = Visibility.Visible;
     }
@@ -1481,10 +1473,16 @@ public partial class LiveTaskPanel : UserControl
 
     private void OnRecordCompleted(object? sender, RecordCompletedEventArgs e)
     {
+        var processed = Interlocked.Increment(ref _offlineProcessed);
         if (_tcpOfflineCompletion is not null)
         {
             _tcpOfflineLastRecord = e;
             Interlocked.Increment(ref _tcpOfflineProcessed);
+        }
+        if (_offlineImageTotal > 0)
+        {
+            var currentIndex = Math.Min(_offlineImageTotal, _offlineImageStartIndex + processed);
+            Dispatcher.BeginInvoke(() => OfflineProgressText.Text = $"离线图片：{currentIndex} / {_offlineImageTotal}");
         }
         _algoFpsFrames++;
         var now = DateTimeOffset.UtcNow;
@@ -1556,13 +1554,6 @@ public partial class LiveTaskPanel : UserControl
                 }
                 _lastRenderedPreviewSequence = e.Frame.Sequence;
                 RenderRoi();
-                if (_offlineImageTotal > 0)
-                {
-                    var currentIndex = Math.Min(
-                        (long)_offlineImageTotal,
-                        _offlineImageStartIndex + e.Frame.Sequence);
-                    OfflineProgressText.Text = $"离线图片：{currentIndex} / {_offlineImageTotal}";
-                }
             }
             DrawOverlay(e.Output);
         });

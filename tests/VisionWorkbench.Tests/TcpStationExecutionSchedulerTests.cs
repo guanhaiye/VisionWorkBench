@@ -70,49 +70,39 @@ public sealed class TcpStationExecutionSchedulerTests
     }
 
     [Fact]
-    public async Task SameStationName_IsolatedByProject_AndQueueFullIsPerProject()
+    public async Task SameStationName_IsSharedAcrossProjects_ButDifferentStationsCanRunConcurrently()
     {
         await using var scheduler = new TcpStationExecutionScheduler();
         using var stopA = new CancellationTokenSource();
         using var stopB = new CancellationTokenSource();
-        var releaseA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var enteredA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseB = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var aOptions = new TcpStationExecutionScheduler.Options
+        var releaseA = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var enteredB = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var enteredOtherStation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var options = new TcpStationExecutionScheduler.Options
         {
-            MaxConcurrency = 1, MaxQueueLength = 1, ExecutionTimeout = TimeSpan.FromSeconds(10),
-        };
-        var bOptions = new TcpStationExecutionScheduler.Options
-        {
-            MaxConcurrency = 2, MaxQueueLength = 2, ExecutionTimeout = TimeSpan.FromSeconds(10),
+            MaxConcurrency = 2, MaxQueueLength = 8, ExecutionTimeout = TimeSpan.FromSeconds(10),
         };
 
-        var a1 = scheduler.TryEnqueue(Request("a-1", "project-a"), stopA.Token, aOptions,
-            async ct => { enteredA.TrySetResult(true); await releaseA.Task.WaitAsync(ct); return Result("a-1"); });
-        a1.Start!.Invoke();
+        var first = scheduler.TryEnqueue(Request("project-a-1", "project-a"), stopA.Token, options,
+            async ct => { enteredA.TrySetResult(true); await releaseA.Task.WaitAsync(ct); return Result("first"); });
+        first.Start!.Invoke();
         await enteredA.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        var a2 = scheduler.TryEnqueue(Request("a-2", "project-a"), stopA.Token, aOptions,
-            _ => Task.FromResult(Result("a-2")));
-        var a3 = scheduler.TryEnqueue(Request("a-3", "project-a"), stopA.Token, aOptions,
-            _ => Task.FromResult(Result("a-3")));
-        Assert.Equal(TcpExecutionAdmission.Accepted, a1.Admission);
-        Assert.Equal(TcpExecutionAdmission.Accepted, a2.Admission);
-        Assert.Equal(TcpExecutionAdmission.QueueFull, a3.Admission);
-        a2.Start!.Invoke();
 
-        var b1 = scheduler.TryEnqueue(Request("b-1", "project-b"), stopB.Token, bOptions,
-            async ct => { await releaseB.Task.WaitAsync(ct); return Result("b-1"); });
-        b1.Start!.Invoke();
-        var b2 = scheduler.TryEnqueue(Request("b-2", "project-b"), stopB.Token, bOptions,
-            async ct => { await releaseB.Task.WaitAsync(ct); return Result("b-2"); });
-        Assert.Equal(TcpExecutionAdmission.Accepted, b1.Admission);
-        Assert.Equal(TcpExecutionAdmission.Accepted, b2.Admission);
-        b2.Start!.Invoke();
-        releaseB.TrySetResult(true);
-        await Task.WhenAll(b1.Completion!, b2.Completion!).WaitAsync(TimeSpan.FromSeconds(3));
+        var sameStationOtherProject = scheduler.TryEnqueue(Request("project-b-1", "project-b"), stopB.Token, options,
+            _ => { enteredB.TrySetResult(true); return Task.FromResult(Result("second")); });
+        sameStationOtherProject.Start!.Invoke();
+        Assert.False(enteredB.Task.IsCompleted);
+
+        var differentStation = scheduler.TryEnqueue(Request("other-station", "project-b") with { StationCode = "station-002" }, stopB.Token, options,
+            _ => { enteredOtherStation.TrySetResult(true); return Task.FromResult(Result("other")); });
+        differentStation.Start!.Invoke();
+        await enteredOtherStation.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(enteredB.Task.IsCompleted);
 
         releaseA.TrySetResult(true);
-        await Task.WhenAll(a1.Completion!, a2.Completion!).WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("first", (await first.Completion!).Decision);
+        Assert.Equal("second", (await sameStationOtherProject.Completion!).Decision);
     }
 
     [Fact]

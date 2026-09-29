@@ -83,6 +83,9 @@ public sealed record CameraOpenOptions
     /// <summary>虚拟源：从指定的帧索引开始输出，索引从 0 开始。</summary>
     public int StartFrameIndex { get; init; }
 
+    /// <summary>虚拟图片源：固定本次批次输入文件快照；null 时由 Provider 在打开时扫描。</summary>
+    public IReadOnlyList<string>? ImageFiles { get; init; }
+
     /// <summary>工业相机参数；不支持的 Provider 忽略未使用项。</summary>
     public CameraParameterSet? Parameters { get; init; }
 }
@@ -102,6 +105,12 @@ public sealed record CameraParameterSet
     public bool? AutoGain { get; init; }
 }
 
+/// <summary>图片目录会话的批次统计，用于将坏图跳过数纳入完整性判断。</summary>
+public interface IImageFolderCameraSession : ICameraSession
+{
+    IReadOnlyList<string> FileSnapshot { get; }
+    int SkippedFileCount { get; }
+}
 public sealed class VideoFrameReceivedEventArgs : EventArgs
 {
     public VideoFrame Frame { get; }

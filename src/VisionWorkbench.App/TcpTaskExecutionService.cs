@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,6 @@ namespace VisionWorkbench.App;
 public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, SharedCameraRuntime> _cameras = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<long, ModelSessionPool> _models = new();
     private readonly ConcurrentDictionary<string, int> _activeProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _projectIdle = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _stoppingProjects = new(StringComparer.OrdinalIgnoreCase);
@@ -45,11 +45,12 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken)
             ?? throw new InvalidOperationException($"任务配置不存在: {task.Name}");
         var recipe = found.Recipe;
+        if (string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase))
+            return await ExecuteOfflineImageFolderAsync(request, task, recipe, cancellationToken);
 
         var camera = _cameras.GetOrAdd(CameraKey(recipe), _ => new SharedCameraRuntime(services, recipe));
         await camera.EnsureStartedAsync(cancellationToken);
-        var modelPool = _models.GetOrAdd(task.Id, _ => new ModelSessionPool(services, recipe, 3));
-        var lease = await modelPool.RentAsync(cancellationToken);
+        var modelSessions = await GetModelSessionsAsync(recipe, cancellationToken);
         await using var assignedCamera = camera.CreateAssignedSession(request.ReceivedAt);
         var run = new DetectionRunService(
             services.Records,
@@ -65,12 +66,19 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         run.RecordCompleted += (_, result) => completion.TrySetResult(result);
         run.Faulted += (_, fault) => completion.TrySetException(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
 
+        var modelUses = new List<AlgorithmSessionCache.SessionUseLease>();
         try
         {
+            foreach (var session in modelSessions.Sop.Values
+                .DistinctBy(session => session.SessionId)
+                .OrderBy(session => session.SessionId, StringComparer.Ordinal))
+                modelUses.Add(await services.AlgorithmSessions.AcquireUseAsync(session, cancellationToken));
+
             var batch = await new BatchService(services.Batches).ResumeOrStartAsync(
                 task.Id, run.Counting, services.Records, services.Settings.DataDirectory, task.StationCode, cancellationToken);
-            await run.StartAsync(recipe, task.Id, assignedCamera, lease.Session, batch.Id,
-                FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode);
+            await run.StartAsync(recipe, task.Id, assignedCamera, modelSessions.Primary, batch.Id,
+                FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode,
+                sopAlgorithms: recipe.Sop?.Definition is not null ? modelSessions.Sop : null);
             var result = await completion.Task.WaitAsync(cancellationToken);
             await run.StopAsync();
             await new BatchService(services.Batches).EndAsync(result.CountAfter, "completed", cancellationToken);
@@ -79,10 +87,89 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         finally
         {
             await run.DisposeAsync();
-            await modelPool.ReturnAsync(lease, lease.Session.State == AlgorithmSessionState.Ready);
+            for (var index = modelUses.Count - 1; index >= 0; index--)
+                await modelUses[index].DisposeAsync();
         }
     }
 
+    private async Task<TcpTaskExecutionResult> ExecuteOfflineImageFolderAsync(
+        TcpTaskExecutionRequest request, TaskEntity task, Recipe recipe, CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(recipe.CameraDeviceId))
+            throw new DirectoryNotFoundException($"图片目录不存在: {recipe.CameraDeviceId}");
+        var extensions = new[] { ".jpg", ".jpeg", ".png", ".bmp" };
+        var files = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
+            .Where(file => extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+            .OrderBy(file => file, StringComparer.Ordinal)
+            .ToArray();
+        if (files.Length == 0)
+            throw new InvalidOperationException("图片目录没有可检测的图片");
+
+        var descriptor = new CameraDescriptor
+        {
+            ProviderId = recipe.CameraProviderId,
+            DeviceId = recipe.CameraDeviceId,
+            DisplayName = recipe.CameraDeviceId,
+        };
+        var cameraOptions = services.ApplyCameraDefaults(descriptor, new CameraOpenOptions
+        {
+            Loop = false,
+            FrameIntervalMs = 0,
+            ImageFiles = files,
+            Parameters = recipe.CameraParameters,
+        });
+        await using var camera = await services.Cameras.OpenSessionAsync(descriptor, cameraOptions, cancellationToken);
+        await camera.OpenAsync(cameraOptions, cancellationToken);
+        var modelSessions = await GetModelSessionsAsync(recipe, cancellationToken);
+        var modelUses = new List<AlgorithmSessionCache.SessionUseLease>();
+        var run = new DetectionRunService(
+            services.Records,
+            services.TempImages,
+            services.LoggerFactory.CreateLogger<DetectionRunService>(),
+            $"tcp-{task.Id}-{request.RequestId}",
+            services.ResultPublisher,
+            () => services.Settings.EnableHistory,
+            () => services.Settings.EnableHistory,
+            sopRuns: services.SopRuns,
+            pendingReplayTrigger: services.SopProductResultReplayer);
+        var sourceCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        RecordCompletedEventArgs? lastRecord = null;
+        var processed = 0;
+        run.RecordCompleted += (_, result) => { lastRecord = result; Interlocked.Increment(ref processed); };
+        run.SourceCompleted += (_, _) => sourceCompleted.TrySetResult(true);
+        run.Faulted += (_, fault) => faulted.TrySetResult(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
+        try
+        {
+            foreach (var session in modelSessions.Sop.Values
+                .DistinctBy(session => session.SessionId)
+                .OrderBy(session => session.SessionId, StringComparer.Ordinal))
+                modelUses.Add(await services.AlgorithmSessions.AcquireUseAsync(session, cancellationToken));
+
+            var batch = await new BatchService(services.Batches).ResumeOrStartAsync(
+                task.Id, run.Counting, services.Records, services.Settings.DataDirectory, task.StationCode, cancellationToken);
+            await run.StartAsync(recipe, task.Id, camera, modelSessions.Primary, batch.Id,
+                FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode,
+                sopAlgorithms: recipe.Sop?.Definition is not null ? modelSessions.Sop : null);
+            var signal = await Task.WhenAny(sourceCompleted.Task, faulted.Task).WaitAsync(cancellationToken);
+            if (signal == faulted.Task) throw await faulted.Task;
+            await sourceCompleted.Task.WaitAsync(cancellationToken);
+            await run.WaitForCompletionAsync(TimeSpan.FromMinutes(5));
+            if (faulted.Task.IsCompleted) throw await faulted.Task;
+            var skipped = (camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
+            if (lastRecord is null || processed + skipped != files.Length)
+                throw new InvalidOperationException($"离线图片检测未完整完成：成功 {processed} 张，跳过 {skipped} 张，共 {files.Length} 张");
+            await run.StopAsync();
+            await new BatchService(services.Batches).EndAsync(run.Counting.State.CurrentTotal, "completed", cancellationToken);
+            return new TcpTaskExecutionResult("completed", lastRecord.CountAfter, lastRecord.Decision.Status.ToString(), lastRecord.Record.Id);
+        }
+        finally
+        {
+            await run.DisposeAsync();
+            for (var index = modelUses.Count - 1; index >= 0; index--)
+                await modelUses[index].DisposeAsync();
+        }
+    }
     /// <summary>后台预热所有启用 TCP 触发的任务：提前完成算法 Worker 握手与模型加载，
     /// 使首次 TCP 触发直接复用热会话，避免 Python/TensorRT 冷启动挤占 30 秒执行超时。单个任务失败只记录日志。</summary>
     public async Task PrewarmConfiguredTasksAsync(CancellationToken cancellationToken = default)
@@ -122,8 +209,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken);
         if (found?.Recipe is not { } recipe) return;
 
-        var modelPool = _models.GetOrAdd(task.Id, _ => new ModelSessionPool(services, recipe, 3));
-        await modelPool.PrewarmAsync(cancellationToken);
+        await GetModelSessionsAsync(recipe, cancellationToken);
     }
 
     private static bool IsTcpTriggerEnabled(string? triggerJson)
@@ -143,6 +229,51 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         return false;
     }
 
+    private async Task<(IAlgorithmSession Primary, IReadOnlyDictionary<string, IAlgorithmSession> Sop)> GetModelSessionsAsync(
+        Recipe recipe, CancellationToken cancellationToken)
+    {
+        var definitions = recipe.Sop?.Definition?.Steps
+            .OrderBy(step => step.Order)
+            .Where(step => !string.IsNullOrWhiteSpace(step.Execution?.PluginId))
+            .Select(step => (step.Id, Execution: step.Execution!))
+            .ToArray() ?? [];
+        if (definitions.Length == 0)
+        {
+            definitions = [("__root", new SopStepExecution
+            {
+                PluginId = recipe.PluginId,
+                TaskType = recipe.TaskType,
+                ExecutionProvider = recipe.ExecutionProvider,
+                SettingsJson = recipe.SettingsJson,
+                Roi = recipe.Roi,
+                RoiPolicy = recipe.RoiPolicy,
+                Rules = recipe.Rules,
+            })];
+        }
+
+        var sessions = new Dictionary<string, IAlgorithmSession>(StringComparer.Ordinal);
+        foreach (var model in definitions)
+        {
+            var modelRecipe = recipe with
+            {
+                PluginId = model.Execution.PluginId,
+                TaskType = model.Execution.TaskType,
+                ExecutionProvider = model.Execution.ExecutionProvider,
+                SettingsJson = model.Execution.SettingsJson,
+                Roi = model.Execution.Roi,
+                RoiPolicy = model.Execution.RoiPolicy,
+                Rules = model.Execution.Rules,
+            };
+            sessions[model.Id] = await services.AlgorithmSessions.GetOrInitializeAsync(
+                model.Execution.PluginId,
+                new AlgorithmInitialization
+                {
+                    Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
+                    ExecutionProvider = model.Execution.ExecutionProvider,
+                }, cancellationToken);
+        }
+        return (sessions.Values.First(), sessions);
+    }
     private static string CameraKey(Recipe recipe) => $"{recipe.CameraProviderId.Trim()}::{recipe.CameraDeviceId.Trim()}";
 
     private async Task EnterProjectAsync(string projectCode, CancellationToken cancellationToken)
@@ -189,11 +320,8 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         try
         {
             if (Volatile.Read(ref _activeExecutions) != 0 || _stoppingProjects.IsEmpty) return;
-            foreach (var pool in _models.Values)
-                try { await pool.DisposeAsync(); } catch { }
             foreach (var camera in _cameras.Values)
                 try { await camera.DisposeAsync(); } catch { }
-            _models.Clear();
             _cameras.Clear();
             _stoppingProjects.Clear();
         }
@@ -206,9 +334,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         await _resourceGate.WaitAsync();
         try
         {
-            foreach (var pool in _models.Values) await pool.DisposeAsync();
             foreach (var camera in _cameras.Values) await camera.DisposeAsync();
-            _models.Clear();
             _cameras.Clear();
         }
         finally { _resourceGate.Release(); _resourceGate.Dispose(); }
@@ -318,105 +444,5 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         }
     }
 
-    private sealed class ModelSessionPool : IAsyncDisposable
-    {
-        private readonly AppServices _services;
-        private readonly Recipe _recipe;
-        private readonly Channel<IAlgorithmSession> _available = Channel.CreateUnbounded<IAlgorithmSession>();
-        private readonly SemaphoreSlim _leases;
-        private readonly SemaphoreSlim _coldStart = new(1, 1);
-        private readonly Lock _gate = new();
-        private readonly List<IAlgorithmSession> _all = [];
 
-        public ModelSessionPool(AppServices services, Recipe recipe, int maxSessions)
-        {
-            _services = services;
-            _recipe = recipe;
-            _leases = new SemaphoreSlim(Math.Max(1, maxSessions), Math.Max(1, maxSessions));
-        }
-
-        public async Task<Lease> RentAsync(CancellationToken cancellationToken)
-        {
-            await _leases.WaitAsync(cancellationToken);
-            if (_available.Reader.TryRead(out var warmed)) return new Lease(warmed);
-            IAlgorithmSession? session = null;
-            try
-            {
-                // 与启动预热互斥：Worker 握手 + 模型加载全池同一时刻只允许一个，避免多个 Python 进程
-                // 同时冷启动互相拖慢而挤占 TCP 执行超时；预热完成后这里直接复用 Ready 会话。
-                await _coldStart.WaitAsync(cancellationToken);
-                try
-                {
-                    if (_available.Reader.TryRead(out warmed)) return new Lease(warmed);
-                    session = await CreateAndInitializeAsync(cancellationToken);
-                    lock (_gate) _all.Add(session);
-                }
-                finally { _coldStart.Release(); }
-                return new Lease(session);
-            }
-            catch
-            {
-                if (session is not null) await session.DisposeAsync();
-                _leases.Release();
-                throw;
-            }
-        }
-
-        /// <summary>提前创建一个 Worker 会话并完成模型加载（Ready），放入可用池。幂等。</summary>
-        public async Task PrewarmAsync(CancellationToken cancellationToken)
-        {
-            await _coldStart.WaitAsync(cancellationToken);
-            try
-            {
-                lock (_gate)
-                {
-                    if (_all.Count > 0) return;
-                }
-                var session = await CreateAndInitializeAsync(cancellationToken);
-                lock (_gate) _all.Add(session);
-                _available.Writer.TryWrite(session);
-            }
-            finally { _coldStart.Release(); }
-        }
-
-        private async Task<IAlgorithmSession> CreateAndInitializeAsync(CancellationToken cancellationToken)
-        {
-            var session = await _services.AlgorithmManager.CreateSessionAsync(_recipe.PluginId, cancellationToken);
-            if (session.State == AlgorithmSessionState.Uninitialized)
-            {
-                await session.InitializeAsync(new AlgorithmInitialization
-                {
-                    Settings = DetectionRunService.BuildAlgorithmSettings(_recipe),
-                    ExecutionProvider = _recipe.ExecutionProvider,
-                }, cancellationToken);
-            }
-            return session;
-        }
-
-        public async ValueTask ReturnAsync(Lease lease, bool reusable)
-        {
-            if (reusable) _available.Writer.TryWrite(lease.Session);
-            else
-            {
-                lock (_gate) _all.Remove(lease.Session);
-                await lease.Session.DisposeAsync();
-            }
-            _leases.Release();
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            _available.Writer.TryComplete();
-            IAlgorithmSession[] sessions;
-            lock (_gate) sessions = [.. _all];
-            foreach (var session in sessions) await session.DisposeAsync();
-            _leases.Dispose();
-            _coldStart.Dispose();
-        }
-
-        public sealed class Lease(IAlgorithmSession session)
-        {
-            public IAlgorithmSession Session { get; } = session;
-        }
-    }
 }
