@@ -19,10 +19,6 @@ if SHARED_SITE_PACKAGES.is_dir() and str(SHARED_SITE_PACKAGES) not in sys.path:
 
 from vw_worker import AlgorithmWorker, WorkerError, log, main  # noqa: E402
 
-from model import read_image_size  # noqa: E402
-from test_worker import _device, prepare_model, run  # noqa: E402
-
-
 class Atu5Worker(AlgorithmWorker):
     plugin_id = "com.vision.atu5"
     worker_version = "1.0.0"
@@ -36,6 +32,12 @@ class Atu5Worker(AlgorithmWorker):
         self._min_area = 1
 
     def on_initialize(self, payload: dict) -> dict:
+        # Keep the protocol handshake fast. Importing model.py loads PyTorch and
+        # TorchVision, which can take longer than the host's hello timeout on
+        # Windows. Heavy runtime imports belong to initialize, after hello.
+        from model import read_image_size
+        from test_worker import _device, prepare_model
+
         settings = dict(payload.get("settings") or {})
         model_value = str(settings.get("modelPath", "models/atu5.pt")).strip() or "models/atu5.pt"
         model_path = Path(model_value)
@@ -72,6 +74,8 @@ class Atu5Worker(AlgorithmWorker):
         }
 
     def on_submit(self, payload: dict) -> dict:
+        from test_worker import run
+
         if self._model_path is None:
             raise WorkerError("MODEL_NOT_FOUND", "ATU5 模型尚未初始化")
         image_path = payload.get("imagePath")

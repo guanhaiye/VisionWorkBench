@@ -711,6 +711,7 @@ public partial class LiveTaskPanel : UserControl
         }
 
         _startInProgress = true;
+        StartButton.Content = "正在启动…";
         SetButtons(running: false);
         try
         {
@@ -719,6 +720,7 @@ public partial class LiveTaskPanel : UserControl
         finally
         {
             _startInProgress = false;
+            StartButton.Content = "开始";
             SetButtons(running: _run is not null);
         }
     }
