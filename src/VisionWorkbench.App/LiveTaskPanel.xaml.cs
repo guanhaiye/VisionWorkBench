@@ -119,6 +119,9 @@ public partial class LiveTaskPanel : UserControl
     private NormalizedRect? _draftRoi;
     private long _preparedTaskId;
     private readonly SemaphoreSlim _modelPrepareGate = new(1, 1);
+    // Serialize TCP retriggers with finite-source cleanup so a new run cannot race
+    // the previous run while it is stopping the shared model session.
+    private readonly SemaphoreSlim _runLifecycleGate = new(1, 1);
     private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
 
     private IReadOnlyList<LiveTaskItem> _availableTasks = [];
@@ -343,38 +346,46 @@ public partial class LiveTaskPanel : UserControl
 
     private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_run is null || _run.State is DetectionRunState.Idle or DetectionRunState.Stopped or DetectionRunState.Faulted)
-        {
-            StatusText.Text = "TCP触发：正在自动启动检测任务…";
-            await StartRunAsync(singleFrame: false);
-        }
-
-        if (_run is null || _run.State is not (DetectionRunState.Running or DetectionRunState.Paused))
-        {
-            throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”启动失败，无法执行 TCP 指令。");
-        }
-
-        SetButtons(running: true);
-        StatusText.Text = "TCP触发检测中…";
+        await _runLifecycleGate.WaitAsync(cancellationToken);
         try
         {
-            var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(30), cancellationToken);
-            if (result is null)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_run is null || _run.State is DetectionRunState.Idle or DetectionRunState.Stopped or DetectionRunState.Faulted)
             {
-                throw new TimeoutException("实时检测在 30 秒内没有获得有效帧。");
+                StatusText.Text = "TCP触发：正在自动启动检测任务…";
+                await StartRunAsync(singleFrame: false);
             }
 
-            StatusText.Text = "TCP触发检测已完成";
-            return new TcpTaskExecutionResult(
-                "completed",
-                result.CountAfter,
-                result.Decision.Status.ToString(),
-                result.Record.Id);
+            if (_run is null || _run.State is not (DetectionRunState.Running or DetectionRunState.Paused))
+            {
+                throw new InvalidOperationException($"实时检测任务“{SelectedTaskName}”启动失败，无法执行 TCP 指令。");
+            }
+
+            SetButtons(running: true);
+            StatusText.Text = "TCP触发检测中…";
+            try
+            {
+                var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                if (result is null)
+                {
+                    throw new TimeoutException("实时检测在 30 秒内没有获得有效帧。");
+                }
+
+                StatusText.Text = "TCP触发检测已完成";
+                return new TcpTaskExecutionResult(
+                    "completed",
+                    result.CountAfter,
+                    result.Decision.Status.ToString(),
+                    result.Record.Id);
+            }
+            finally
+            {
+                SetButtons(running: _run?.State is DetectionRunState.Running or DetectionRunState.Paused);
+            }
         }
         finally
         {
-            SetButtons(running: _run?.State is DetectionRunState.Running or DetectionRunState.Paused);
+            _runLifecycleGate.Release();
         }
     }
 
@@ -943,6 +954,19 @@ public partial class LiveTaskPanel : UserControl
 
     private async Task StopBatchAsync()
     {
+        await _runLifecycleGate.WaitAsync();
+        try
+        {
+            await StopBatchCoreAsync();
+        }
+        finally
+        {
+            _runLifecycleGate.Release();
+        }
+    }
+
+    private async Task StopBatchCoreAsync()
+    {
         if (_run is null)
         {
             return;
@@ -984,20 +1008,28 @@ public partial class LiveTaskPanel : UserControl
 
     private async Task StopFromSourceEnd()
     {
-        // 先等待已进入调度器的帧处理完成，避免单帧模式在源结束时丢失唯一图片。
-        if (_run is not null)
+        await _runLifecycleGate.WaitAsync();
+        try
         {
-            try
+            // Keep the lifecycle gate while draining and stopping the finite source.
+            // A TCP retrigger arriving here waits until cleanup has preserved the model.
+            if (_run is not null)
             {
-                await _run.WaitForCompletionAsync(TimeSpan.FromSeconds(30));
+                try
+                {
+                    await _run.WaitForCompletionAsync(TimeSpan.FromSeconds(30));
+                }
+                catch (TimeoutException)
+                {
+                    StatusText.Text = "输入源已结束，但等待最后一帧处理超时。";
+                }
             }
-            catch (TimeoutException)
-            {
-                StatusText.Text = "输入源已结束，但等待最后一帧处理超时。";
-            }
+            await StopBatchCoreAsync();
         }
-        // 有限源（图片目录/视频）播完：自动结束批次
-        await StopBatchAsync();
+        finally
+        {
+            _runLifecycleGate.Release();
+        }
     }
 
     private async Task CleanupAsync(bool disposeAlgorithm = false)
