@@ -392,7 +392,16 @@ public partial class CommunicationPage : UserControl
             .Select(row => row.TaskId)
             .ToHashSet();
         var task = _allTasks.FirstOrDefault(item => !configuredIds.Contains(item.Id));
-        if (task is null) { ThemedMessageBox.Show("所有检测任务都已配置规则", "TCP/IP 设置"); return; }
+        if (_allTasks.Count == 0)
+        {
+            ThemedMessageBox.Show("当前没有检测任务，请先创建检测任务后再添加规则。", "TCP/IP 设置");
+            return;
+        }
+        if (task is null)
+        {
+            ThemedMessageBox.Show("所有检测任务都已配置规则。", "TCP/IP 设置");
+            return;
+        }
         _pendingTriggerTaskIds.Add(task.Id);
         var defaultConfig = new TaskTcpTriggerConfig
         {
