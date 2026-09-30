@@ -19,6 +19,7 @@ namespace VisionWorkbench.App;
 public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, SharedCameraRuntime> _cameras = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<long, InferenceLatencyWindow> _inferenceLatency = new();
     private readonly ConcurrentDictionary<string, int> _activeProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _projectIdle = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _stoppingProjects = new(StringComparer.OrdinalIgnoreCase);
@@ -50,7 +51,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
 
         var camera = _cameras.GetOrAdd(CameraKey(recipe), _ => new SharedCameraRuntime(services, recipe));
         await camera.EnsureStartedAsync(cancellationToken);
-        var modelSessions = await GetModelSessionsAsync(recipe, cancellationToken);
+        var modelSessions = await GetModelSessionsAsync(task.Id, recipe, cancellationToken);
         await using var assignedCamera = camera.CreateAssignedSession(request.ReceivedAt);
         var run = new DetectionRunService(
             services.Records,
@@ -98,7 +99,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         if (!Directory.Exists(recipe.CameraDeviceId))
             throw new DirectoryNotFoundException($"图片目录不存在: {recipe.CameraDeviceId}");
         var extensions = new[] { ".jpg", ".jpeg", ".png", ".bmp" };
-        var files = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
+        var files = request.ImageFiles?.ToArray() ?? Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
             .Where(file => extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
             .OrderBy(file => file, StringComparer.Ordinal)
             .ToArray();
@@ -120,7 +121,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         });
         await using var camera = await services.Cameras.OpenSessionAsync(descriptor, cameraOptions, cancellationToken);
         await camera.OpenAsync(cameraOptions, cancellationToken);
-        var modelSessions = await GetModelSessionsAsync(recipe, cancellationToken);
+        var modelSessions = await GetModelSessionsAsync(task.Id, recipe, cancellationToken);
         var modelUses = new List<AlgorithmSessionCache.SessionUseLease>();
         var run = new DetectionRunService(
             services.Records,
@@ -136,7 +137,12 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         RecordCompletedEventArgs? lastRecord = null;
         var processed = 0;
-        run.RecordCompleted += (_, result) => { lastRecord = result; Interlocked.Increment(ref processed); };
+        run.RecordCompleted += (_, result) =>
+        {
+            lastRecord = result;
+            Interlocked.Increment(ref processed);
+            RecordInferenceDuration(task.Id, result.Output.Performance?.TotalMs ?? 0);
+        };
         run.SourceCompleted += (_, _) => sourceCompleted.TrySetResult(true);
         run.Faulted += (_, fault) => faulted.TrySetResult(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
         try
@@ -154,14 +160,30 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             var signal = await Task.WhenAny(sourceCompleted.Task, faulted.Task).WaitAsync(cancellationToken);
             if (signal == faulted.Task) throw await faulted.Task;
             await sourceCompleted.Task.WaitAsync(cancellationToken);
-            await run.WaitForCompletionAsync(TimeSpan.FromMinutes(5));
+            await run.WaitForCompletionAsync(cancellationToken: cancellationToken);
             if (faulted.Task.IsCompleted) throw await faulted.Task;
             var skipped = (camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
-            if (lastRecord is null || processed + skipped != files.Length)
-                throw new InvalidOperationException($"离线图片检测未完整完成：成功 {processed} 张，跳过 {skipped} 张，共 {files.Length} 张");
+            request.Progress?.SetSkippedCount(skipped);
+            var progress = request.Progress ?? new TcpExecutionProgress(files.Length);
+            if (request.Progress is null)
+            {
+                progress.ReportProcessed(processed);
+                progress.SetSkippedCount(skipped);
+            }
+            var result = TcpOfflineExecutionPolicy.CreateResult(
+                progress.Snapshot(), lastRecord?.CountAfter ?? 0,
+                lastRecord?.Decision.Status.ToString() ?? (skipped == files.Length ? "all_images_skipped" : "incomplete"),
+                lastRecord?.Record.Id ?? 0);
             await run.StopAsync();
-            await new BatchService(services.Batches).EndAsync(run.Counting.State.CurrentTotal, "completed", cancellationToken);
-            return new TcpTaskExecutionResult("completed", lastRecord.CountAfter, lastRecord.Decision.Status.ToString(), lastRecord.Record.Id);
+            await new BatchService(services.Batches).EndAsync(run.Counting.State.CurrentTotal, result.Status, CancellationToken.None);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            request.Progress?.SetSkippedCount((camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0);
+            await run.StopAsync();
+            await new BatchService(services.Batches).EndAsync(run.Counting.State.CurrentTotal, "aborted", CancellationToken.None);
+            throw;
         }
         finally
         {
@@ -172,6 +194,58 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
     }
     /// <summary>后台预热所有启用 TCP 触发的任务：提前完成算法 Worker 握手与模型加载，
     /// 使首次 TCP 触发直接复用热会话，避免 Python/TensorRT 冷启动挤占 30 秒执行超时。单个任务失败只记录日志。</summary>
+    public void RecordInferenceDuration(long taskId, double elapsedMilliseconds)
+    {
+        if (taskId <= 0 || !double.IsFinite(elapsedMilliseconds) || elapsedMilliseconds <= 0) return;
+        _inferenceLatency.GetOrAdd(taskId, _ => new InferenceLatencyWindow()).Add(TimeSpan.FromMilliseconds(elapsedMilliseconds));
+    }
+
+    public async Task<TcpExecutionPlan> CreateExecutionPlanAsync(
+        long taskId, TimeSpan configuredTimeout, CancellationToken cancellationToken = default)
+    {
+        var found = await services.Recipes.FindAsync(taskId, cancellationToken)
+            ?? throw new InvalidOperationException($"任务配置不存在: {taskId}");
+        var recipe = found.Recipe;
+        if (!string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase))
+            return new TcpExecutionPlan(configuredTimeout);
+
+        if (!Directory.Exists(recipe.CameraDeviceId))
+            throw new DirectoryNotFoundException($"图片目录不存在: {recipe.CameraDeviceId}");
+        var files = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(file => ImageExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(file => file, StringComparer.Ordinal)
+                .ToArray();
+        var measured = _inferenceLatency.TryGetValue(taskId, out var window) ? window.GetP90() : null;
+        var timeout = TcpOfflineExecutionPolicy.CalculateTimeout(files.Length, configuredTimeout, measured);
+        return new TcpExecutionPlan(timeout, files);
+    }
+
+    private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp"];
+
+    private sealed class InferenceLatencyWindow
+    {
+        private readonly object _gate = new();
+        private readonly Queue<TimeSpan> _samples = new();
+
+        public void Add(TimeSpan sample)
+        {
+            lock (_gate)
+            {
+                _samples.Enqueue(sample);
+                while (_samples.Count > 32) _samples.Dequeue();
+            }
+        }
+
+        public TimeSpan? GetP90()
+        {
+            lock (_gate)
+            {
+                if (_samples.Count == 0) return null;
+                var ordered = _samples.OrderBy(value => value).ToArray();
+                return ordered[Math.Clamp((int)Math.Ceiling(ordered.Length * 0.9) - 1, 0, ordered.Length - 1)];
+            }
+        }
+    }
     public async Task PrewarmConfiguredTasksAsync(CancellationToken cancellationToken = default)
     {
         var logger = services.LoggerFactory.CreateLogger<TcpTaskExecutionService>();
@@ -209,7 +283,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken);
         if (found?.Recipe is not { } recipe) return;
 
-        await GetModelSessionsAsync(recipe, cancellationToken);
+        await GetModelSessionsAsync(task.Id, recipe, cancellationToken);
     }
 
     private static bool IsTcpTriggerEnabled(string? triggerJson)
@@ -230,7 +304,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
     }
 
     private async Task<(IAlgorithmSession Primary, IReadOnlyDictionary<string, IAlgorithmSession> Sop)> GetModelSessionsAsync(
-        Recipe recipe, CancellationToken cancellationToken)
+        long recipeTaskId, Recipe recipe, CancellationToken cancellationToken)
     {
         var definitions = recipe.Sop?.Definition?.Steps
             .OrderBy(step => step.Order)
@@ -264,7 +338,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
                 RoiPolicy = model.Execution.RoiPolicy,
                 Rules = model.Execution.Rules,
             };
-            sessions[model.Id] = await services.AlgorithmSessions.GetOrInitializeAsync(
+            sessions[model.Id] = await services.AlgorithmSessions.GetOrInitializeAsync(recipeTaskId,
                 model.Execution.PluginId,
                 new AlgorithmInitialization
                 {

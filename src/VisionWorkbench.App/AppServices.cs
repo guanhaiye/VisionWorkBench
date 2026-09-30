@@ -337,6 +337,8 @@ public sealed class AppServices
             SopRuns,
             pendingReplayTrigger: SopProductResultReplayer);
         TcpTaskExecution = new TcpTaskExecutionService(this);
+        TcpCommunication.TaskExecutionPlanner = (taskId, timeout, cancellationToken) =>
+            TcpTaskExecution.CreateExecutionPlanAsync(taskId, timeout, cancellationToken);
         TcpCommunication.TaskExecutor = (request, cancellationToken) =>
         {
             var liveExecutor = LiveTaskTriggerExecutor;

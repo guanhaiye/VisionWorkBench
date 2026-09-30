@@ -98,6 +98,7 @@ public sealed class TcpStationExecutionSchedulerTests
             _ => { enteredOtherStation.TrySetResult(true); return Task.FromResult(Result("other")); });
         differentStation.Start!.Invoke();
         await enteredOtherStation.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal("other", (await differentStation.Completion!).Decision);
         Assert.False(enteredB.Task.IsCompleted);
 
         releaseA.TrySetResult(true);
@@ -105,6 +106,66 @@ public sealed class TcpStationExecutionSchedulerTests
         Assert.Equal("second", (await sameStationOtherProject.Completion!).Decision);
     }
 
+    [Fact]
+    public async Task ExecutionTimeoutStartsAfterQueueWait()
+    {
+        await using var scheduler = new TcpStationExecutionScheduler();
+        using var projectStop = new CancellationTokenSource();
+        var enteredFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var options = new TcpStationExecutionScheduler.Options
+        {
+            MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2),
+        };
+        var first = scheduler.TryEnqueue(Request("wait-first"), projectStop.Token, options, async ct =>
+        {
+            enteredFirst.TrySetResult(true);
+            await releaseFirst.Task.WaitAsync(ct);
+            return Result("first");
+        });
+        first.Start!.Invoke();
+        await enteredFirst.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var shortTimeout = options with { ExecutionTimeout = TimeSpan.FromMilliseconds(100) };
+        var second = scheduler.TryEnqueue(Request("wait-second"), projectStop.Token, shortTimeout,
+            _ => Task.FromResult(Result("second")));
+        second.Start!.Invoke();
+
+        await Task.Delay(250);
+        releaseFirst.TrySetResult(true);
+        await Task.WhenAll(first.Completion!, second.Completion!).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("second", (await second.Completion!).Decision);
+    }
+
+    [Fact]
+    public async Task CancelingQueuedProjectRequestDoesNotExecuteIt()
+    {
+        await using var scheduler = new TcpStationExecutionScheduler();
+        using var activeStop = new CancellationTokenSource();
+        using var queuedStop = new CancellationTokenSource();
+        var enteredFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queuedExecuted = false;
+        var options = new TcpStationExecutionScheduler.Options { MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2) };
+        var first = scheduler.TryEnqueue(Request("cancel-first"), activeStop.Token, options, async ct =>
+        {
+            enteredFirst.TrySetResult(true);
+            await releaseFirst.Task.WaitAsync(ct);
+            return Result("first");
+        });
+        first.Start!.Invoke();
+        await enteredFirst.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var queued = scheduler.TryEnqueue(Request("cancel-queued"), queuedStop.Token, options, _ =>
+        {
+            queuedExecuted = true;
+            return Task.FromResult(Result("should-not-run"));
+        });
+        queued.Start!.Invoke();
+        queuedStop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.Completion!);
+        releaseFirst.TrySetResult(true);
+        await first.Completion!.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(queuedExecuted);
+    }
     [Fact]
     public async Task Timeout_IsTerminalAndDuplicateReportsTimeout()
     {

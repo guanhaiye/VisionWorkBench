@@ -121,12 +121,15 @@ public partial class LiveTaskPanel : UserControl
     private NormalizedRect? _roiOverride;
     private NormalizedRect? _draftRoi;
     private long _preparedTaskId;
+    private long _activeTaskId;
     private readonly SemaphoreSlim _modelPrepareGate = new(1, 1);
     // Serialize TCP retriggers with finite-source cleanup so a new run cannot race
     // the previous run while it is stopping the shared model session.
     private readonly SemaphoreSlim _runLifecycleGate = new(1, 1);
     private readonly SemaphoreSlim _tcpBatchGate = new(1, 1);
     private TaskCompletionSource<TcpTaskExecutionResult>? _tcpOfflineCompletion;
+    private TcpExecutionProgress? _tcpOfflineProgress;
+    private CancellationToken _tcpOfflineCancellationToken;
     private RecordCompletedEventArgs? _tcpOfflineLastRecord;
     private int _tcpOfflineProcessed;
     private readonly CameraOpenOptions _cameraOptions = new() { FrameIntervalMs = 200, Loop = false };
@@ -272,7 +275,7 @@ public partial class LiveTaskPanel : UserControl
                     RoiPolicy = model.Execution.RoiPolicy,
                     Rules = model.Execution.Rules,
                 };
-                var session = await AppServices.Instance.AlgorithmSessions.GetOrInitializeAsync(
+                var session = await AppServices.Instance.AlgorithmSessions.GetOrInitializeAsync(item.Id,
                     model.Execution.PluginId,
                     new AlgorithmInitialization
                     {
@@ -325,18 +328,18 @@ public partial class LiveTaskPanel : UserControl
     public Task<TcpTaskExecutionResult> ExecuteTcpTriggerAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken = default)
     {
         return Dispatcher.InvokeAsync(
-                () => ExecuteTcpTriggerOnUiAsync(cancellationToken),
+                () => ExecuteTcpTriggerOnUiAsync(request, cancellationToken),
                 DispatcherPriority.Normal)
             .Task
             .Unwrap();
     }
 
-    private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(CancellationToken cancellationToken)
+    private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken)
     {
         var recipe = (await AppServices.Instance.Recipes.FindAsync(TaskId, cancellationToken))?.Recipe;
         if (recipe?.CameraProviderId == "image-folder")
         {
-            return await ExecuteTcpOfflineBatchAsync(cancellationToken);
+            return await ExecuteTcpOfflineBatchAsync(request, cancellationToken);
         }
 
         await _runLifecycleGate.WaitAsync(cancellationToken);
@@ -382,11 +385,12 @@ public partial class LiveTaskPanel : UserControl
         }
     }
 
-    private async Task<TcpTaskExecutionResult> ExecuteTcpOfflineBatchAsync(CancellationToken cancellationToken)
+    private async Task<TcpTaskExecutionResult> ExecuteTcpOfflineBatchAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken)
     {
+        if (request.ImageFiles is { Count: 0 })
+            throw new InvalidOperationException("图片目录没有可检测的图片");
         await _tcpBatchGate.WaitAsync(cancellationToken);
-        var completion = new TaskCompletionSource<TcpTaskExecutionResult>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<TcpTaskExecutionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             await _runLifecycleGate.WaitAsync(cancellationToken);
@@ -396,8 +400,10 @@ public partial class LiveTaskPanel : UserControl
                     throw new InvalidOperationException("上一轮离线图片检测尚未结束");
                 _tcpOfflineLastRecord = null;
                 _tcpOfflineProcessed = 0;
+                _tcpOfflineProgress = request.Progress ?? new TcpExecutionProgress(request.ImageFiles?.Count ?? 0);
+                _tcpOfflineCancellationToken = cancellationToken;
                 _tcpOfflineCompletion = completion;
-                await StartRunAsync(singleFrame: false);
+                await StartRunAsync(singleFrame: false, plannedImageFiles: request.ImageFiles);
                 if (_run is null || _run.State is DetectionRunState.Faulted or DetectionRunState.Stopped)
                     throw new InvalidOperationException("离线图片检测启动失败");
             }
@@ -408,17 +414,23 @@ public partial class LiveTaskPanel : UserControl
         catch
         {
             if (ReferenceEquals(_tcpOfflineCompletion, completion))
-                await StopBatchAsync();
+            {
+                _tcpOfflineProgress?.SetSkippedCount((_cameraSession as IImageFolderCameraSession)?.SkippedFileCount ?? 0);
+                await StopBatchAsync("aborted");
+            }
             throw;
         }
         finally
         {
             if (ReferenceEquals(_tcpOfflineCompletion, completion))
+            {
                 _tcpOfflineCompletion = null;
+                _tcpOfflineProgress = null;
+                _tcpOfflineCancellationToken = default;
+            }
             _tcpBatchGate.Release();
         }
     }
-
     private void RequestRemove()
         => RemoveRequested?.Invoke(this, EventArgs.Empty);
 
@@ -778,7 +790,7 @@ public partial class LiveTaskPanel : UserControl
         }
     }
 
-    private async Task StartRunAsync(bool singleFrame)
+    private async Task StartRunAsync(bool singleFrame, IReadOnlyList<string>? plannedImageFiles = null)
     {
         if (TaskCombo.SelectedItem is not LiveTaskItem item)
         {
@@ -805,9 +817,10 @@ public partial class LiveTaskPanel : UserControl
         var (entity, recipe) = pair;
         recipe = recipe with { Roi = _roiOverrideSet ? _roiOverride : recipe.Roi };
             _activeRecipe = recipe;
+            Interlocked.Exchange(ref _activeTaskId, entity.Id);
             TaskModeText.Text = GetTaskModeText(recipe);
             SetSopLayout(recipe.Sop is not null);
-            ConfigureOfflineProgress(recipe, singleFrame);
+            ConfigureOfflineProgress(recipe, singleFrame, plannedImageFiles);
         // 离线图片单次检测按目录顺序逐张读取；处理完最后一张后，下一次点击从第一张重新开始。
         if (singleFrame
             && string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase)
@@ -989,12 +1002,12 @@ public partial class LiveTaskPanel : UserControl
         }
     }
 
-    private async Task StopBatchAsync()
+    private async Task StopBatchAsync(string batchStatus = "completed")
     {
         await _runLifecycleGate.WaitAsync();
         try
         {
-            await StopBatchCoreAsync();
+            await StopBatchCoreAsync(batchStatus);
         }
         finally
         {
@@ -1002,7 +1015,7 @@ public partial class LiveTaskPanel : UserControl
         }
     }
 
-    private async Task StopBatchCoreAsync()
+    private async Task StopBatchCoreAsync(string batchStatus = "completed")
     {
         if (_run is null)
         {
@@ -1010,11 +1023,10 @@ public partial class LiveTaskPanel : UserControl
         }
         var total = _run.Counting.State.CurrentTotal;
         await _run.StopAsync();
-        await AppServices.Instance.BatchService.EndAsync(total);
+        await AppServices.Instance.BatchService.EndAsync(total, batchStatus);
         await CleanupAsync();
-        BatchText.Text = "批次: 已结束";
+        BatchText.Text = batchStatus == "completed" ? "批次: 已结束" : $"批次: {batchStatus}";
     }
-
     private async Task CompleteStandaloneSingleAsync(Recipe recipe, long batchId)
     {
         var result = await _run!.SubmitSingleAsync(TimeSpan.FromSeconds(30));
@@ -1048,37 +1060,36 @@ public partial class LiveTaskPanel : UserControl
         await _runLifecycleGate.WaitAsync();
         try
         {
-            // Keep the lifecycle gate while draining and stopping the finite source.
-            // A TCP retrigger arriving here waits until cleanup has preserved the model.
             if (_run is not null)
+                await _run.WaitForCompletionAsync(cancellationToken: _tcpOfflineCancellationToken);
+
+            TcpTaskExecutionResult? result = null;
+            if (_tcpOfflineCompletion is not null && _tcpOfflineProgress is { } progress)
             {
-                try
-                {
-                    await _run.WaitForCompletionAsync(TimeSpan.FromSeconds(30));
-                }
-                catch (TimeoutException)
-                {
-                    StatusText.Text = "输入源已结束，但等待最后一帧处理超时。";
-                }
+                var skipped = (_cameraSession as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
+                progress.SetSkippedCount(skipped);
+                var snapshot = progress.Snapshot();
+                if (_offlineImageTotal > 0)
+                    OfflineProgressText.Text = $"离线图片：{Math.Min(_offlineImageTotal, snapshot.ProcessedCount + snapshot.SkippedCount)} / {_offlineImageTotal}";
+                var lastRecord = _tcpOfflineLastRecord;
+                result = TcpOfflineExecutionPolicy.CreateResult(
+                    snapshot,
+                    lastRecord?.CountAfter ?? 0,
+                    lastRecord?.Decision.Status.ToString() ?? (skipped == snapshot.TotalCount ? "all_images_skipped" : "incomplete"),
+                    lastRecord?.Record.Id ?? 0);
             }
-            var processed = Volatile.Read(ref _tcpOfflineProcessed);
-            var lastRecord = _tcpOfflineLastRecord;
-            var skipped = (_cameraSession as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
-            if (_offlineImageTotal > 0)
-                OfflineProgressText.Text = $"离线图片：{Math.Min(_offlineImageTotal, processed + skipped)} / {_offlineImageTotal}";
-            await StopBatchCoreAsync();
-            if (_tcpOfflineCompletion is { } completion)
-            {
-                if (lastRecord is null || processed + skipped != _offlineImageTotal)
-                    completion.TrySetException(new InvalidOperationException(
-                        $"离线图片检测未完整完成：成功 {processed} 张，跳过 {skipped} 张，共 {_offlineImageTotal} 张"));
-                else
-                    completion.TrySetResult(new TcpTaskExecutionResult(
-                        "completed", lastRecord.CountAfter, lastRecord.Decision.Status.ToString(), lastRecord.Record.Id));
-            }
+
+            await StopBatchCoreAsync(result?.Status ?? "completed");
+            if (_tcpOfflineCompletion is { } completion && result is not null)
+                completion.TrySetResult(result);
         }
         catch (Exception ex)
         {
+            if (ex is OperationCanceledException)
+            {
+                try { await StopBatchCoreAsync("aborted"); }
+                catch (Exception stopError) { ex = new AggregateException(ex, stopError); }
+            }
             _tcpOfflineCompletion?.TrySetException(ex);
             throw;
         }
@@ -1087,7 +1098,6 @@ public partial class LiveTaskPanel : UserControl
             _runLifecycleGate.Release();
         }
     }
-
     private async Task CleanupAsync(bool disposeAlgorithm = false)
     {
         if (_run is not null)
@@ -1111,6 +1121,7 @@ public partial class LiveTaskPanel : UserControl
             _cameraSession = null;
         }
         _manualSingleFrameBusy = false;
+        Interlocked.Exchange(ref _activeTaskId, 0);
         await Dispatcher.InvokeAsync(() => SetButtons(running: false));
     }
 
@@ -1315,10 +1326,10 @@ public partial class LiveTaskPanel : UserControl
         DetectionLogScrollViewer.ScrollToEnd();
     }
 
-    private void ConfigureOfflineProgress(Recipe recipe, bool singleFrame)
+    private void ConfigureOfflineProgress(Recipe recipe, bool singleFrame, IReadOnlyList<string>? plannedImageFiles = null)
     {
         if (!string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase)
-            || !Directory.Exists(recipe.CameraDeviceId))
+            || (plannedImageFiles is null && !Directory.Exists(recipe.CameraDeviceId)))
         {
             _offlineImageTotal = 0;
             _offlineImageFiles = [];
@@ -1327,7 +1338,7 @@ public partial class LiveTaskPanel : UserControl
             return;
         }
 
-        _offlineImageFiles = Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
+        _offlineImageFiles = plannedImageFiles?.ToArray() ?? Directory.EnumerateFiles(recipe.CameraDeviceId, "*.*", SearchOption.TopDirectoryOnly)
             .Where(file => OfflineImageExtensions.Contains(
                 System.IO.Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
             .OrderBy(file => file, StringComparer.Ordinal)
@@ -1474,12 +1485,15 @@ public partial class LiveTaskPanel : UserControl
     private void OnRecordCompleted(object? sender, RecordCompletedEventArgs e)
     {
         var processed = Interlocked.Increment(ref _offlineProcessed);
+        var taskId = Interlocked.Read(ref _activeTaskId);
+        if (taskId > 0)
+            AppServices.Instance.TcpTaskExecution.RecordInferenceDuration(taskId, e.Output.Performance?.TotalMs ?? 0);
         if (_tcpOfflineCompletion is not null)
         {
             _tcpOfflineLastRecord = e;
             Interlocked.Increment(ref _tcpOfflineProcessed);
-        }
-        if (_offlineImageTotal > 0)
+            _tcpOfflineProgress?.ReportProcessed();
+        }        if (_offlineImageTotal > 0)
         {
             var currentIndex = Math.Min(_offlineImageTotal, _offlineImageStartIndex + processed);
             Dispatcher.BeginInvoke(() => OfflineProgressText.Text = $"离线图片：{currentIndex} / {_offlineImageTotal}");

@@ -37,6 +37,36 @@ public sealed class CameraProviderTests
     }
 
     [Fact]
+    public async Task ImageFolder_SnapshotReportsUnreadableFileAsSkipped()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "vw-images-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var bad = Path.Combine(directory, "01-corrupt.png");
+        await File.WriteAllTextAsync(bad, "not an image");
+        var session = (IImageFolderCameraSession)await new ImageFolderProvider().CreateSessionAsync(
+            new CameraDescriptor
+            {
+                ProviderId = ImageFolderProvider.ProviderIdValue,
+                DeviceId = directory,
+                DisplayName = directory,
+            }, CancellationToken.None);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            await session.OpenAsync(new CameraOpenOptions { ImageFiles = [bad] }, CancellationToken.None);
+            Assert.Equal([bad], session.FileSnapshot);
+            session.Completed += (_, _) => completed.TrySetResult();
+            await session.StartAsync(CancellationToken.None);
+            await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, session.SkippedFileCount);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+    [Fact]
     public async Task ImageFolder_PauseStopsEmittingUntilResume()
     {
         Assert.True(Directory.Exists(TestPaths.SamplesStaticCount));

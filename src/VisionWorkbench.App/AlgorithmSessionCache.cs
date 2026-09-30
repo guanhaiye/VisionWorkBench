@@ -1,19 +1,25 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using VisionWorkbench.Algorithms;
 
 namespace VisionWorkbench.App;
 
-/// <summary>
-/// Holds initialized algorithm sessions for the lifetime of the application. Both the
-/// live page and the TCP fallback use this cache so switching execution paths does not
-/// start another Worker or load the same model again.
-/// </summary>
-public sealed class AlgorithmSessionCache(AlgorithmManager manager)
+/// <summary>Application-lifetime cache for task-isolated initialized algorithm Worker sessions.</summary>
+public sealed class AlgorithmSessionCache
 {
+    private readonly Func<string, CancellationToken, Task<IAlgorithmSession>> _createSession;
     private readonly ConcurrentDictionary<string, Lazy<Task<IAlgorithmSession>>> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _useGates = new(StringComparer.Ordinal);
+
+    public AlgorithmSessionCache(AlgorithmManager manager)
+        : this(async (pluginId, cancellationToken) => (IAlgorithmSession)await manager.CreateSessionAsync(pluginId, cancellationToken))
+    {
+    }
+
+    public AlgorithmSessionCache(Func<string, CancellationToken, Task<IAlgorithmSession>> createSession)
+        => _createSession = createSession ?? throw new ArgumentNullException(nameof(createSession));
 
     public sealed class SessionUseLease(IAlgorithmSession session, SemaphoreSlim gate) : IAsyncDisposable
     {
@@ -37,11 +43,12 @@ public sealed class AlgorithmSessionCache(AlgorithmManager manager)
     }
 
     public async Task<IAlgorithmSession> GetOrInitializeAsync(
+        long taskId,
         string pluginId,
         AlgorithmInitialization initialization,
         CancellationToken cancellationToken = default)
     {
-        var key = BuildKey(pluginId, initialization);
+        var key = BuildKey(taskId, pluginId, initialization);
         while (true)
         {
             var lazy = _sessions.GetOrAdd(key, _ => new Lazy<Task<IAlgorithmSession>>(
@@ -69,7 +76,7 @@ public sealed class AlgorithmSessionCache(AlgorithmManager manager)
     private async Task<IAlgorithmSession> CreateAsync(
         string pluginId, AlgorithmInitialization initialization)
     {
-        var session = await manager.CreateSessionAsync(pluginId, CancellationToken.None);
+        var session = await _createSession(pluginId, CancellationToken.None);
         try
         {
             await session.InitializeAsync(initialization, CancellationToken.None);
@@ -82,9 +89,10 @@ public sealed class AlgorithmSessionCache(AlgorithmManager manager)
         }
     }
 
-    private static string BuildKey(string pluginId, AlgorithmInitialization initialization)
+    private static string BuildKey(long taskId, string pluginId, AlgorithmInitialization initialization)
     {
         var payload = string.Join("\n",
+            taskId.ToString(CultureInfo.InvariantCulture),
             pluginId.Trim(),
             initialization.ExecutionProvider.Trim().ToLowerInvariant(),
             initialization.Settings?.GetRawText() ?? "null");

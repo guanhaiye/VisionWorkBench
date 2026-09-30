@@ -28,10 +28,10 @@ public sealed class TaskTcpTriggerConfig
     public string? TcpProjectCode { get; set; }
     public MessageMatchMode MatchMode { get; set; } = MessageMatchMode.ExactText;
     public string MatchValue { get; set; } = "";
-    public string ResponseTemplate { get; set; } = "{\"ok\":true,\"code\":\"completed\",\"requestId\":\"{requestId}\",\"task\":\"{task}\",\"status\":\"{status}\",\"count\":{count}}";
+    public string ResponseTemplate { get; set; } = "{\"ok\":{ok},\"code\":\"{code}\",\"requestId\":\"{requestId}\",\"task\":\"{task}\",\"status\":\"{status}\",\"count\":{count},\"processed\":{processed},\"skipped\":{skipped},\"total\":{total}}";
 }
 
-public sealed record TcpTaskExecutionResult(string Status, long Count, string Decision, long RecordId = 0);
+public sealed record TcpTaskExecutionResult(string Status, long Count, string Decision, long RecordId = 0, int ProcessedCount = 0, int SkippedCount = 0, int TotalCount = 0);
 
 /// <summary>一次 TCP 触发任务的不可变执行上下文。</summary>
 public sealed record TcpTaskExecutionRequest(
@@ -41,7 +41,10 @@ public sealed record TcpTaskExecutionRequest(
     string TaskName,
     string RequestId,
     string Message,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    TimeSpan? ExecutionTimeout = null,
+    IReadOnlyList<string>? ImageFiles = null,
+    TcpExecutionProgress? Progress = null);
 
 public enum TcpExecutionAdmission
 {
@@ -92,6 +95,8 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         public required CancellationToken ProjectCancellation { get; init; }
         public required TaskCompletionSource<bool> StartGate { get; init; }
         public required Options Options { get; init; }
+        public CancellationTokenRegistration CancellationRegistration;
+        public int Started;
     }
 
     private sealed class StationState : IAsyncDisposable
@@ -169,6 +174,11 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
             return new(TcpExecutionAdmission.QueueFull);
         }
 
+        item.CancellationRegistration = projectCancellation.Register(() =>
+        {
+            if (Interlocked.CompareExchange(ref item.Started, 2, 0) == 0)
+                CompleteCanceled(item);
+        });
         var queued = station.Queue.Reader.Count;
         return new(
             TcpExecutionAdmission.Accepted,
@@ -205,6 +215,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                 if (item.ProjectCancellation.IsCancellationRequested)
                 {
                     CompleteCanceled(item);
+                    item.CancellationRegistration.Dispose();
                     continue;
                 }
 
@@ -213,6 +224,11 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                     using var startCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                         _stop.Token, item.ProjectCancellation);
                     await item.StartGate.Task.WaitAsync(startCancellation.Token);
+                    if (Interlocked.CompareExchange(ref item.Started, 1, 0) != 0)
+                    {
+                        CompleteCanceled(item);
+                        continue;
+                    }
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
                         _stop.Token, item.ProjectCancellation);
                     timeout.CancelAfter(item.Options.ExecutionTimeout);
@@ -223,7 +239,8 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    if (!item.ProjectCancellation.IsCancellationRequested
+                    if (Volatile.Read(ref item.Started) == 1
+                        && !item.ProjectCancellation.IsCancellationRequested
                         && !_stop.IsCancellationRequested
                         && Volatile.Read(ref item.Request.Finished) == 0)
                     {
@@ -244,6 +261,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                 }
                 finally
                 {
+                    item.CancellationRegistration.Dispose();
                     // 保留完成记录，使相同 requestId 在缓存生命周期内得到幂等结果。
                 }
             }
@@ -253,10 +271,12 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     private void CompleteCanceled(WorkItem item)
     {
-        item.Request.Completion.TrySetCanceled();
+        if (Interlocked.Exchange(ref item.Request.Finished, 1) == 1) return;
+        item.Request.Completion.TrySetCanceled(item.ProjectCancellation.IsCancellationRequested
+            ? item.ProjectCancellation
+            : _stop.Token);
         _requests.TryRemove(item.Request.Key, out _);
     }
-
     public async Task RemoveProjectAsync(string projectCode)
     {
         // Station queues are shared across TCP projects to preserve physical station
@@ -836,6 +856,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             return _logHistory.TakeLast(Math.Clamp(maxCount, 1, LogHistoryLimit)).ToArray();
     }
     public Func<TcpTaskExecutionRequest, CancellationToken, Task<TcpTaskExecutionResult>>? TaskExecutor { get; set; }
+    public Func<long, TimeSpan, CancellationToken, Task<TcpExecutionPlan>>? TaskExecutionPlanner { get; set; }
     public ProjectCommunicationManager(Persistence.ProjectStationRepository projects, Persistence.TaskRepository tasks, ILogger<ProjectCommunicationManager>? logger = null, string? logDirectory = null, Persistence.CommunicationRequestStore? requestStore = null)
     {
         _projects = projects;
@@ -1086,6 +1107,22 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             return;
         }
 
+        var configuredTimeout = TimeSpan.FromSeconds(Math.Max(1, runtime.Config.StationExecutionTimeoutSeconds));
+        TcpExecutionPlan plan;
+        try
+        {
+            plan = TaskExecutionPlanner is null
+                ? new TcpExecutionPlan(configuredTimeout)
+                : await TaskExecutionPlanner(task.Id, configuredTimeout, runtime.ExecutionStop.Token);
+        }
+        catch (Exception ex)
+        {
+            _processing.TryRemove(cacheKey, out _);
+            await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
+                "execution_plan_failed", ex.Message, persistedRequest);
+            return;
+        }
+        var imageFiles = plan.ImageFiles?.ToArray();
         var request = new TcpTaskExecutionRequest(
             runtime.Config.ProjectCode,
             task.Id,
@@ -1093,7 +1130,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             task.Name,
             requestId,
             text,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            plan.ExecutionTimeout,
+            imageFiles,
+            imageFiles is null ? null : new TcpExecutionProgress(imageFiles.Length));
         var submission = _executionScheduler.TryEnqueue(
             request,
             runtime.ExecutionStop.Token,
@@ -1101,7 +1141,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             {
                 MaxConcurrency = runtime.Config.StationMaxConcurrency,
                 MaxQueueLength = runtime.Config.StationQueueLength,
-                ExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, runtime.Config.StationExecutionTimeoutSeconds)),
+                ExecutionTimeout = request.ExecutionTimeout ?? configuredTimeout,
             },
             token => TaskExecutor(request, token));
         if (submission.Admission == TcpExecutionAdmission.QueueFull)
@@ -1130,7 +1170,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             }
             else if (submission.TerminalCode == "execution_timeout")
             {
-                var timeoutResponse = BuildTimeoutResponse(requestId, task, runtime.Config.StationExecutionTimeoutSeconds);
+                var timeoutResponse = BuildTimeoutResponse(requestId, task, request.ExecutionTimeout ?? configuredTimeout);
                 _completed[cacheKey] = timeoutResponse;
                 await CompletePersistedRequestAsync(persistedRequest, timeoutResponse);
                 await SendTextAsync(runtime, connectionId, timeoutResponse);
@@ -1191,6 +1231,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         }
         catch (TcpExecutionTimeoutException ex)
         {
+            var progress = request.Progress?.Snapshot();
             var response = JsonSerializer.Serialize(new
             {
                 ok = false,
@@ -1198,6 +1239,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 requestId = request.RequestId,
                 task = task.Name,
                 message = ex.Message,
+                processed = progress?.ProcessedCount ?? 0,
+                skipped = progress?.SkippedCount ?? 0,
+                total = progress?.TotalCount ?? 0,
+                unprocessed = progress?.UnprocessedCount ?? 0,
             }, TcpMessageCodec.TextJsonOptions);
             _completed[cacheKey] = response;
             await CompletePersistedRequestAsync(persistedRequest, response);
@@ -1210,11 +1255,12 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             var projectStopped = !_runtimes.ContainsKey(runtime.Config.ProjectCode);
             var code = projectStopped ? "project_stopped" : "execution_canceled";
             await TerminalizeRequestAsync(runtime, connectionId, task, request.RequestId, cacheKey,
-                code, projectStopped ? "项目已停止，任务执行被取消" : "任务执行被取消", persistedRequest);
+                code, projectStopped ? "项目已停止，任务执行被取消" : "任务执行被取消", persistedRequest, request.Progress?.Snapshot());
             Log("INFO", "TASK", $"[{runtime.Config.ProjectCode}/{connectionId}] 任务已取消: {task.Name}, requestId={request.RequestId}, code={code}");
         }
         catch (Exception ex)
         {
+            var progress = request.Progress?.Snapshot();
             var response = JsonSerializer.Serialize(new
             {
                 ok = false,
@@ -1222,6 +1268,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 requestId = request.RequestId,
                 task = task.Name,
                 message = ex.Message,
+                processed = progress?.ProcessedCount ?? 0,
+                skipped = progress?.SkippedCount ?? 0,
+                total = progress?.TotalCount ?? 0,
+                unprocessed = progress?.UnprocessedCount ?? 0,
             }, TcpMessageCodec.TextJsonOptions);
             _completed[cacheKey] = response;
             await CompletePersistedRequestAsync(persistedRequest, response);
@@ -1244,7 +1294,8 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         string cacheKey,
         string code,
         string message,
-        Persistence.CommunicationRequestEntity? persistedRequest)
+        Persistence.CommunicationRequestEntity? persistedRequest,
+        TcpExecutionProgressSnapshot? progress = null)
     {
         var response = JsonSerializer.Serialize(new
         {
@@ -1253,6 +1304,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             requestId,
             task = task.Name,
             message,
+            processed = progress?.ProcessedCount ?? 0,
+            skipped = progress?.SkippedCount ?? 0,
+            total = progress?.TotalCount ?? 0,
+            unprocessed = progress?.UnprocessedCount ?? 0,
         }, TcpMessageCodec.TextJsonOptions);
         _completed[cacheKey] = response;
         await CompletePersistedRequestAsync(persistedRequest, response);
@@ -1274,14 +1329,14 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         catch (Exception ex) { Log("WARN", "SYS", $"[{runtime.Config.ProjectCode}/{connectionId}] 完成响应发送失败: {ex.Message}"); }
     }
 
-    private static string BuildTimeoutResponse(string requestId, Persistence.TaskEntity task, int timeoutSeconds) =>
+    private static string BuildTimeoutResponse(string requestId, Persistence.TaskEntity task, TimeSpan timeout) =>
         JsonSerializer.Serialize(new
         {
             ok = false,
             code = "execution_timeout",
             requestId,
             task = task.Name,
-            message = $"工位任务超过 {Math.Max(1, timeoutSeconds)} 秒执行超时",
+            message = $"工位任务超过 {timeout.TotalSeconds:0.#} 秒执行超时",
         }, TcpMessageCodec.TextJsonOptions);
     private static IReadOnlyList<TaskTcpTriggerConfig> ParseTriggers(string? json)
     {
@@ -1326,15 +1381,41 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
         try { using var doc = JsonDocument.Parse(text); return doc.RootElement.TryGetProperty("requestId", out var value) ? value.GetString() : null; }
         catch (JsonException) { return null; }
     }
-    private static string ApplyTemplate(string template, string requestId, Persistence.TaskEntity task, TcpTaskExecutionResult result) =>
-        (string.IsNullOrWhiteSpace(template) ? "{\"status\":\"{status}\"}" : template)
+    private static string ApplyTemplate(string template, string requestId, Persistence.TaskEntity task, TcpTaskExecutionResult result)
+    {
+        if (!string.Equals(result.Status, "completed", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                code = result.Status,
+                requestId,
+                task = task.Name,
+                status = result.Status,
+                decision = result.Decision,
+                count = result.Count,
+                recordId = result.RecordId,
+                processed = result.ProcessedCount,
+                skipped = result.SkippedCount,
+                total = result.TotalCount,
+                unprocessed = Math.Max(0, result.TotalCount - result.ProcessedCount - result.SkippedCount),
+            }, TcpMessageCodec.TextJsonOptions);
+        }
+
+        return (string.IsNullOrWhiteSpace(template) ? "{}" : template)
+            .Replace("{ok}", "true", StringComparison.Ordinal)
+            .Replace("{code}", result.Status, StringComparison.Ordinal)
             .Replace("{requestId}", requestId, StringComparison.Ordinal)
             .Replace("{task}", task.Name, StringComparison.Ordinal)
             .Replace("{taskCode}", task.StationCode, StringComparison.Ordinal)
             .Replace("{status}", result.Status, StringComparison.Ordinal)
             .Replace("{decision}", result.Decision, StringComparison.Ordinal)
             .Replace("{count}", result.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
-            .Replace("{recordId}", result.RecordId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            .Replace("{recordId}", result.RecordId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{processed}", result.ProcessedCount.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{skipped}", result.SkippedCount.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{total}", result.TotalCount.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+    }
     private async Task SendJsonAsync(ProjectRuntime runtime, string connectionId, object value) => await SendTextAsync(runtime, connectionId, JsonSerializer.Serialize(value, TcpMessageCodec.TextJsonOptions));
     private bool AllowRate(ProjectRuntime runtime, string endpoint)
     {
