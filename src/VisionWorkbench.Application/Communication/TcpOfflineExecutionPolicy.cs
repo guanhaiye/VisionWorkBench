@@ -28,6 +28,19 @@ public sealed class TcpExecutionProgress(int totalCount)
         Math.Min(TotalCount, Math.Max(0, Volatile.Read(ref _skipped))));
 }
 
+/// <summary>Bridges each completed inference record to the request-wide progress snapshot.</summary>
+public sealed class TcpOfflineExecutionProgressTracker(TcpExecutionProgress? requestProgress)
+{
+    private int _processedCount;
+
+    public int ProcessedCount => Math.Max(0, Volatile.Read(ref _processedCount));
+
+    public void ReportProcessed()
+    {
+        Interlocked.Increment(ref _processedCount);
+        requestProgress?.ReportProcessed();
+    }
+}
 public static class TcpOfflineExecutionPolicy
 {
     /// <summary>

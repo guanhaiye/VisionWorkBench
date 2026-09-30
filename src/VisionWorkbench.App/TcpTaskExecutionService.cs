@@ -136,11 +136,11 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var sourceCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         RecordCompletedEventArgs? lastRecord = null;
-        var processed = 0;
+        var progressTracker = new TcpOfflineExecutionProgressTracker(request.Progress);
         run.RecordCompleted += (_, result) =>
         {
             lastRecord = result;
-            Interlocked.Increment(ref processed);
+            progressTracker.ReportProcessed();
             RecordInferenceDuration(task.Id, result.Output.Performance?.TotalMs ?? 0);
         };
         run.SourceCompleted += (_, _) => sourceCompleted.TrySetResult(true);
@@ -167,7 +167,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             var progress = request.Progress ?? new TcpExecutionProgress(files.Length);
             if (request.Progress is null)
             {
-                progress.ReportProcessed(processed);
+                progress.ReportProcessed(progressTracker.ProcessedCount);
                 progress.SetSkippedCount(skipped);
             }
             var result = TcpOfflineExecutionPolicy.CreateResult(
