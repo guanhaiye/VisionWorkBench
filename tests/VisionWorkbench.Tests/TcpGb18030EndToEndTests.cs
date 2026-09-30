@@ -59,7 +59,6 @@ public sealed class TcpGb18030EndToEndTests : IDisposable
             MaxRequestsPerMinute = 1000,
             IdleTimeoutSeconds = 0,
             StationMaxConcurrency = 1,
-            StationQueueLength = 1,
             StationExecutionTimeoutSeconds = 30,
         });
 

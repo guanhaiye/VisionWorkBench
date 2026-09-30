@@ -16,7 +16,6 @@ public sealed class TcpStationExecutionSchedulerTests
         await using var scheduler = new TcpStationExecutionScheduler(new TcpStationExecutionScheduler.Options
         {
             MaxConcurrency = concurrency,
-            MaxQueueLength = 8,
             ExecutionTimeout = TimeSpan.FromSeconds(5),
         });
         using var projectStop = new CancellationTokenSource();
@@ -45,7 +44,6 @@ public sealed class TcpStationExecutionSchedulerTests
                 new TcpStationExecutionScheduler.Options
                 {
                     MaxConcurrency = concurrency,
-                    MaxQueueLength = 8,
                     ExecutionTimeout = TimeSpan.FromSeconds(5),
                 }, ct => ExecuteAsync($"req-{index}", ct)))
             .ToArray();
@@ -127,7 +125,6 @@ public sealed class TcpStationExecutionSchedulerTests
         await using var scheduler = new TcpStationExecutionScheduler(new TcpStationExecutionScheduler.Options
         {
             MaxConcurrency = 1,
-            MaxQueueLength = 20,
             ExecutionTimeout = TimeSpan.FromSeconds(5),
         });
         using var projectStop = new CancellationTokenSource();
@@ -159,7 +156,7 @@ public sealed class TcpStationExecutionSchedulerTests
         var enteredOtherStation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new TcpStationExecutionScheduler.Options
         {
-            MaxConcurrency = 1, MaxQueueLength = 8, ExecutionTimeout = TimeSpan.FromSeconds(10),
+            MaxConcurrency = 1, ExecutionTimeout = TimeSpan.FromSeconds(10),
         };
 
         var first = scheduler.TryEnqueue(Request("project-a-1", "project-a"), stopA.Token, options,
@@ -193,7 +190,7 @@ public sealed class TcpStationExecutionSchedulerTests
         var enteredFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new TcpStationExecutionScheduler.Options
         {
-            MaxConcurrency = 1, MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2),
+            MaxConcurrency = 1, ExecutionTimeout = TimeSpan.FromSeconds(2),
         };
         var first = scheduler.TryEnqueue(Request("cancel-first"), activeStop.Token, options, async ct =>
         {
@@ -224,7 +221,7 @@ public sealed class TcpStationExecutionSchedulerTests
         var request = Request("timeout-1");
         var options = new TcpStationExecutionScheduler.Options
         {
-            MaxConcurrency = 1, MaxQueueLength = 1, ExecutionTimeout = TimeSpan.FromMilliseconds(50),
+            MaxConcurrency = 1, ExecutionTimeout = TimeSpan.FromMilliseconds(50),
         };
         var submission = scheduler.TryEnqueue(request, stop.Token, options,
             ct => Task.Delay(TimeSpan.FromSeconds(5), ct).ContinueWith(_ => Result("never"), ct));

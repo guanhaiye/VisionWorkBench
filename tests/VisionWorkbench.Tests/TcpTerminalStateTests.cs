@@ -46,7 +46,7 @@ public sealed class TcpTerminalStateTests : IDisposable
     public async Task TaskExecutorNotSet_CompletesPersistedRequestWithExecutionUnavailable()
     {
         const string project = "p-unavail";
-        await StartAsync(project, maxConcurrency: 1, queueLength: 1);
+        await StartAsync(project, maxConcurrency: 1);
         var task = await CreateTaskAsync();
         _manager.TaskExecutor = null;
 
@@ -68,11 +68,20 @@ public sealed class TcpTerminalStateTests : IDisposable
     }
 
     [Fact]
+    public void LegacyQueueLengthField_IsIgnoredAndNotWrittenToCurrentConfiguration()
+    {
+        var profile = System.Text.Json.JsonSerializer.Deserialize<ProjectCommunicationConfig>(
+            "{\"StationQueueLength\":1}");
+        Assert.NotNull(profile);
+        Assert.Equal(3, profile.StationMaxConcurrency);
+        Assert.DoesNotContain("StationQueueLength", System.Text.Json.JsonSerializer.Serialize(profile));
+    }
+    [Fact]
     public async Task StationCapacityFull_RejectsImmediatelyAndPersistsBusyTerminalState()
     {
         const string project = "p-busy";
         // 并发为 1 时，活动请求占满容量后，新请求必须立即拒绝，不进入等待队列。
-        await StartAsync(project, maxConcurrency: 1, queueLength: 1);
+        await StartAsync(project, maxConcurrency: 1);
         var task = await CreateTaskAsync();
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -88,6 +97,7 @@ public sealed class TcpTerminalStateTests : IDisposable
 
         var first = await SendAndReadAsync(client, reader, ExecuteJson("req-q-a", task.StationCode));
         Assert.Contains("accepted", first);
+        Assert.DoesNotContain("queuePosition", first);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         var second = await SendAndReadAsync(client, reader, ExecuteJson("req-q-b", task.StationCode));
@@ -113,7 +123,7 @@ public sealed class TcpTerminalStateTests : IDisposable
     public async Task ProjectStop_CancelsExecutionAndCompletesPersistedRequestWithProjectStopped()
     {
         const string project = "p-stop";
-        await StartAsync(project, maxConcurrency: 1, queueLength: 1);
+        await StartAsync(project, maxConcurrency: 1);
         var task = await CreateTaskAsync();
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _manager.TaskExecutor = async (request, ct) =>
@@ -129,6 +139,7 @@ public sealed class TcpTerminalStateTests : IDisposable
 
         var first = await SendAndReadAsync(client, reader, ExecuteJson(requestId, task.StationCode));
         Assert.Contains("accepted", first);
+        Assert.DoesNotContain("queuePosition", first);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         await _manager.StopProjectAsync(project);
@@ -142,7 +153,7 @@ public sealed class TcpTerminalStateTests : IDisposable
     public async Task UnsupportedCommand_DoesNotCreateProcessingRecord()
     {
         const string project = "p-badcmd";
-        await StartAsync(project, maxConcurrency: 1, queueLength: 1);
+        await StartAsync(project, maxConcurrency: 1);
         await CreateTaskAsync();
 
         using var client = await ConnectAsync();
@@ -158,7 +169,7 @@ public sealed class TcpTerminalStateTests : IDisposable
         Assert.Null(request); // BeginAsync 未发生，不应留下 processing 记录
     }
 
-    private async Task StartAsync(string projectCode, int maxConcurrency, int queueLength)
+    private async Task StartAsync(string projectCode, int maxConcurrency)
     {
         await _manager.StartAsync(new ProjectCommunicationConfig
         {
@@ -173,7 +184,6 @@ public sealed class TcpTerminalStateTests : IDisposable
             MaxRequestsPerMinute = 1000,
             IdleTimeoutSeconds = 0,
             StationMaxConcurrency = maxConcurrency,
-            StationQueueLength = queueLength,
             StationExecutionTimeoutSeconds = 30,
         });
     }

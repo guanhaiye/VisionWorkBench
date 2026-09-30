@@ -53,14 +53,13 @@ public enum TcpExecutionAdmission
     Processing,
     Completed,
     Busy,
-    QueueFull,
+    Unavailable,
 }
 
 public sealed class TcpExecutionTimeoutException(string message) : TimeoutException(message);
 
 public sealed record TcpExecutionSubmission(
     TcpExecutionAdmission Admission,
-    int QueuePosition = 0,
     TcpTaskExecutionResult? CachedResult = null,
     string? TerminalCode = null,
     Task<TcpTaskExecutionResult>? Completion = null,
@@ -68,14 +67,13 @@ public sealed record TcpExecutionSubmission(
     Action? Cancel = null);
 
 /// <summary>
-/// 按工位隔离的异步执行调度器。TCP 接收线程只负责入队，实际执行由每个工位的有界 worker 池完成。
+/// 按工位隔离的异步执行调度器。TCP 接收线程只预留并发槽位，实际执行由固定 worker 池完成；槽位满时立即拒绝。
 /// </summary>
 public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 {
     public sealed record Options
     {
         public int MaxConcurrency { get; init; } = 3;
-        public int MaxQueueLength { get; init; } = 20;
         public TimeSpan ExecutionTimeout { get; init; } = TimeSpan.FromSeconds(30);
     }
 
@@ -215,7 +213,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         {
             ReleaseCapacity(item);
             _requests.TryRemove(key, out _);
-            return new(TcpExecutionAdmission.QueueFull);
+            return new(TcpExecutionAdmission.Unavailable);
         }
 
         item.CancellationRegistration = projectCancellation.Register(() =>
@@ -223,10 +221,8 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
             if (Interlocked.CompareExchange(ref item.Started, 2, 0) == 0)
                 CompleteCanceled(item);
         });
-        var queued = station.Queue.Reader.Count;
         return new(
             TcpExecutionAdmission.Accepted,
-            QueuePosition: queued,
             Completion: state.Completion.Task,
             Start: () => startGate.TrySetResult(true),
             Cancel: () => startGate.TrySetCanceled());
@@ -234,9 +230,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     private StationState CreateStation(string stationKey, Options options)
     {
-        // Capacity is reserved atomically before a WorkItem can enter this handoff channel.
-        // An unbounded channel is safe here: the number of accepted items is capped by
-        // StationState.TryReserveCapacity, so excess requests never accumulate in a queue.
+        // This channel hands accepted work to the fixed worker pool. Every item reserves an active slot first, so it cannot grow into a waiting backlog.
         var queue = Channel.CreateUnbounded<WorkItem>(new UnboundedChannelOptions
         {
             SingleReader = false,
@@ -343,7 +337,6 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
     private static Options Normalize(Options options) => options with
     {
         MaxConcurrency = Math.Clamp(options.MaxConcurrency, 1, 8),
-        MaxQueueLength = Math.Max(1, options.MaxQueueLength),
         ExecutionTimeout = options.ExecutionTimeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(30) : options.ExecutionTimeout,
     };
 
@@ -402,7 +395,6 @@ public sealed class ProjectCommunicationConfig
     public int MaxRequestsPerMinute { get; set; } = 1200;
     public int IdleTimeoutSeconds { get; set; } = 300;
     public int StationMaxConcurrency { get; set; } = 3;
-    public int StationQueueLength { get; set; } = 20;
     public int StationExecutionTimeoutSeconds { get; set; } = 30;
 }
 
@@ -1190,7 +1182,6 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             new TcpStationExecutionScheduler.Options
             {
                 MaxConcurrency = runtime.Config.StationMaxConcurrency,
-                MaxQueueLength = runtime.Config.StationQueueLength,
                 ExecutionTimeout = request.ExecutionTimeout ?? configuredTimeout,
             },
             token => TaskExecutor(request, token));
@@ -1203,10 +1194,10 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             _processing.TryRemove(cacheKey, out _);
             return;
         }
-        if (submission.Admission == TcpExecutionAdmission.QueueFull)
+        if (submission.Admission == TcpExecutionAdmission.Unavailable)
         {
             await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
-                "station_queue_full", $"工位队列不可用(容量 {runtime.Config.StationQueueLength})", persistedRequest);
+                "execution_unavailable", "任务调度器已停止，当前请求未执行，请重试", persistedRequest);
             _processing.TryRemove(cacheKey, out _);
             return;
         }
@@ -1253,7 +1244,7 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 ok = true,
                 code = "accepted",
                 requestId,
-                data = new { task = task.Name, station = task.StationCode, queuePosition = submission.QueuePosition },
+                data = new { task = task.Name, station = task.StationCode },
             });
             submission.Start?.Invoke();
         }
