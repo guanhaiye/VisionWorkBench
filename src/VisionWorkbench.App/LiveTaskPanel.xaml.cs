@@ -116,6 +116,7 @@ public partial class LiveTaskPanel : UserControl
     private SopSnapshot? _lastSopSnapshot;
     private string? _lastSopRoundText;
     private ImageSource? _lastSopRoundImage;
+    private DateTimeOffset _lastTcpOfflineRequestReceivedAt = DateTimeOffset.MinValue;
     private bool _roiOverrideSet;
     private Point _roiDragStart;
     private NormalizedRect? _roiOverride;
@@ -1137,6 +1138,30 @@ public partial class LiveTaskPanel : UserControl
     }
 
     // ---- 渲染回调（DetectionRunService 从相机线程调用）----
+
+    public void DisplayTcpOfflineResult(TcpOfflineResultEventArgs args)
+    {
+        if (args.TaskId != TaskId || args.Result.Frame is null) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (args.TaskId != TaskId || args.ReceivedAt < _lastTcpOfflineRequestReceivedAt) return;
+            _lastTcpOfflineRequestReceivedAt = args.ReceivedAt;
+            var result = args.Result;
+            var frame = result.Frame!;
+            _lastOutput = result.Output;
+            _lastRenderedResultSequence = result.Output.Sequence;
+            _preview.Render(PreviewImage, frame, force: true);
+            FitPreviewAfterSourceLoaded();
+            _lastRenderedPreviewSequence = frame.Sequence;
+            RenderRoi();
+            var (text, color) = GetDisplayDecision(result);
+            DecisionText.Text = text;
+            DecisionText.Foreground = color;
+            CountText.Text = $"数量: {result.Output.GetCount()}";
+            ElapsedText.Text = $"算法耗时: {result.Output.Performance?.TotalMs ?? 0:0.#} ms";
+            DrawOverlay(result.Output);
+        });
+    }
 
     private void RenderPreview(VideoFrame frame)
     {

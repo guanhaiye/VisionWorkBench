@@ -12,6 +12,15 @@ using VisionWorkbench.Persistence;
 
 namespace VisionWorkbench.App;
 
+public sealed class TcpOfflineResultEventArgs(
+    long taskId, string requestId, DateTimeOffset receivedAt, RecordCompletedEventArgs result) : EventArgs
+{
+    public long TaskId { get; } = taskId;
+    public string RequestId { get; } = requestId;
+    public DateTimeOffset ReceivedAt { get; } = receivedAt;
+    public RecordCompletedEventArgs Result { get; } = result;
+}
+
 /// <summary>
 /// TCP 触发执行器。物理相机按 Provider+Device 复用一次，算法会话按任务和模型配置建立有界独立会话池。
 /// 每个 TCP 请求只消费一个独立帧，并拥有自己的 DetectionRunService/结果上下文。
@@ -26,6 +35,9 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
     private readonly SemaphoreSlim _resourceGate = new(1, 1);
     private int _activeExecutions;
     private int _disposed;
+
+    /// <summary>离线 TCP 批次完成单张推理后通知实时页显示对应原图和检测框。</summary>
+    public event EventHandler<TcpOfflineResultEventArgs>? OfflineResultCompleted;
 
     private sealed record ModelSessionLeaseSet(
         IAlgorithmSession Primary,
@@ -155,6 +167,18 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
                 lastRecord = result;
                 progressTracker.ReportProcessed();
                 RecordInferenceDuration(task.Id, result.Output.Performance?.TotalMs ?? 0);
+                var handlers = OfflineResultCompleted;
+                if (handlers is null) return;
+                var args = new TcpOfflineResultEventArgs(task.Id, request.RequestId, request.ReceivedAt, result);
+                foreach (EventHandler<TcpOfflineResultEventArgs> handler in handlers.GetInvocationList())
+                {
+                    try { handler(this, args); }
+                    catch (Exception ex)
+                    {
+                        services.LoggerFactory.CreateLogger<TcpTaskExecutionService>()
+                            .LogDebug(ex, "转发 TCP 离线检测结果到实时画布失败: {RequestId}", request.RequestId);
+                    }
+                }
             };
             run.SourceCompleted += (_, _) => sourceCompleted.TrySetResult(true);
             run.Faulted += (_, fault) => faulted.TrySetResult(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
@@ -292,7 +316,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
                 if (!IsTcpTriggerEnabled(task.TriggerJson)) continue;
                 try
                 {
-                    var concurrency = GetPrewarmConcurrency(task.TriggerJson, profiles);
+                    var concurrency = TcpModelSessionPrewarmPolicy.GetConcurrency(task.TriggerJson, profiles);
                     await PrewarmTaskAsync(task.Id, concurrency, cancellationToken);
                     logger.LogInformation("TCP 任务模型池预热完成: {Task} ({Station}), 会话数={Concurrency}",
                         task.Name, task.StationCode, concurrency);
@@ -324,55 +348,6 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         if (found?.Recipe is not { } recipe) return;
 
         await PrewarmModelSessionsAsync(task.Id, recipe, maxConcurrentSessions, cancellationToken);
-    }
-
-    private static int GetPrewarmConcurrency(
-        string? triggerJson, IReadOnlyCollection<ProjectCommunicationConfig> profiles)
-    {
-        if (string.IsNullOrWhiteSpace(triggerJson)) return 1;
-        try
-        {
-            using var document = JsonDocument.Parse(triggerJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Array) return 1;
-            var matchingConcurrency = new List<int>();
-            foreach (var rule in document.RootElement.EnumerateArray())
-            {
-                if (!TryGetPropertyIgnoreCase(rule, "Enabled", out var enabled)
-                    || enabled.ValueKind != JsonValueKind.True)
-                    continue;
-                var projectCode = TryGetPropertyIgnoreCase(rule, "TcpProjectCode", out var project)
-                    && project.ValueKind == JsonValueKind.String
-                    && !string.IsNullOrWhiteSpace(project.GetString())
-                    ? project.GetString()!.Trim()
-                    : "default";
-                var profile = profiles.FirstOrDefault(item =>
-                    string.Equals(item.ProjectCode, projectCode, StringComparison.OrdinalIgnoreCase));
-                if (profile is not null)
-                    matchingConcurrency.Add(Math.Clamp(profile.StationMaxConcurrency, 1, 8));
-            }
-            return matchingConcurrency.Count == 0 ? 1 : matchingConcurrency.Max();
-        }
-        catch (JsonException)
-        {
-            return 1;
-        }
-    }
-
-    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject())
-            {
-                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    value = property.Value;
-                    return true;
-                }
-            }
-        }
-        value = default;
-        return false;
     }
 
     private static bool IsTcpTriggerEnabled(string? triggerJson)
@@ -524,32 +499,9 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
                 Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
                 ExecutionProvider = model.Execution.ExecutionProvider,
             };
-            var leases = new ConcurrentBag<AlgorithmSessionCache.SessionUseLease>();
-            using var warmCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var warmTasks = Enumerable.Range(0, capacity).Select(async slotIndex =>
-            {
-                var lease = await services.AlgorithmSessions.AcquireSessionUseAsync(
-                    recipeTaskId, model.Execution.PluginId, initialization, capacity, warmCancellation.Token);
-                leases.Add(lease);
-                services.LoggerFactory.CreateLogger<TcpTaskExecutionService>().LogDebug(
-                    "TCP 模型会话预热成功: task={TaskId}, model={ModelId}, slot={Slot}",
-                    recipeTaskId, model.Execution.PluginId, slotIndex + 1);
-            }).ToArray();
-            try
-            {
-                await Task.WhenAll(warmTasks);
-            }
-            catch
-            {
-                warmCancellation.Cancel();
-                try { await Task.WhenAll(warmTasks); } catch { }
-                throw;
-            }
-            finally
-            {
-                foreach (var lease in leases.Reverse())
-                    await lease.DisposeAsync();
-            }
+            await services.AlgorithmSessions.PrewarmPoolAsync(
+                recipeTaskId, model.Execution.PluginId, initialization, capacity, cancellationToken);
+
         }
     }
     private static string CameraKey(Recipe recipe) => $"{recipe.CameraProviderId.Trim()}::{recipe.CameraDeviceId.Trim()}";

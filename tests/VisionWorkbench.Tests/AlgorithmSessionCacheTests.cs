@@ -64,6 +64,64 @@ public sealed class AlgorithmSessionCacheTests
     }
 
     [Fact]
+    public async Task SessionPool_PrewarmCreatesConfiguredSlotsOnceAndReusesThemConcurrently()
+    {
+        var created = 0;
+        var initialized = 0;
+        var cache = new AlgorithmSessionCache((_, _) =>
+        {
+            Interlocked.Increment(ref created);
+            return Task.FromResult<IAlgorithmSession>(new FakeSession(() => Interlocked.Increment(ref initialized)));
+        });
+        var init = new AlgorithmInitialization { ExecutionProvider = "cpu" };
+
+        await cache.PrewarmPoolAsync(51, "plugin.test", init, 3);
+        Assert.Equal(3, created);
+        Assert.Equal(3, initialized);
+
+        var leases = await Task.WhenAll(Enumerable.Range(0, 3)
+            .Select(_ => cache.AcquireSessionUseAsync(51, "plugin.test", init, 3)));
+        Assert.Equal(3, leases.Select(lease => lease.Session.SessionId).Distinct().Count());
+        Assert.Equal(3, created);
+        Assert.Equal(3, initialized);
+        foreach (var lease in leases) await lease.DisposeAsync();
+
+        await cache.PrewarmPoolAsync(51, "plugin.test", init, 3);
+        Assert.Equal(3, created);
+        Assert.Equal(3, initialized);
+        await cache.DisposeAsync();
+    }
+
+    [Fact]
+    public void TcpModelSessionPrewarmPolicy_UsesMatchingProjectConcurrencyAndOneForSingleProject()
+    {
+        var profiles = new[]
+        {
+            new VisionWorkbench.Application.Communication.ProjectCommunicationConfig
+            {
+                ProjectCode = "line-a", StationMaxConcurrency = 1,
+            },
+            new VisionWorkbench.Application.Communication.ProjectCommunicationConfig
+            {
+                ProjectCode = "line-b", StationMaxConcurrency = 3,
+            },
+        };
+        var oneProject = JsonSerializer.Serialize(new[]
+        {
+            new { Enabled = true, TcpProjectCode = "line-a" },
+        });
+        var multipleProjects = JsonSerializer.Serialize(new[]
+        {
+            new { Enabled = true, TcpProjectCode = "line-a" },
+            new { Enabled = true, TcpProjectCode = "line-b" },
+            new { Enabled = false, TcpProjectCode = "line-b" },
+        });
+
+        Assert.Equal(1, TcpModelSessionPrewarmPolicy.GetConcurrency(oneProject, profiles));
+        Assert.Equal(3, TcpModelSessionPrewarmPolicy.GetConcurrency(multipleProjects, profiles));
+    }
+
+    [Fact]
     public async Task SessionPool_RebuildsFaultedSlotAndIsolatesTasks()
     {
         var created = 0;

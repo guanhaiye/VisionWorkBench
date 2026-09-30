@@ -117,6 +117,36 @@ public sealed class AlgorithmSessionCache : IAsyncDisposable
     public AlgorithmSessionCache(Func<string, CancellationToken, Task<IAlgorithmSession>> createSession)
         => _createSession = createSession ?? throw new ArgumentNullException(nameof(createSession));
 
+    /// <summary>
+    /// Initialize a fixed number of reusable model slots before accepting triggered work.
+    /// Slots are warmed serially to avoid simultaneous YOLO/Python cold starts competing for memory.
+    /// Leases stay held until every slot is ready, then are released without stopping Ready workers.
+    /// </summary>
+    public async Task PrewarmPoolAsync(
+        long taskId,
+        string pluginId,
+        AlgorithmInitialization initialization,
+        int capacity,
+        CancellationToken cancellationToken = default)
+    {
+        capacity = Math.Clamp(capacity, 1, MaxSessionPoolSize);
+        var leases = new List<SessionUseLease>(capacity);
+        try
+        {
+            for (var index = 0; index < capacity; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                leases.Add(await AcquireSessionUseAsync(
+                    taskId, pluginId, initialization, capacity, cancellationToken));
+            }
+        }
+        finally
+        {
+            for (var index = leases.Count - 1; index >= 0; index--)
+                await leases[index].DisposeAsync();
+        }
+    }
+
     /// <summary>Acquire an initialized model slot from a bounded per-task pool.</summary>
     public async Task<SessionUseLease> AcquireSessionUseAsync(
         long taskId,

@@ -43,12 +43,14 @@ public partial class LivePage : UserControl
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
         AppServices.Instance.LiveTaskTriggerExecutor = ExecuteTcpTriggerAsync;
+        AppServices.Instance.TcpTaskExecution.OfflineResultCompleted += OnTcpOfflineResultCompleted;
         await LoadTasksAsync();
         await ResumePanelsAsync();
     }
 
     private async void Page_Unloaded(object sender, RoutedEventArgs e)
     {
+        AppServices.Instance.TcpTaskExecution.OfflineResultCompleted -= OnTcpOfflineResultCompleted;
         if (ReferenceEquals(AppServices.Instance.LiveTaskTriggerExecutor?.Target, this))
         {
             AppServices.Instance.LiveTaskTriggerExecutor = null;
@@ -81,6 +83,12 @@ public partial class LivePage : UserControl
         }
 
         return await panel.ExecuteTcpTriggerAsync(request, cancellationToken);
+    }
+
+    private void OnTcpOfflineResultCompleted(object? sender, TcpOfflineResultEventArgs e)
+    {
+        var panel = _panels.FirstOrDefault(item => item.TaskId == e.TaskId);
+        panel?.DisplayTcpOfflineResult(e);
     }
 
     private async Task LoadTasksAsync()
