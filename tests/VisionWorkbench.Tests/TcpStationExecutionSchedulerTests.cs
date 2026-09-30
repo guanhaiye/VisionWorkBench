@@ -7,40 +7,94 @@ namespace VisionWorkbench.Tests;
 
 public sealed class TcpStationExecutionSchedulerTests
 {
-    [Fact]
-    public async Task SameStation_RequestsRunInOrderEvenWhenConcurrencySettingIsThree()
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task SameStation_RunsUpToConfiguredConcurrencyThenQueues(int concurrency)
     {
         await using var scheduler = new TcpStationExecutionScheduler(new TcpStationExecutionScheduler.Options
         {
-            MaxConcurrency = 3,
-            MaxQueueLength = 20,
+            MaxConcurrency = concurrency,
+            MaxQueueLength = 8,
             ExecutionTimeout = TimeSpan.FromSeconds(5),
         });
         using var projectStop = new CancellationTokenSource();
-        var firstEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var concurrencyReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var active = 0;
+        var peak = 0;
 
-        var first = scheduler.TryEnqueue(Request("req-001"), projectStop.Token, async ct =>
+        async Task<TcpTaskExecutionResult> ExecuteAsync(string id, CancellationToken ct)
         {
-            firstEntered.TrySetResult(true);
-            await releaseFirst.Task.WaitAsync(ct);
-            return Result("req-001");
+            var now = Interlocked.Increment(ref active);
+            int observed;
+            do
+            {
+                observed = Volatile.Read(ref peak);
+                if (observed >= now) break;
+            } while (Interlocked.CompareExchange(ref peak, now, observed) != observed);
+            if (now == concurrency) concurrencyReached.TrySetResult(true);
+            await release.Task.WaitAsync(ct);
+            Interlocked.Decrement(ref active);
+            return new TcpTaskExecutionResult("completed", 10, id, ProcessedCount: 10, TotalCount: 10);
+        }
+
+        var submissions = Enumerable.Range(1, concurrency + 1)
+            .Select(index => scheduler.TryEnqueue(Request($"req-{index}"), projectStop.Token,
+                ct => ExecuteAsync($"req-{index}", ct)))
+            .ToArray();
+        foreach (var submission in submissions)
+            submission.Start!.Invoke();
+
+        await concurrencyReached.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await Task.Delay(100);
+        Assert.Equal(concurrency, Volatile.Read(ref active));
+        Assert.False(submissions[^1].Completion!.IsCompleted);
+
+        release.TrySetResult(true);
+        var results = await Task.WhenAll(submissions.Select(item => item.Completion!))
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(concurrency, Volatile.Read(ref peak));
+        Assert.Equal(Enumerable.Range(1, concurrency + 1).Select(index => $"req-{index}"), results.Select(result => result.Decision));
+        Assert.All(results, result =>
+        {
+            Assert.Equal(10, result.ProcessedCount);
+            Assert.Equal(10, result.TotalCount);
+            Assert.Equal("completed", result.Status);
         });
+    }
+
+    [Fact]
+    public async Task SharedStation_ExpandsWorkersWhenLaterProjectRequestsHigherConcurrency()
+    {
+        await using var scheduler = new TcpStationExecutionScheduler();
+        using var stop = new CancellationTokenSource();
+        var firstEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = scheduler.TryEnqueue(Request("expand-first", "project-a"), stop.Token,
+            new TcpStationExecutionScheduler.Options { MaxConcurrency = 1 }, async ct =>
+            {
+                firstEntered.TrySetResult(true);
+                await release.Task.WaitAsync(ct);
+                return Result("first");
+            });
         first.Start!.Invoke();
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        var second = scheduler.TryEnqueue(Request("req-002"), projectStop.Token, _ =>
-        {
-            secondEntered.TrySetResult(true);
-            return Task.FromResult(Result("req-002"));
-        });
+        var second = scheduler.TryEnqueue(Request("expand-second", "project-b"), stop.Token,
+            new TcpStationExecutionScheduler.Options { MaxConcurrency = 2 }, ct =>
+            {
+                secondEntered.TrySetResult(true);
+                return Task.FromResult(Result("second"));
+            });
         second.Start!.Invoke();
-        Assert.False(secondEntered.Task.IsCompleted);
-        releaseFirst.TrySetResult(true);
+        await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(first.Completion!.IsCompleted);
+        Assert.Equal("second", (await second.Completion!).Decision);
 
-        Assert.Equal("req-001", (await first.Completion!).Decision);
-        Assert.Equal("req-002", (await second.Completion!).Decision);
+        release.TrySetResult(true);
+        Assert.Equal("first", (await first.Completion!).Decision);
     }
 
     [Fact]
@@ -81,7 +135,7 @@ public sealed class TcpStationExecutionSchedulerTests
         var enteredOtherStation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new TcpStationExecutionScheduler.Options
         {
-            MaxConcurrency = 2, MaxQueueLength = 8, ExecutionTimeout = TimeSpan.FromSeconds(10),
+            MaxConcurrency = 1, MaxQueueLength = 8, ExecutionTimeout = TimeSpan.FromSeconds(10),
         };
 
         var first = scheduler.TryEnqueue(Request("project-a-1", "project-a"), stopA.Token, options,
@@ -115,7 +169,7 @@ public sealed class TcpStationExecutionSchedulerTests
         var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new TcpStationExecutionScheduler.Options
         {
-            MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2),
+            MaxConcurrency = 1, MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2),
         };
         var first = scheduler.TryEnqueue(Request("wait-first"), projectStop.Token, options, async ct =>
         {
@@ -145,7 +199,7 @@ public sealed class TcpStationExecutionSchedulerTests
         var enteredFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var queuedExecuted = false;
-        var options = new TcpStationExecutionScheduler.Options { MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2) };
+        var options = new TcpStationExecutionScheduler.Options { MaxConcurrency = 1, MaxQueueLength = 4, ExecutionTimeout = TimeSpan.FromSeconds(2) };
         var first = scheduler.TryEnqueue(Request("cancel-first"), activeStop.Token, options, async ct =>
         {
             enteredFirst.TrySetResult(true);

@@ -13,7 +13,7 @@ using VisionWorkbench.Persistence;
 namespace VisionWorkbench.App;
 
 /// <summary>
-/// TCP 触发执行器。物理相机按 Provider+Device 复用一次，算法会话按任务建立最多三个独立会话。
+/// TCP 触发执行器。物理相机按 Provider+Device 复用一次，算法会话按任务和模型配置建立有界独立会话池。
 /// 每个 TCP 请求只消费一个独立帧，并拥有自己的 DetectionRunService/结果上下文。
 /// </summary>
 public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDisposable
@@ -26,6 +26,11 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
     private readonly SemaphoreSlim _resourceGate = new(1, 1);
     private int _activeExecutions;
     private int _disposed;
+
+    private sealed record ModelSessionLeaseSet(
+        IAlgorithmSession Primary,
+        IReadOnlyDictionary<string, IAlgorithmSession> Sop,
+        IReadOnlyList<AlgorithmSessionCache.SessionUseLease> Leases);
 
     public async Task<TcpTaskExecutionResult> ExecuteAsync(
         TcpTaskExecutionRequest request,
@@ -51,45 +56,51 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
 
         var camera = _cameras.GetOrAdd(CameraKey(recipe), _ => new SharedCameraRuntime(services, recipe));
         await camera.EnsureStartedAsync(cancellationToken);
-        var modelSessions = await GetModelSessionsAsync(task.Id, recipe, cancellationToken);
-        await using var assignedCamera = camera.CreateAssignedSession(request.ReceivedAt);
-        var run = new DetectionRunService(
-            services.Records,
-            services.TempImages,
-            services.LoggerFactory.CreateLogger<DetectionRunService>(),
-            $"tcp-{task.Id}-{request.RequestId}",
-            services.ResultPublisher,
-            () => services.Settings.EnableHistory,
-            () => services.Settings.EnableHistory,
-            sopRuns: services.SopRuns,
-            pendingReplayTrigger: services.SopProductResultReplayer);
-        var completion = new TaskCompletionSource<RecordCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-        run.RecordCompleted += (_, result) => completion.TrySetResult(result);
-        run.Faulted += (_, fault) => completion.TrySetException(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
-
-        var modelUses = new List<AlgorithmSessionCache.SessionUseLease>();
+        var modelSessions = await AcquireModelSessionsAsync(
+            task.Id, recipe, request.MaxConcurrentModelSessions, cancellationToken);
         try
         {
-            foreach (var session in modelSessions.Sop.Values
-                .DistinctBy(session => session.SessionId)
-                .OrderBy(session => session.SessionId, StringComparer.Ordinal))
-                modelUses.Add(await services.AlgorithmSessions.AcquireUseAsync(session, cancellationToken));
+            await using var assignedCamera = camera.CreateAssignedSession(request.ReceivedAt);
+            var run = new DetectionRunService(
+                services.Records,
+                services.TempImages,
+                services.LoggerFactory.CreateLogger<DetectionRunService>(),
+                $"tcp-{task.Id}-{request.RequestId}",
+                services.ResultPublisher,
+                () => services.Settings.EnableHistory,
+                () => services.Settings.EnableHistory,
+                sopRuns: services.SopRuns,
+                pendingReplayTrigger: services.SopProductResultReplayer);
+            var completion = new TaskCompletionSource<RecordCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            run.RecordCompleted += (_, result) => completion.TrySetResult(result);
+            run.Faulted += (_, fault) => completion.TrySetException(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
 
-            var batch = await new BatchService(services.Batches).ResumeOrStartAsync(
-                task.Id, run.Counting, services.Records, services.Settings.DataDirectory, task.StationCode, cancellationToken);
-            await run.StartAsync(recipe, task.Id, assignedCamera, modelSessions.Primary, batch.Id,
-                FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode,
-                sopAlgorithms: recipe.Sop?.Definition is not null ? modelSessions.Sop : null);
-            var result = await completion.Task.WaitAsync(cancellationToken);
-            await run.StopAsync();
-            await new BatchService(services.Batches).EndAsync(result.CountAfter, "completed", cancellationToken);
-            return new TcpTaskExecutionResult("completed", result.CountAfter, result.Decision.Status.ToString(), result.Record.Id);
+            var batchService = new BatchService(services.Batches);
+            BatchEntity? batch = null;
+            var batchEnded = false;
+            try
+            {
+                batch = await batchService.StartAsync(
+                    task.Id, run.Counting.State.CurrentTotal, request.ProjectCode, task.StationCode, cancellationToken);
+                await run.StartAsync(recipe, task.Id, assignedCamera, modelSessions.Primary, batch.Id,
+                    FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode,
+                    sopAlgorithms: recipe.Sop?.Definition is not null ? modelSessions.Sop : null);
+                var result = await completion.Task.WaitAsync(cancellationToken);
+                await run.StopAsync();
+                await batchService.EndAsync(result.CountAfter, "completed", cancellationToken);
+                batchEnded = true;
+                return new TcpTaskExecutionResult("completed", result.CountAfter, result.Decision.Status.ToString(), result.Record.Id);
+            }
+            finally
+            {
+                await run.DisposeAsync();
+                if (batch is not null && !batchEnded)
+                    await batchService.EndAsync(run.Counting.State.CurrentTotal, "aborted", CancellationToken.None);
+            }
         }
         finally
         {
-            await run.DisposeAsync();
-            for (var index = modelUses.Count - 1; index >= 0; index--)
-                await modelUses[index].DisposeAsync();
+            await ReleaseModelSessionsAsync(modelSessions);
         }
     }
 
@@ -121,75 +132,97 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         });
         await using var camera = await services.Cameras.OpenSessionAsync(descriptor, cameraOptions, cancellationToken);
         await camera.OpenAsync(cameraOptions, cancellationToken);
-        var modelSessions = await GetModelSessionsAsync(task.Id, recipe, cancellationToken);
-        var modelUses = new List<AlgorithmSessionCache.SessionUseLease>();
-        var run = new DetectionRunService(
-            services.Records,
-            services.TempImages,
-            services.LoggerFactory.CreateLogger<DetectionRunService>(),
-            $"tcp-{task.Id}-{request.RequestId}",
-            services.ResultPublisher,
-            () => services.Settings.EnableHistory,
-            () => services.Settings.EnableHistory,
-            sopRuns: services.SopRuns,
-            pendingReplayTrigger: services.SopProductResultReplayer);
-        var sourceCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        RecordCompletedEventArgs? lastRecord = null;
-        var progressTracker = new TcpOfflineExecutionProgressTracker(request.Progress);
-        run.RecordCompleted += (_, result) =>
-        {
-            lastRecord = result;
-            progressTracker.ReportProcessed();
-            RecordInferenceDuration(task.Id, result.Output.Performance?.TotalMs ?? 0);
-        };
-        run.SourceCompleted += (_, _) => sourceCompleted.TrySetResult(true);
-        run.Faulted += (_, fault) => faulted.TrySetResult(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
+        var modelSessions = await AcquireModelSessionsAsync(
+            task.Id, recipe, request.MaxConcurrentModelSessions, cancellationToken);
         try
         {
-            foreach (var session in modelSessions.Sop.Values
-                .DistinctBy(session => session.SessionId)
-                .OrderBy(session => session.SessionId, StringComparer.Ordinal))
-                modelUses.Add(await services.AlgorithmSessions.AcquireUseAsync(session, cancellationToken));
-
-            var batch = await new BatchService(services.Batches).ResumeOrStartAsync(
-                task.Id, run.Counting, services.Records, services.Settings.DataDirectory, task.StationCode, cancellationToken);
-            await run.StartAsync(recipe, task.Id, camera, modelSessions.Primary, batch.Id,
-                FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode,
-                sopAlgorithms: recipe.Sop?.Definition is not null ? modelSessions.Sop : null);
-            var signal = await Task.WhenAny(sourceCompleted.Task, faulted.Task).WaitAsync(cancellationToken);
-            if (signal == faulted.Task) throw await faulted.Task;
-            await sourceCompleted.Task.WaitAsync(cancellationToken);
-            await run.WaitForCompletionAsync(cancellationToken: cancellationToken);
-            if (faulted.Task.IsCompleted) throw await faulted.Task;
-            var skipped = (camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
-            request.Progress?.SetSkippedCount(skipped);
-            var progress = request.Progress ?? new TcpExecutionProgress(files.Length);
-            if (request.Progress is null)
+            var run = new DetectionRunService(
+                services.Records,
+                services.TempImages,
+                services.LoggerFactory.CreateLogger<DetectionRunService>(),
+                $"tcp-{task.Id}-{request.RequestId}",
+                services.ResultPublisher,
+                () => services.Settings.EnableHistory,
+                () => services.Settings.EnableHistory,
+                sopRuns: services.SopRuns,
+                pendingReplayTrigger: services.SopProductResultReplayer);
+            var sourceCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var faulted = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+            RecordCompletedEventArgs? lastRecord = null;
+            var progressTracker = new TcpOfflineExecutionProgressTracker(request.Progress);
+            run.RecordCompleted += (_, result) =>
             {
-                progress.ReportProcessed(progressTracker.ProcessedCount);
-                progress.SetSkippedCount(skipped);
+                lastRecord = result;
+                progressTracker.ReportProcessed();
+                RecordInferenceDuration(task.Id, result.Output.Performance?.TotalMs ?? 0);
+            };
+            run.SourceCompleted += (_, _) => sourceCompleted.TrySetResult(true);
+            run.Faulted += (_, fault) => faulted.TrySetResult(new InvalidOperationException($"{fault.Code}: {fault.Message}"));
+
+            var batchService = new BatchService(services.Batches);
+            BatchEntity? batch = null;
+            var batchEnded = false;
+            try
+            {
+                batch = await batchService.StartAsync(
+                    task.Id, run.Counting.State.CurrentTotal, request.ProjectCode, task.StationCode, cancellationToken);
+                await run.StartAsync(recipe, task.Id, camera, modelSessions.Primary, batch.Id,
+                    FrameRoutingStrategy.Bounded, cancellationToken, projectId: request.ProjectCode,
+                    sopAlgorithms: recipe.Sop?.Definition is not null ? modelSessions.Sop : null);
+                var signal = await Task.WhenAny(sourceCompleted.Task, faulted.Task).WaitAsync(cancellationToken);
+                if (signal == faulted.Task) throw await faulted.Task;
+                await sourceCompleted.Task.WaitAsync(cancellationToken);
+                await run.WaitForCompletionAsync(cancellationToken: cancellationToken);
+                if (faulted.Task.IsCompleted) throw await faulted.Task;
+
+                var skipped = (camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
+                var result = CreateOfflineResult(request, files.Length, progressTracker, skipped, lastRecord);
+                await run.StopAsync();
+                await batchService.EndAsync(run.Counting.State.CurrentTotal, result.Status, CancellationToken.None);
+                batchEnded = true;
+                return result;
             }
-            var result = TcpOfflineExecutionPolicy.CreateResult(
-                progress.Snapshot(), lastRecord?.CountAfter ?? 0,
-                lastRecord?.Decision.Status.ToString() ?? (skipped == files.Length ? "all_images_skipped" : "incomplete"),
-                lastRecord?.Record.Id ?? 0);
-            await run.StopAsync();
-            await new BatchService(services.Batches).EndAsync(run.Counting.State.CurrentTotal, result.Status, CancellationToken.None);
-            return result;
-        }
-        catch (OperationCanceledException)
-        {
-            request.Progress?.SetSkippedCount((camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0);
-            await run.StopAsync();
-            await new BatchService(services.Batches).EndAsync(run.Counting.State.CurrentTotal, "aborted", CancellationToken.None);
-            throw;
+            catch (OperationCanceledException)
+            {
+                request.Progress?.SetSkippedCount((camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0);
+                await run.StopAsync();
+                if (batch is not null && !batchEnded)
+                {
+                    await batchService.EndAsync(run.Counting.State.CurrentTotal, "aborted", CancellationToken.None);
+                    batchEnded = true;
+                }
+                throw;
+            }
+            catch (Exception ex)
+            {
+                var skipped = (camera as IImageFolderCameraSession)?.SkippedFileCount ?? 0;
+                var partial = CreateOfflineResult(request, files.Length, progressTracker, skipped, lastRecord);
+                if (partial.ProcessedCount == 0 && partial.SkippedCount == 0)
+                    throw;
+
+                partial = partial with
+                {
+                    Status = "partial_failure",
+                    Decision = $"{partial.Decision}; {ex.Message}",
+                };
+                await run.StopAsync();
+                if (batch is not null && !batchEnded)
+                {
+                    await batchService.EndAsync(run.Counting.State.CurrentTotal, partial.Status, CancellationToken.None);
+                    batchEnded = true;
+                }
+                return partial;
+            }
+            finally
+            {
+                await run.DisposeAsync();
+                if (batch is not null && !batchEnded)
+                    await batchService.EndAsync(run.Counting.State.CurrentTotal, "aborted", CancellationToken.None);
+            }
         }
         finally
         {
-            await run.DisposeAsync();
-            for (var index = modelUses.Count - 1; index >= 0; index--)
-                await modelUses[index].DisposeAsync();
+            await ReleaseModelSessionsAsync(modelSessions);
         }
     }
     /// <summary>后台预热所有启用 TCP 触发的任务：提前完成算法 Worker 握手与模型加载，
@@ -301,6 +334,98 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         }
         catch (JsonException) { }
         return false;
+    }
+
+    private static TcpTaskExecutionResult CreateOfflineResult(
+        TcpTaskExecutionRequest request,
+        int totalCount,
+        TcpOfflineExecutionProgressTracker tracker,
+        int skipped,
+        RecordCompletedEventArgs? lastRecord)
+    {
+        var progress = request.Progress ?? new TcpExecutionProgress(totalCount);
+        progress.SetSkippedCount(skipped);
+        if (request.Progress is null)
+            progress.ReportProcessed(tracker.ProcessedCount);
+        return TcpOfflineExecutionPolicy.CreateResult(
+            progress.Snapshot(),
+            lastRecord?.CountAfter ?? 0,
+            lastRecord?.Decision.Status.ToString() ?? (skipped == totalCount ? "all_images_skipped" : "incomplete"),
+            lastRecord?.Record.Id ?? 0);
+    }
+
+    private async Task<ModelSessionLeaseSet> AcquireModelSessionsAsync(
+        long taskId,
+        Recipe recipe,
+        int maxConcurrentSessions,
+        CancellationToken cancellationToken)
+    {
+        var definitions = recipe.Sop?.Definition?.Steps
+            .OrderBy(step => step.Order)
+            .Where(step => !string.IsNullOrWhiteSpace(step.Execution?.PluginId))
+            .Select(step => (step.Id, Execution: step.Execution!))
+            .ToArray() ?? [];
+        if (definitions.Length == 0)
+        {
+            definitions = [("__root", new SopStepExecution
+            {
+                PluginId = recipe.PluginId,
+                TaskType = recipe.TaskType,
+                ExecutionProvider = recipe.ExecutionProvider,
+                SettingsJson = recipe.SettingsJson,
+                Roi = recipe.Roi,
+                RoiPolicy = recipe.RoiPolicy,
+                Rules = recipe.Rules,
+            })];
+        }
+
+        var sessions = new Dictionary<string, IAlgorithmSession>(StringComparer.Ordinal);
+        var leasesByModel = new Dictionary<string, AlgorithmSessionCache.SessionUseLease>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var model in definitions)
+            {
+                var modelRecipe = recipe with
+                {
+                    PluginId = model.Execution.PluginId,
+                    TaskType = model.Execution.TaskType,
+                    ExecutionProvider = model.Execution.ExecutionProvider,
+                    SettingsJson = model.Execution.SettingsJson,
+                    Roi = model.Execution.Roi,
+                    RoiPolicy = model.Execution.RoiPolicy,
+                    Rules = model.Execution.Rules,
+                };
+                var initialization = new AlgorithmInitialization
+                {
+                    Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
+                    ExecutionProvider = model.Execution.ExecutionProvider,
+                };
+                var modelKey = string.Join("\\n",
+                    model.Execution.PluginId.Trim(),
+                    model.Execution.ExecutionProvider.Trim().ToLowerInvariant(),
+                    initialization.Settings?.GetRawText() ?? "null");
+                if (!leasesByModel.TryGetValue(modelKey, out var lease))
+                {
+                    lease = await services.AlgorithmSessions.AcquireSessionUseAsync(
+                        taskId, model.Execution.PluginId, initialization, maxConcurrentSessions, cancellationToken);
+                    leasesByModel.Add(modelKey, lease);
+                }
+                sessions[model.Id] = lease.Session;
+            }
+            return new ModelSessionLeaseSet(sessions.Values.First(), sessions, leasesByModel.Values.ToArray());
+        }
+        catch
+        {
+            foreach (var lease in leasesByModel.Values.Reverse())
+                await lease.DisposeAsync();
+            throw;
+        }
+    }
+
+    private static async Task ReleaseModelSessionsAsync(ModelSessionLeaseSet modelSessions)
+    {
+        for (var index = modelSessions.Leases.Count - 1; index >= 0; index--)
+            await modelSessions.Leases[index].DisposeAsync();
     }
 
     private async Task<(IAlgorithmSession Primary, IReadOnlyDictionary<string, IAlgorithmSession> Sop)> GetModelSessionsAsync(

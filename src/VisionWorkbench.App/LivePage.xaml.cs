@@ -69,6 +69,11 @@ public partial class LivePage : UserControl
 
     private async Task<TcpTaskExecutionResult> ExecuteTcpTriggerOnUiAsync(TcpTaskExecutionRequest request, CancellationToken cancellationToken)
     {
+        // Offline TCP batches need independent camera/run/result contexts. They execute
+        // in the bounded station scheduler and must not mutate a panel's single _run.
+        if (request.ImageFiles is not null)
+            return await AppServices.Instance.TcpTaskExecution.ExecuteAsync(request, cancellationToken);
+
         var panel = _panels.FirstOrDefault(item => item.TaskId == request.TaskId);
         if (panel is null)
         {

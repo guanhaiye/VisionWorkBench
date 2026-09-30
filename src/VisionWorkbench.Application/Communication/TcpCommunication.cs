@@ -44,7 +44,8 @@ public sealed record TcpTaskExecutionRequest(
     DateTimeOffset ReceivedAt,
     TimeSpan? ExecutionTimeout = null,
     IReadOnlyList<string>? ImageFiles = null,
-    TcpExecutionProgress? Progress = null);
+    TcpExecutionProgress? Progress = null,
+    int MaxConcurrentModelSessions = 3);
 
 public enum TcpExecutionAdmission
 {
@@ -66,13 +67,13 @@ public sealed record TcpExecutionSubmission(
     Action? Cancel = null);
 
 /// <summary>
-/// 按工位隔离的异步执行调度器。TCP 接收线程只负责入队，实际执行由每个工位的固定 worker 完成。
+/// 按工位隔离的异步执行调度器。TCP 接收线程只负责入队，实际执行由每个工位的有界 worker 池完成。
 /// </summary>
 public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 {
     public sealed record Options
     {
-        public int MaxConcurrency { get; init; } = 1;
+        public int MaxConcurrency { get; init; } = 3;
         public int MaxQueueLength { get; init; } = 20;
         public TimeSpan ExecutionTimeout { get; init; } = TimeSpan.FromSeconds(30);
     }
@@ -101,16 +102,28 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     private sealed class StationState : IAsyncDisposable
     {
+        private readonly object _workersGate = new();
+        private readonly List<Task> _workers = [];
+
         public required Channel<WorkItem> Queue { get; init; }
-        public required Task[] Workers { get; init; }
+
+        public void EnsureWorkerCount(int count, Func<Task> createWorker)
+        {
+            lock (_workersGate)
+            {
+                while (_workers.Count < count)
+                    _workers.Add(createWorker());
+            }
+        }
 
         public async ValueTask DisposeAsync()
         {
             Queue.Writer.TryComplete();
-            try { await Task.WhenAll(Workers); } catch { }
+            Task[] workers;
+            lock (_workersGate) workers = _workers.ToArray();
+            try { await Task.WhenAll(workers); } catch { }
         }
     }
-
     private readonly Options _defaultOptions;
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentDictionary<string, Lazy<StationState>> _stations = new(StringComparer.OrdinalIgnoreCase);
@@ -158,6 +171,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
             : request.StationCode.Trim();
         var station = _stations.GetOrAdd(stationKey, key => new Lazy<StationState>(
             () => CreateStation(key, options), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        station.EnsureWorkerCount(options.MaxConcurrency, () => WorkerLoopAsync(stationKey, station.Queue.Reader));
         var startGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var item = new WorkItem
         {
@@ -196,13 +210,8 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
             SingleReader = false,
             SingleWriter = false,
         });
-        var station = new StationState
-        {
-            Queue = queue,
-            Workers = Enumerable.Range(0, 1)
-                .Select(_ => WorkerLoopAsync(stationKey, queue.Reader))
-                .ToArray(),
-        };
+        var station = new StationState { Queue = queue };
+        station.EnsureWorkerCount(options.MaxConcurrency, () => WorkerLoopAsync(stationKey, queue.Reader));
         return station;
     }
 
@@ -294,7 +303,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     private static Options Normalize(Options options) => options with
     {
-        MaxConcurrency = Math.Max(1, options.MaxConcurrency),
+        MaxConcurrency = Math.Clamp(options.MaxConcurrency, 1, 8),
         MaxQueueLength = Math.Max(1, options.MaxQueueLength),
         ExecutionTimeout = options.ExecutionTimeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(30) : options.ExecutionTimeout,
     };
@@ -353,7 +362,7 @@ public sealed class ProjectCommunicationConfig
     public List<string> AllowedClientAddresses { get; set; } = [];
     public int MaxRequestsPerMinute { get; set; } = 1200;
     public int IdleTimeoutSeconds { get; set; } = 300;
-    public int StationMaxConcurrency { get; set; } = 1;
+    public int StationMaxConcurrency { get; set; } = 3;
     public int StationQueueLength { get; set; } = 20;
     public int StationExecutionTimeoutSeconds { get; set; } = 30;
 }
@@ -417,6 +426,7 @@ public sealed class TcpCommunicationProfileStore
     private static ProjectCommunicationConfig Normalize(ProjectCommunicationConfig profile)
     {
         profile.ProjectCode = string.IsNullOrWhiteSpace(profile.ProjectCode) ? "default" : profile.ProjectCode.Trim();
+        profile.StationMaxConcurrency = Math.Clamp(profile.StationMaxConcurrency, 1, 8);
         profile.Name = string.IsNullOrWhiteSpace(profile.Name)
             ? profile.ProjectCode == "default" ? "默认 TCP/IP 项目" : profile.ProjectCode
             : profile.Name.Trim();
@@ -1133,7 +1143,8 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
             DateTimeOffset.UtcNow,
             plan.ExecutionTimeout,
             imageFiles,
-            imageFiles is null ? null : new TcpExecutionProgress(imageFiles.Length));
+            imageFiles is null ? null : new TcpExecutionProgress(imageFiles.Length),
+            runtime.Config.StationMaxConcurrency);
         var submission = _executionScheduler.TryEnqueue(
             request,
             runtime.ExecutionStop.Token,

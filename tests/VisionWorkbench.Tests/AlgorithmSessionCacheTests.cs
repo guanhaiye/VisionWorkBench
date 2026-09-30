@@ -30,9 +30,70 @@ public sealed class AlgorithmSessionCacheTests
         Assert.Equal(2, initialized);
     }
 
-    private sealed class FakeSession(Action initialized) : IAlgorithmSession
+    [Fact]
+    public async Task SessionPool_UsesIndependentSlotsAndReusesInitializedWorkerModels()
+    {
+        var created = 0;
+        var initialized = 0;
+        var cache = new AlgorithmSessionCache((_, _) =>
+        {
+            Interlocked.Increment(ref created);
+            return Task.FromResult<IAlgorithmSession>(new FakeSession(() => Interlocked.Increment(ref initialized)));
+        });
+        var init = new AlgorithmInitialization { ExecutionProvider = "cpu" };
+
+        var first = await cache.AcquireSessionUseAsync(31, "plugin.test", init, 3);
+        var second = await cache.AcquireSessionUseAsync(31, "plugin.test", init, 3);
+        Assert.NotSame(first.Session, second.Session);
+        Assert.Equal(2, created);
+        Assert.Equal(2, initialized);
+
+        await first.Session.StartAsync(new AlgorithmStartOptions { Mode = "stream" }, CancellationToken.None);
+        await second.Session.StartAsync(new AlgorithmStartOptions { Mode = "stream" }, CancellationToken.None);
+        await first.DisposeAsync();
+        await second.DisposeAsync();
+        Assert.Equal(AlgorithmSessionState.Ready, first.Session.State);
+        Assert.Equal(AlgorithmSessionState.Ready, second.Session.State);
+
+        var reused = await cache.AcquireSessionUseAsync(31, "plugin.test", init, 3);
+        Assert.Contains(reused.Session, new[] { first.Session, second.Session });
+        await reused.DisposeAsync();
+        Assert.Equal(2, created);
+        Assert.Equal(2, initialized);
+        await cache.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SessionPool_RebuildsFaultedSlotAndIsolatesTasks()
+    {
+        var created = 0;
+        var disposed = 0;
+        var cache = new AlgorithmSessionCache((_, _) =>
+        {
+            Interlocked.Increment(ref created);
+            return Task.FromResult<IAlgorithmSession>(new FakeSession(() => { }, () => Interlocked.Increment(ref disposed)));
+        });
+        var init = new AlgorithmInitialization { ExecutionProvider = "cpu" };
+        var first = await cache.AcquireSessionUseAsync(41, "plugin.test", init, 2);
+        var firstSession = (FakeSession)first.Session;
+        firstSession.MarkFaulted();
+        await first.DisposeAsync();
+        Assert.Equal(1, disposed);
+
+        var rebuilt = await cache.AcquireSessionUseAsync(41, "plugin.test", init, 2);
+        Assert.NotSame(firstSession, rebuilt.Session);
+        var otherTask = await cache.AcquireSessionUseAsync(42, "plugin.test", init, 2);
+        Assert.NotSame(rebuilt.Session, otherTask.Session);
+        Assert.Equal(3, created);
+        await rebuilt.DisposeAsync();
+        await otherTask.DisposeAsync();
+        await cache.DisposeAsync();
+        Assert.Equal(3, disposed);
+    }
+    private sealed class FakeSession(Action initialized, Action? disposed = null) : IAlgorithmSession
     {
         public string SessionId { get; } = Guid.NewGuid().ToString("N");
+        public void MarkFaulted() => State = AlgorithmSessionState.Faulted;
         public AlgorithmSessionState State { get; private set; } = AlgorithmSessionState.Uninitialized;
         public event EventHandler<AlgorithmOutputEventArgs>? OutputReceived;
         public event EventHandler<AlgorithmEventEventArgs>? EventReceived;
@@ -52,6 +113,6 @@ public sealed class AlgorithmSessionCacheTests
         public Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task StopAsync(CancellationToken cancellationToken)
         { State = AlgorithmSessionState.Ready; return Task.CompletedTask; }
-        public ValueTask DisposeAsync() { State = AlgorithmSessionState.Stopped; return ValueTask.CompletedTask; }
+        public ValueTask DisposeAsync() { State = AlgorithmSessionState.Stopped; disposed?.Invoke(); return ValueTask.CompletedTask; }
     }
 }

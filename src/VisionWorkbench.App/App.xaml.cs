@@ -200,6 +200,7 @@ public partial class App : System.Windows.Application
         }
         try
         {
+            AppServices.Instance.AlgorithmSessions.DisposeAsync().AsTask().GetAwaiter().GetResult();
             AppServices.Instance.AlgorithmManager.ShutdownAllAsync().GetAwaiter().GetResult();
         }
         catch (Exception)
