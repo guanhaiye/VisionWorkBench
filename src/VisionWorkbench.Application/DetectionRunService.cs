@@ -1088,9 +1088,9 @@ public sealed class DetectionRunService : IAsyncDisposable
             if (shouldPersist && (_shouldSaveFullImages()
                                   || decision.Status is (DecisionStatus.Ng or DecisionStatus.ReviewRequired)))
             {
-                var stem = $"{DateTimeOffset.UtcNow:HHmmss}-{frame.Sequence}";
-                origPath = Path.Combine(_evidenceDir, $"{stem}-orig.png");
-                annotPath = Path.Combine(_evidenceDir, $"{stem}-annot.png");
+                var evidencePaths = EvidenceImagePathFactory.CreatePair(_evidenceDir, frame.Sequence);
+                origPath = evidencePaths.OriginalImagePath;
+                annotPath = evidencePaths.AnnotatedImagePath;
                 System.IO.File.WriteAllBytes(origPath, System.IO.File.ReadAllBytes(tempPath));
                 ImageAnnotator.AnnotateToFile(frame, output, decision, annotPath);
             }

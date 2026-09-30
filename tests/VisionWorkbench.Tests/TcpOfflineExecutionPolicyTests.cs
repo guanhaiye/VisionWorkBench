@@ -1,3 +1,6 @@
+using System.IO;
+using System.Linq;
+using VisionWorkbench.Application;
 using VisionWorkbench.Application.Communication;
 using Xunit;
 
@@ -5,6 +8,46 @@ namespace VisionWorkbench.Tests;
 
 public sealed class TcpOfflineExecutionPolicyTests
 {
+    [Fact]
+    public void ConcurrentBatchesWithSameFrameSequence_GetDistinctPairedEvidencePaths()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "vw-evidence-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var pairs = new (string OriginalImagePath, string AnnotatedImagePath)[64];
+            Parallel.For(0, pairs.Length, index =>
+            {
+                pairs[index] = EvidenceImagePathFactory.CreatePair(directory, frameSequence: 7);
+                File.WriteAllText(pairs[index].OriginalImagePath, $"original-{index}");
+                File.WriteAllText(pairs[index].AnnotatedImagePath, $"annotated-{index}");
+            });
+
+            Assert.Equal(pairs.Length, pairs.Select(pair => pair.OriginalImagePath).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(pairs.Length, pairs.Select(pair => pair.AnnotatedImagePath).Distinct(StringComparer.Ordinal).Count());
+            Assert.All(pairs, pair =>
+            {
+                Assert.True(File.Exists(pair.OriginalImagePath));
+                Assert.True(File.Exists(pair.AnnotatedImagePath));
+                Assert.Equal(Path.GetFileName(pair.OriginalImagePath).Replace("-orig.png", "", StringComparison.Ordinal),
+                    Path.GetFileName(pair.AnnotatedImagePath).Replace("-annot.png", "", StringComparison.Ordinal));
+            });
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+    [Fact]
+    public void ProgressChanged_ReportsConcurrentRequestProgressUpdates()
+    {
+        const int updates = 64;
+        var progress = new TcpExecutionProgress(updates);
+        var notifications = 0;
+        progress.ProgressChanged += _ => Interlocked.Increment(ref notifications);
+
+        Parallel.For(0, updates, _ => progress.ReportProcessed());
+
+        Assert.Equal(updates, notifications);
+        Assert.Equal(updates, progress.Snapshot().ProcessedCount);
+    }
     [Theory]
     [InlineData(3)]
     [InlineData(10)]

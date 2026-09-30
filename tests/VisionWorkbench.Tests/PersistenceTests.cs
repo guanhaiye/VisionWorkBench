@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using VisionWorkbench.Contracts.Results;
 using VisionWorkbench.Application;
 using VisionWorkbench.Domain;
@@ -31,6 +32,33 @@ public sealed class PersistenceTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Batch_StartAsync_ConcurrentRequestsForSameTaskCreateIndependentBatches()
+    {
+        var task = await new TaskRepository(_factory).SaveAsync(new TaskEntity
+        {
+            Name = "并发批次启动",
+            CameraProviderId = "image-folder",
+            CameraDeviceId = "images",
+            PluginId = "p",
+        });
+        var repository = new BatchRepository(_factory);
+        var batches = await Task.WhenAll(Enumerable.Range(0, 24)
+            .Select(index => repository.StartAsync(task.Id, index, "tcp", "ST-001")));
+
+        Assert.Equal(24, batches.Select(batch => batch.BatchNumber).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(24, batches.Select(batch => batch.Id).Distinct().Count());
+        Assert.All(batches, batch =>
+        {
+            Assert.Equal("running", batch.Status);
+            Assert.Equal("tcp", batch.ProjectId);
+            Assert.Equal("ST-001", batch.StationCode);
+        });
+        await using var db = _factory.CreateDbContext();
+        var stored = await db.Batches.Where(batch => batch.TaskId == task.Id).ToListAsync();
+        Assert.Equal(24, stored.Count);
+        Assert.Equal(24, stored.Select(batch => batch.BatchNumber).Distinct(StringComparer.Ordinal).Count());
+    }
     [Fact]
     public async Task Task_Save_And_Reload_Roundtrips_Json()
     {

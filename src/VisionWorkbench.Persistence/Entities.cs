@@ -156,8 +156,8 @@ public sealed class BatchEntity
     [Required, MaxLength(64)]
     public string StationCode { get; set; } = "";
 
-    /// <summary>人类可读批次号：yyyyMMdd-HHmmss。</summary>
-    [Required, MaxLength(32)]
+    /// <summary>人类可读批次号：时间戳加随机唯一后缀。</summary>
+    [Required, MaxLength(64)]
     public string BatchNumber { get; set; } = "";
 
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;

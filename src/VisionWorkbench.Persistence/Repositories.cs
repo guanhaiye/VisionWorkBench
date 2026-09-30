@@ -232,7 +232,9 @@ public sealed class BatchRepository(IDbContextFactory<VisionDbContext> factory)
             TaskId = taskId,
             ProjectId = string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim(),
             StationCode = stationCode.Trim(),
-            BatchNumber = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"),
+            // Time is kept for operator readability; the random suffix prevents parallel
+            // requests from racing on the unique (TaskId, BatchNumber) index.
+            BatchNumber = $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Guid.NewGuid():N}",
             Status = "running",
             InitialCounterValue = initialCounterValue,
         };
@@ -242,12 +244,6 @@ public sealed class BatchRepository(IDbContextFactory<VisionDbContext> factory)
         if (string.IsNullOrWhiteSpace(batch.StationCode))
         {
             batch.StationCode = task.StationCode;
-        }
-        var batchNumberBase = batch.BatchNumber;
-        var suffix = 1;
-        while (await db.Batches.AnyAsync(b => b.TaskId == taskId && b.BatchNumber == batch.BatchNumber, ct))
-        {
-            batch.BatchNumber = $"{batchNumberBase}-{suffix++:00}";
         }
         db.Batches.Add(batch);
         await db.SaveChangesAsync(ct);

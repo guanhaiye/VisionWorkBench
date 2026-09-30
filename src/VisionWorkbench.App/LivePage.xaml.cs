@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -15,6 +17,7 @@ namespace VisionWorkbench.App;
 public partial class LivePage : UserControl
 {
     private readonly List<LiveTaskPanel> _panels = [];
+    private readonly ObservableCollection<TcpOfflineActivityItem> _tcpOfflineActivities = [];
     private LiveTaskItem[] _availableTasks = [];
     private bool _loadingTasks;
     private bool _runtimeMode;
@@ -25,6 +28,7 @@ public partial class LivePage : UserControl
     public LivePage()
     {
         InitializeComponent();
+        TcpOfflineActivityItems.ItemsSource = _tcpOfflineActivities;
         LayoutCombo.SelectedIndex = AppServices.Instance.Settings.LiveLayout switch
         {
             "vertical" => 1,
@@ -72,7 +76,47 @@ public partial class LivePage : UserControl
         // Offline TCP batches need independent camera/run/result contexts. They execute
         // in the bounded station scheduler and must not mutate a panel's single _run.
         if (request.ImageFiles is not null)
-            return await AppServices.Instance.TcpTaskExecution.ExecuteAsync(request, cancellationToken);
+        {
+            var progress = request.Progress ?? new TcpExecutionProgress(request.ImageFiles.Count);
+            var trackedRequest = request with { Progress = progress };
+            var activity = new TcpOfflineActivityItem(request.TaskName, request.StationCode, request.RequestId, progress.Snapshot());
+            _tcpOfflineActivities.Insert(0, activity);
+            TcpOfflineActivityPanel.Visibility = Visibility.Visible;
+            void OnProgressChanged(TcpExecutionProgressSnapshot snapshot)
+            {
+                if (Dispatcher.HasShutdownStarted) return;
+                _ = Dispatcher.BeginInvoke(() => activity.UpdateProgress(snapshot));
+            }
+            progress.ProgressChanged += OnProgressChanged;
+            activity.SetPhase("执行中");
+            try
+            {
+                var result = await AppServices.Instance.TcpTaskExecution.ExecuteAsync(trackedRequest, cancellationToken);
+                activity.SetPhase(result.Status switch
+                {
+                    "completed" => "已完成",
+                    "partial_failure" => "部分完成",
+                    _ => result.Status,
+                });
+                activity.UpdateProgress(progress.Snapshot());
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                activity.SetPhase("已取消");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                activity.SetPhase($"失败：{ex.Message}");
+                throw;
+            }
+            finally
+            {
+                progress.ProgressChanged -= OnProgressChanged;
+                TrimTcpOfflineActivities();
+            }
+        }
 
         var panel = _panels.FirstOrDefault(item => item.TaskId == request.TaskId);
         if (panel is null)
@@ -83,6 +127,47 @@ public partial class LivePage : UserControl
         return await panel.ExecuteTcpTriggerAsync(request, cancellationToken);
     }
 
+    private void TrimTcpOfflineActivities()
+    {
+        while (_tcpOfflineActivities.Count > 10)
+        {
+            var index = _tcpOfflineActivities.Count - 1;
+            while (index >= 0 && _tcpOfflineActivities[index].IsActive) index--;
+            if (index < 0) break;
+            _tcpOfflineActivities.RemoveAt(index);
+        }
+        TcpOfflineActivityPanel.Visibility = _tcpOfflineActivities.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private sealed class TcpOfflineActivityItem : INotifyPropertyChanged
+    {
+        private string _phase = "排队后启动";
+        private TcpExecutionProgressSnapshot _progress;
+        private readonly string _description;
+
+        public TcpOfflineActivityItem(string taskName, string stationCode, string requestId, TcpExecutionProgressSnapshot progress)
+        {
+            var shortId = requestId.Length > 10 ? requestId[..10] : requestId;
+            _description = $"{stationCode} · {taskName} · 请求 {shortId}";
+            _progress = progress;
+        }
+
+        public bool IsActive => _phase == "执行中";
+        public string Text => $"{_description} · {_phase} · {_progress.ProcessedCount}/{_progress.TotalCount}（跳过 {_progress.SkippedCount}）";
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public void SetPhase(string phase)
+        {
+            _phase = phase;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Text)));
+        }
+
+        public void UpdateProgress(TcpExecutionProgressSnapshot progress)
+        {
+            _progress = progress;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Text)));
+        }
+    }
     private async Task LoadTasksAsync()
     {
         if (_loadingTasks)

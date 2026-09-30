@@ -82,6 +82,33 @@
                    Grid.Row="1"
                    Visibility="Collapsed"
                    Text="请选择任务并点击“添加任务”。每个任务拥有独立的预览、结果和控制按钮。" />
+        <Border x:Name="TcpOfflineActivityPanel"
+                Grid.Row="1"
+                Visibility="Collapsed"
+                Margin="0,0,0,8"
+                Padding="8,6"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="6">
+            <StackPanel>
+                <TextBlock Text="TCP 离线检测请求（每个请求独立执行）"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,4" />
+                <ScrollViewer MaxHeight="92" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="TcpOfflineActivityItems">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Text}"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextTrimming="CharacterEllipsis"
+                                           Margin="0,2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
 
         <Grid x:Name="PanelsViewport" Grid.Row="2"
               SizeChanged="PanelsViewport_SizeChanged"
