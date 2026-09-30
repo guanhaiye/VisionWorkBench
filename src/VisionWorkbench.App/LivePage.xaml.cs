@@ -87,8 +87,13 @@ public partial class LivePage : UserControl
 
     private void OnTcpOfflineResultCompleted(object? sender, TcpOfflineResultEventArgs e)
     {
-        var panel = _panels.FirstOrDefault(item => item.TaskId == e.TaskId);
-        panel?.DisplayTcpOfflineResult(e);
+        UiDispatcherInvoker.InvokeIfRequired(Dispatcher, () =>
+        {
+            // The event can already be queued when navigation unloads this page.
+            if (!IsLoaded) return;
+            var panel = _panels.FirstOrDefault(item => item.TaskId == e.TaskId);
+            panel?.DisplayTcpOfflineResult(e);
+        });
     }
 
     private async Task LoadTasksAsync()

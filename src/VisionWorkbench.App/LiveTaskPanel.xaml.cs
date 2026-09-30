@@ -1141,13 +1141,14 @@ public partial class LiveTaskPanel : UserControl
 
     public void DisplayTcpOfflineResult(TcpOfflineResultEventArgs args)
     {
-        if (args.TaskId != TaskId || args.Result.Frame is null) return;
-        Dispatcher.BeginInvoke(() =>
+        UiDispatcherInvoker.InvokeIfRequired(Dispatcher, () =>
         {
-            if (args.TaskId != TaskId || args.ReceivedAt < _lastTcpOfflineRequestReceivedAt) return;
+            if (!IsLoaded || args.TaskId != TaskId || args.Result.Frame is null
+                || args.ReceivedAt < _lastTcpOfflineRequestReceivedAt)
+                return;
             _lastTcpOfflineRequestReceivedAt = args.ReceivedAt;
             var result = args.Result;
-            var frame = result.Frame!;
+            var frame = result.Frame;
             _lastOutput = result.Output;
             _lastRenderedResultSequence = result.Output.Sequence;
             _preview.Render(PreviewImage, frame, force: true);
