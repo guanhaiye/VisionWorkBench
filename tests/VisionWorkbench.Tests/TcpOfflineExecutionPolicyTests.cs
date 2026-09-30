@@ -35,19 +35,6 @@ public sealed class TcpOfflineExecutionPolicyTests
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
-    [Fact]
-    public void ProgressChanged_ReportsConcurrentRequestProgressUpdates()
-    {
-        const int updates = 64;
-        var progress = new TcpExecutionProgress(updates);
-        var notifications = 0;
-        progress.ProgressChanged += _ => Interlocked.Increment(ref notifications);
-
-        Parallel.For(0, updates, _ => progress.ReportProcessed());
-
-        Assert.Equal(updates, notifications);
-        Assert.Equal(updates, progress.Snapshot().ProcessedCount);
-    }
     [Theory]
     [InlineData(3)]
     [InlineData(10)]

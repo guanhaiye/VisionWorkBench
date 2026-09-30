@@ -18,36 +18,9 @@ public sealed class TcpExecutionProgress(int totalCount)
     private int _skipped;
 
     public int TotalCount { get; } = Math.Max(0, totalCount);
-    public event Action<TcpExecutionProgressSnapshot>? ProgressChanged;
-
-    public void ReportProcessed(int count = 1)
-    {
-        Interlocked.Add(ref _processed, Math.Max(0, count));
-        NotifyProgressChanged();
-    }
-
-    public void ReportSkipped(int count = 1)
-    {
-        Interlocked.Add(ref _skipped, Math.Max(0, count));
-        NotifyProgressChanged();
-    }
-
-    public void SetSkippedCount(int count)
-    {
-        Interlocked.Exchange(ref _skipped, Math.Max(0, count));
-        NotifyProgressChanged();
-    }
-
-    private void NotifyProgressChanged()
-    {
-        var snapshot = Snapshot();
-        if (ProgressChanged is not { } handlers) return;
-        foreach (Action<TcpExecutionProgressSnapshot> handler in handlers.GetInvocationList())
-        {
-            try { handler(snapshot); }
-            catch { /* A progress observer must not interrupt image processing. */ }
-        }
-    }
+    public void ReportProcessed(int count = 1) => Interlocked.Add(ref _processed, Math.Max(0, count));
+    public void ReportSkipped(int count = 1) => Interlocked.Add(ref _skipped, Math.Max(0, count));
+    public void SetSkippedCount(int count) => Interlocked.Exchange(ref _skipped, Math.Max(0, count));
 
     public TcpExecutionProgressSnapshot Snapshot() => new(
         TotalCount,
