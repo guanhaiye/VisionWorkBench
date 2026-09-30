@@ -52,6 +52,7 @@ public enum TcpExecutionAdmission
     Accepted,
     Processing,
     Completed,
+    Busy,
     QueueFull,
 }
 
@@ -91,6 +92,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
     private sealed class WorkItem
     {
         public required RequestState Request { get; init; }
+        public required StationState Station { get; init; }
         public required string StationKey { get; init; }
         public required Func<CancellationToken, Task<TcpTaskExecutionResult>> Execute { get; init; }
         public required CancellationToken ProjectCancellation { get; init; }
@@ -98,14 +100,29 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         public required Options Options { get; init; }
         public CancellationTokenRegistration CancellationRegistration;
         public int Started;
+        public int CapacityHeld = 1;
     }
 
     private sealed class StationState : IAsyncDisposable
     {
         private readonly object _workersGate = new();
         private readonly List<Task> _workers = [];
+        private int _activeCount;
 
         public required Channel<WorkItem> Queue { get; init; }
+
+        public bool TryReserveCapacity(int maxConcurrency)
+        {
+            while (true)
+            {
+                var active = Volatile.Read(ref _activeCount);
+                if (active >= maxConcurrency) return false;
+                if (Interlocked.CompareExchange(ref _activeCount, active + 1, active) == active)
+                    return true;
+            }
+        }
+
+        public void ReleaseCapacity() => Interlocked.Decrement(ref _activeCount);
 
         public void EnsureWorkerCount(int count, Func<Task> createWorker)
         {
@@ -172,10 +189,22 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         var station = _stations.GetOrAdd(stationKey, key => new Lazy<StationState>(
             () => CreateStation(key, options), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
         station.EnsureWorkerCount(options.MaxConcurrency, () => WorkerLoopAsync(stationKey, station.Queue.Reader));
+        if (!station.TryReserveCapacity(options.MaxConcurrency))
+        {
+            var message = $"工位 {request.StationCode} 已达到并发上限 {options.MaxConcurrency}，本请求未排队，请稍后重试";
+            var busyResult = new TcpTaskExecutionResult("station_busy", 0, message);
+            state.Result = busyResult;
+            state.TerminalCode = "station_busy";
+            Volatile.Write(ref state.Finished, 1);
+            state.Completion.TrySetResult(busyResult);
+            return new(TcpExecutionAdmission.Busy, CachedResult: busyResult, TerminalCode: "station_busy");
+        }
+
         var startGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var item = new WorkItem
         {
             Request = state,
+            Station = station,
             StationKey = stationKey,
             Execute = execute,
             ProjectCancellation = projectCancellation,
@@ -184,6 +213,7 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
         };
         if (!station.Queue.Writer.TryWrite(item))
         {
+            ReleaseCapacity(item);
             _requests.TryRemove(key, out _);
             return new(TcpExecutionAdmission.QueueFull);
         }
@@ -204,9 +234,11 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
 
     private StationState CreateStation(string stationKey, Options options)
     {
-        var queue = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(options.MaxQueueLength)
+        // Capacity is reserved atomically before a WorkItem can enter this handoff channel.
+        // An unbounded channel is safe here: the number of accepted items is capped by
+        // StationState.TryReserveCapacity, so excess requests never accumulate in a queue.
+        var queue = Channel.CreateUnbounded<WorkItem>(new UnboundedChannelOptions
         {
-            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = false,
             SingleWriter = false,
         });
@@ -271,11 +303,18 @@ public sealed class TcpStationExecutionScheduler : IAsyncDisposable
                 finally
                 {
                     item.CancellationRegistration.Dispose();
+                    ReleaseCapacity(item);
                     // 保留完成记录，使相同 requestId 在缓存生命周期内得到幂等结果。
                 }
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    private static void ReleaseCapacity(WorkItem item)
+    {
+        if (Interlocked.Exchange(ref item.CapacityHeld, 0) == 1)
+            item.Station.ReleaseCapacity();
     }
 
     private void CompleteCanceled(WorkItem item)
@@ -1155,11 +1194,20 @@ public sealed class ProjectCommunicationManager : IAsyncDisposable
                 ExecutionTimeout = request.ExecutionTimeout ?? configuredTimeout,
             },
             token => TaskExecutor(request, token));
+        if (submission.Admission == TcpExecutionAdmission.Busy)
+        {
+            var busyMessage = submission.CachedResult?.Decision
+                ?? $"工位 {task.StationCode} 已达到并发上限 {runtime.Config.StationMaxConcurrency}，本请求未排队，请稍后重试";
+            await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
+                "station_busy", busyMessage, persistedRequest);
+            _processing.TryRemove(cacheKey, out _);
+            return;
+        }
         if (submission.Admission == TcpExecutionAdmission.QueueFull)
         {
-            _processing.TryRemove(cacheKey, out _);
             await TerminalizeRequestAsync(runtime, connectionId, task, requestId, cacheKey,
-                "station_queue_full", $"工位队列已满(上限 {runtime.Config.StationQueueLength})", persistedRequest);
+                "station_queue_full", $"工位队列不可用(容量 {runtime.Config.StationQueueLength})", persistedRequest);
+            _processing.TryRemove(cacheKey, out _);
             return;
         }
         if (submission.Admission == TcpExecutionAdmission.Completed && submission.CachedResult is { } completed)

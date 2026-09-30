@@ -9,7 +9,7 @@ using Xunit;
 namespace VisionWorkbench.Tests;
 
 /// <summary>
-/// TCP 请求终态闭环测试：验证已 Begin 的请求在 execution_unavailable、station_queue_full、
+/// TCP 请求终态闭环测试：验证已 Begin 的请求在 execution_unavailable、station_busy、
 /// 项目停止取消等分支都会持久化为 completed 终态，且重发同一 requestId 不会停留在 processing。
 /// 使用真实 loopback TCP + 真实 CommunicationRequestStore(SQLite)。
 /// </summary>
@@ -68,10 +68,10 @@ public sealed class TcpTerminalStateTests : IDisposable
     }
 
     [Fact]
-    public async Task StationQueueFull_CompletesPersistedRequestWithStationQueueFull()
+    public async Task StationCapacityFull_RejectsImmediatelyAndPersistsBusyTerminalState()
     {
-        const string project = "p-queue";
-        // 并发 1 + 队列 1：第三个请求必然 QueueFull
+        const string project = "p-busy";
+        // 并发为 1 时，活动请求占满容量后，新请求必须立即拒绝，不进入等待队列。
         await StartAsync(project, maxConcurrency: 1, queueLength: 1);
         var task = await CreateTaskAsync();
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -91,22 +91,24 @@ public sealed class TcpTerminalStateTests : IDisposable
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         var second = await SendAndReadAsync(client, reader, ExecuteJson("req-q-b", task.StationCode));
-        Assert.Contains("accepted", second);
+        Assert.Contains("station_busy", second);
 
-        var third = await SendAndReadAsync(client, reader, ExecuteJson("req-q-c", task.StationCode));
-        Assert.Contains("station_queue_full", third);
-
-        var json = await WaitForTerminalAsync(project, "req-q-c", "station_queue_full");
-        Assert.Contains("req-q-c", json);
+        var json = await WaitForTerminalAsync(project, "req-q-b", "station_busy");
+        Assert.Contains("req-q-b", json);
 
         // 重发同一 requestId 应返回持久化终态，而不是 request_processing
-        var retry = await SendAndReadAsync(client, reader, ExecuteJson("req-q-c", task.StationCode));
-        Assert.Contains("station_queue_full", retry);
+        var retry = await SendAndReadAsync(client, reader, ExecuteJson("req-q-b", task.StationCode));
+        Assert.Contains("station_busy", retry);
         Assert.DoesNotContain("request_processing", retry);
 
         release.TrySetResult(true);
-    }
+        await WaitForTerminalAsync(project, "req-q-a", "completed");
 
+        // 活动任务释放容量后，后续请求可以立即接收。
+        var third = await SendAndReadAsync(client, reader, ExecuteJson("req-q-c", task.StationCode));
+        Assert.True(third.Contains("accepted", StringComparison.Ordinal) || third.Contains("completed", StringComparison.Ordinal), third);
+        await WaitForTerminalAsync(project, "req-q-c", "completed");
+    }
     [Fact]
     public async Task ProjectStop_CancelsExecutionAndCompletesPersistedRequestWithProjectStopped()
     {
