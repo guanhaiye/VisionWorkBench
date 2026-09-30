@@ -285,14 +285,17 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         try
         {
             var tasks = await services.Tasks.ListAsync(cancellationToken);
+            var profiles = new TcpCommunicationProfileStore(services.Settings.ConfigDirectory).Load();
             foreach (var task in tasks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsTcpTriggerEnabled(task.TriggerJson)) continue;
                 try
                 {
-                    await PrewarmTaskAsync(task.Id, cancellationToken);
-                    logger.LogInformation("TCP 任务模型预热完成: {Task} ({Station})", task.Name, task.StationCode);
+                    var concurrency = GetPrewarmConcurrency(task.TriggerJson, profiles);
+                    await PrewarmTaskAsync(task.Id, concurrency, cancellationToken);
+                    logger.LogInformation("TCP 任务模型池预热完成: {Task} ({Station}), 会话数={Concurrency}",
+                        task.Name, task.StationCode, concurrency);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -310,13 +313,66 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
 
     /// <summary>预热单个任务的算法模型会话（幂等，重复调用不会重复创建）。相机在请求到达时再打开，避免与界面抢占物理相机。</summary>
     public async Task PrewarmTaskAsync(long taskId, CancellationToken cancellationToken = default)
+        => await PrewarmTaskAsync(taskId, 1, cancellationToken);
+
+    private async Task PrewarmTaskAsync(
+        long taskId, int maxConcurrentSessions, CancellationToken cancellationToken)
     {
         var task = await services.Tasks.FindAsync(taskId, cancellationToken);
         if (task is null) return;
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken);
         if (found?.Recipe is not { } recipe) return;
 
-        await GetModelSessionsAsync(task.Id, recipe, cancellationToken);
+        await PrewarmModelSessionsAsync(task.Id, recipe, maxConcurrentSessions, cancellationToken);
+    }
+
+    private static int GetPrewarmConcurrency(
+        string? triggerJson, IReadOnlyCollection<ProjectCommunicationConfig> profiles)
+    {
+        if (string.IsNullOrWhiteSpace(triggerJson)) return 1;
+        try
+        {
+            using var document = JsonDocument.Parse(triggerJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return 1;
+            var matchingConcurrency = new List<int>();
+            foreach (var rule in document.RootElement.EnumerateArray())
+            {
+                if (!TryGetPropertyIgnoreCase(rule, "Enabled", out var enabled)
+                    || enabled.ValueKind != JsonValueKind.True)
+                    continue;
+                var projectCode = TryGetPropertyIgnoreCase(rule, "TcpProjectCode", out var project)
+                    && project.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(project.GetString())
+                    ? project.GetString()!.Trim()
+                    : "default";
+                var profile = profiles.FirstOrDefault(item =>
+                    string.Equals(item.ProjectCode, projectCode, StringComparison.OrdinalIgnoreCase));
+                if (profile is not null)
+                    matchingConcurrency.Add(Math.Clamp(profile.StationMaxConcurrency, 1, 8));
+            }
+            return matchingConcurrency.Count == 0 ? 1 : matchingConcurrency.Max();
+        }
+        catch (JsonException)
+        {
+            return 1;
+        }
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
     }
 
     private static bool IsTcpTriggerEnabled(string? triggerJson)
@@ -428,8 +484,8 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             await modelSessions.Leases[index].DisposeAsync();
     }
 
-    private async Task<(IAlgorithmSession Primary, IReadOnlyDictionary<string, IAlgorithmSession> Sop)> GetModelSessionsAsync(
-        long recipeTaskId, Recipe recipe, CancellationToken cancellationToken)
+    private async Task PrewarmModelSessionsAsync(
+        long recipeTaskId, Recipe recipe, int maxConcurrentSessions, CancellationToken cancellationToken)
     {
         var definitions = recipe.Sop?.Definition?.Steps
             .OrderBy(step => step.Order)
@@ -450,7 +506,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
             })];
         }
 
-        var sessions = new Dictionary<string, IAlgorithmSession>(StringComparer.Ordinal);
+        var capacity = Math.Clamp(maxConcurrentSessions, 1, AlgorithmSessionCache.MaxSessionPoolSize);
         foreach (var model in definitions)
         {
             var modelRecipe = recipe with
@@ -463,15 +519,38 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
                 RoiPolicy = model.Execution.RoiPolicy,
                 Rules = model.Execution.Rules,
             };
-            sessions[model.Id] = await services.AlgorithmSessions.GetOrInitializeAsync(recipeTaskId,
-                model.Execution.PluginId,
-                new AlgorithmInitialization
-                {
-                    Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
-                    ExecutionProvider = model.Execution.ExecutionProvider,
-                }, cancellationToken);
+            var initialization = new AlgorithmInitialization
+            {
+                Settings = DetectionRunService.BuildAlgorithmSettings(modelRecipe),
+                ExecutionProvider = model.Execution.ExecutionProvider,
+            };
+            var leases = new ConcurrentBag<AlgorithmSessionCache.SessionUseLease>();
+            using var warmCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var warmTasks = Enumerable.Range(0, capacity).Select(async slotIndex =>
+            {
+                var lease = await services.AlgorithmSessions.AcquireSessionUseAsync(
+                    recipeTaskId, model.Execution.PluginId, initialization, capacity, warmCancellation.Token);
+                leases.Add(lease);
+                services.LoggerFactory.CreateLogger<TcpTaskExecutionService>().LogDebug(
+                    "TCP 模型会话预热成功: task={TaskId}, model={ModelId}, slot={Slot}",
+                    recipeTaskId, model.Execution.PluginId, slotIndex + 1);
+            }).ToArray();
+            try
+            {
+                await Task.WhenAll(warmTasks);
+            }
+            catch
+            {
+                warmCancellation.Cancel();
+                try { await Task.WhenAll(warmTasks); } catch { }
+                throw;
+            }
+            finally
+            {
+                foreach (var lease in leases.Reverse())
+                    await lease.DisposeAsync();
+            }
         }
-        return (sessions.Values.First(), sessions);
     }
     private static string CameraKey(Recipe recipe) => $"{recipe.CameraProviderId.Trim()}::{recipe.CameraDeviceId.Trim()}";
 
