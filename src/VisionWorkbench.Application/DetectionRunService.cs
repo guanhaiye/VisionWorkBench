@@ -211,6 +211,13 @@ public sealed class DetectionRunService : IAsyncDisposable
                     ExecutionProvider = model.Recipe.ExecutionProvider,
                 }, cancellationToken);
             }
+            else if (model.Session.State == AlgorithmSessionState.Running)
+            {
+                // Cached sessions outlive individual detection runs so the loaded model
+                // can be reused. Recover a session left running by the previous run
+                // before starting the next one; stop_session preserves worker/model state.
+                await model.Session.StopAsync(cancellationToken);
+            }
             else if (model.Session.State != AlgorithmSessionState.Ready)
             {
                 throw new InvalidOperationException($"算法会话未就绪（当前状态：{model.Session.State}）");
