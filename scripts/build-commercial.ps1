@@ -8,6 +8,8 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'build-common.ps1')
 $dotnet = Resolve-ProjectDotnet $repo
+$keyInvariant = Join-Path $repo 'tools\verify-license\verify-keypair-invariant.cs'
+Invoke-CheckedNative $dotnet @($keyInvariant)
 $publish = Join-Path $repo "artifacts\commercial\$Configuration"
 New-Item -ItemType Directory -Force -Path $publish | Out-Null
 Invoke-CheckedNative $dotnet @('restore', (Join-Path $repo 'VisionWorkbench.slnx'), '-r', 'win-x64', '--ignore-failed-sources', '-p:NuGetAudit=false')
