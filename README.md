@@ -1,98 +1,170 @@
 # VisionWorkbench
 
-Windows 本地 AI 视觉工作台。第一期交付**完整纵向闭环骨架**：
+VisionWorkbench 是一个面向工业视觉检测的 Windows AI 视觉工作台，提供从图像采集、模型推理、规则判定、结果存储到历史分析的完整工作流。
 
+项目适合用于学习工业视觉软件架构、开发算法插件、搭建离线图片检测流程，以及集成 TCP/IP 触发式检测系统。
+
+## 主要功能
+
+- 实时检测：支持图片目录、视频文件、USB 相机和工业相机等输入源。
+- AI 任务：目标检测、语义分割、实例分割、行为识别、AI 文本识别、条码和二维码识别。
+- 任务配置：任务参数、ROI、计数模式、规则判定、SOP 流程和结果回传模板。
+- 算法插件：算法在独立 Worker 进程中运行，通过 UTF-8 JSON Lines 协议与主程序通信。
+- TCP/IP 通讯：支持项目配置、客户端/服务端模式、任务触发、异步响应和结果回传。
+- 并发执行：支持同一工位多个触发请求并行执行，并为每个请求保留独立的 requestId、状态和结果上下文。
+- 数据持久化：使用 SQLite 保存任务、检测记录、批次、统计、审核和系统事件。
+- 历史数据看板：支持任务、状态和时间范围筛选，展示检测量、良率、任务排名和耗时分位数。
+- 许可证模块控制：可以按数据与模型模块限制任务配置、实时检测、TCP 执行和相关功能入口。
+
+## 系统架构
+
+```text
+相机 / 图片目录 / 视频
+          │
+          ▼
+WPF 实时检测界面 ── TCP/IP 触发
+          │
+          ▼
+帧调度与检测运行时
+          │
+          ▼
+算法 Worker（JSON Lines）
+          │
+          ▼
+统一检测结果 → 规则判定 → SQLite / 历史看板 / TCP 响应
 ```
-相机/图片目录/视频文件 → WPF 实时预览 + 检测框叠加
-        ↓ 帧调度（LatestOnly 实时丢旧帧 / Bounded 逐帧不漏）
-Python Worker（进程隔离，JSON Lines 协议）
-        ↓ AlgorithmOutput（归一化坐标检测框）
-规则引擎判定 OK / NG / 待复核
-        ↓
-SQLite 六表落库（批次/记录/计数事件/视觉事件/纠错审计）
-        ↓
-历史分页查询 + 证据图查看 + 人工纠错（原因必填，全程审计）
-```
 
-算法以插件形式外置：换算法 = 换 Worker 内核，宿主（.NET 10 WPF）零改动。
+算法 Worker 与主程序进程隔离。Worker 崩溃、超时或异常退出时，主程序可以记录明确错误并执行恢复策略，不会直接破坏桌面应用进程。
 
-## 工程结构
+## 项目结构
 
 | 目录 | 说明 |
-|---|---|
-| `src/VisionWorkbench.Contracts` | 协议消息、AlgorithmOutput 系、PluginManifest、标准错误码 |
-| `src/VisionWorkbench.Domain` | 规则引擎（数量/类别/置信度）、计数累计与人工修正审计、ROI 过滤 |
-| `src/VisionWorkbench.Cameras.Abstractions` | ICameraProvider/ICameraSession、VideoFrame（纯 BGR，不依赖 OpenCvSharp） |
-| `src/VisionWorkbench.Cameras.Files` | 图片目录 / 视频文件虚拟相机（自动化测试回放基础） |
-| `src/VisionWorkbench.Cameras.Usb` | USB 相机（DirectShow 索引探测） |
-| `src/VisionWorkbench.Infrastructure` | WorkerProcess（JSON Lines 亲子进程管理）、PluginScanner、Serilog、临时图传图 |
-| `src/VisionWorkbench.Algorithms` | 算法会话与管理器（每插件一进程、崩溃重启策略） |
-| `src/VisionWorkbench.Persistence` | EF Core SQLite 六表 + 仓储（IDbContextFactory 短生命周期 Context，WAL） |
-| `src/VisionWorkbench.Application` | FrameScheduler 帧调度、DetectionRunService 检测编排、配方/批次服务 |
-| `src/VisionWorkbench.App` | WPF 六页：实时检测/任务配置/历史记录/算法管理/设备管理/系统设置 |
-| `workers/python-sdk` | `vw_worker` 纯标准库 SDK：stdin 行循环、生命周期钩子、错误码封装 |
-| `workers/sample-counter` | 示例插件：OpenCV 阈值+形态学+轮廓计数 |
-| `tools/make_test_images.py` | 合成已知真值的测试图片集/视频 |
-| `tests/VisionWorkbench.Tests` | xUnit：协议/规则/调度/持久化/Worker 真进程集成/服务层端到端 |
+| --- | --- |
+| `src/VisionWorkbench.App` | WPF 桌面应用和主要用户界面 |
+| `src/VisionWorkbench.Contracts` | 算法输出、插件清单和通信协议模型 |
+| `src/VisionWorkbench.Domain` | 任务、规则、批次、统计和领域模型 |
+| `src/VisionWorkbench.Application` | 检测运行时、帧调度、任务和应用服务 |
+| `src/VisionWorkbench.Persistence` | Entity Framework Core SQLite 持久化实现 |
+| `src/VisionWorkbench.Algorithms` | 算法会话、Worker 生命周期和插件管理 |
+| `src/VisionWorkbench.Infrastructure` | 进程管理、日志、图像临时文件和基础设施 |
+| `src/VisionWorkbench.Cameras.*` | 相机抽象、图片/视频、USB 和工业相机适配器 |
+| `workers` | Python Worker、插件 SDK 和示例算法 |
+| `tests/VisionWorkbench.Tests` | 协议、规则、调度、持久化和 TCP 测试 |
+| `docs` | 设计说明和专题文档 |
 
 ## 环境要求
 
-- Windows 10/11，.NET 10 SDK
-- Python 3.12（`py -3.12`）；项目 venv 位于 `workers/.venv`
+- Windows 10 或 Windows 11
+- .NET 10 SDK
+- Python 3.12（运行 Python 算法 Worker 时需要）
+- Visual Studio 2022、Rider 或 VS Code 均可用于开发
+- 工业相机功能需要对应厂商 SDK 和驱动；没有工业相机时可以使用图片目录或视频文件进行离线测试
 
-## 构建与运行
+## 快速开始
+
+### 1. 获取代码
 
 ```powershell
-# 1. Python 环境（一次性）
-py -3.12 -m venv workers\.venv
-workers\.venv\Scripts\pip install -r workers\requirements.txt
-
-# 2. 生成测试样本（可选，E2E 测试依赖 samples/ 已生成）
-workers\.venv\Scripts\python tools\make_test_images.py
-
-# 3. 构建全解
-dotnet build VisionWorkbench.slnx
-
-# 4. 运行
-dotnet run --project src\VisionWorkbench.App
-
-# 5. 测试（无 Python 环境时集成/E2E 自动跳过）
-dotnet test tests\VisionWorkbench.Tests\VisionWorkbench.Tests.csproj
-
-# 6. Python 插件单测
-workers\.venv\Scripts\python -m pytest workers\sample-counter\tests -q
+git clone https://github.com/guanhaiye/VisionWorkBench.git
+cd VisionWorkBench
 ```
 
-数据目录默认 `%LOCALAPPDATA%\VisionWorkbench`（数据库/日志/临时图/证据图），
-可在 `settings.json` 或应用设置页修改，支持中文与空格路径。
+### 2. 准备 Python Worker 环境（可选）
 
-## 关键设计落点
+```powershell
+py -3.12 -m venv workers\.venv
+workers\.venv\Scripts\python.exe -m pip install -r workers\requirements.txt
+```
 
-- **进程隔离**：算法 Worker 独立 Python 进程，崩溃不影响宿主；stdin/stdout JSON Lines，
-  stderr 持续泵读到插件专属日志；correlationId 请求表匹配（容忍乱序响应）。
-- **强制 UTF-8** 双侧编码，杜绝 GBK 乱码；Python 侧行缓冲 flush 防管道阻塞。
-- **帧调度**：实时相机 LatestOnly（推理慢时丢旧帧并计数）；有限源（图片目录/视频）Bounded
-  逐帧不漏。Stop 只阻止取新帧，在途推理必须完成。
-- **落库不阻塞检测**：记录走后台写队列；队列生命周期独立于检测会话，
-  停止/退出前排空（StopAsync 返回即可查询）。
-- **证据策略**：OK 只存结构化结果；NG/待复核另存原图+标注图到 `evidence/yyyyMMdd/`。
-- **审计**：计数每个变化都是事件（Accepted/Corrected/CounterReset…），人工修正必须填原因，
-  纠错留 before/after 快照、操作人、时间。
+如果只使用图片目录、视频文件和已构建的 .NET 组件，可以暂时跳过 Python 环境配置。
 
-## 已知限制（第一期）
+### 3. 构建和运行
 
-- 重叠/粘连目标的轮廓会合并，计为 1（OpenCV 传统视觉内核固有；换深度学习 Worker 即解）。
-- 动态去重/流水线跨线计数的**协议与数据表已就位**，算法内核下一期实现。
-- USB 设备枚举只显示索引+探测分辨率，无友好设备名（DirectShow/MF 名称增强后续）。
-- 角色切换免密（工程师凭证与审计下一期，CFG-002/003）。
-- 帧传图走临时 PNG 文件（文档 §11.3 首版方案）；共享内存/零拷贝后续。
-- 开发态 Python 解释器默认解析到 `workers/.venv`；打包态改为随插件分发的内嵌运行时
-  （appsettings.json / 设置页可覆盖）。
-- 缺陷检测/行为分析插件、CUDA 推理、工业相机 Provider、安装包（Inno Setup）均不在本期。
+```powershell
+dotnet restore VisionWorkbench.slnx
+dotnet build VisionWorkbench.slnx -c Release
+dotnet run --project src\VisionWorkbench.App\VisionWorkbench.App.csproj
+```
 
-## 测试覆盖（对应测试方案编号）
+首次运行后，可以在任务配置中选择图片目录或视频文件作为输入源，避免在没有相机设备时无法验证流程。
 
-协议序列化往返与未知字段容忍（PLG-014）、清单校验（PLG-002/003）、规则引擎全种类
-（RUL-001~005）、ROI 边界策略（CNT-S-007）、计数与修正审计（CNT-S-010）、帧调度丢帧
-（FRM-001/002/003）、SQLite 六表往返与分页（DAT-001/003）、Worker 真进程生命周期
-（PLG-004/008/009/010/011）、服务层端到端（§24 冒烟 1~10 等价物）、插件 pytest。
+### 4. 运行测试
+
+```powershell
+dotnet test tests\VisionWorkbench.Tests\VisionWorkbench.Tests.csproj -c Release
+```
+
+生成测试图片（可选）：
+
+```powershell
+workers\.venv\Scripts\python.exe tools\make_test_images.py
+```
+
+## TCP/IP 触发示例
+
+TCP 项目配置完成并启动通讯后，可以发送任务触发指令。文本指令示例：
+
+```text
+START_ST-001
+```
+
+收到合法指令后，服务会先返回 `accepted`，检测完成后再返回带有相同 `requestId` 的最终结果。多个请求可以并行执行，最终结果允许乱序返回，但每个结果都通过 `requestId` 关联到原始请求。
+
+JSON 请求也可以携带请求编号和任务信息，具体字段以应用内通信配置和协议模型为准。
+
+默认并发参数如下，均可按 TCP 项目配置调整：
+
+| 参数 | 默认值 |
+| --- | ---: |
+| 同工位最大并发数 | 3 |
+| 等待队列长度 | 20 |
+| 单次执行超时 | 30 秒 |
+
+## 数据和模型
+
+应用运行数据默认保存在 Windows 用户目录下的 `VisionWorkbench` 数据目录中，包括数据库、日志、临时文件和检测证据图。模型文件和大型数据集不会随 Git 仓库发布，建议使用项目内的模型管理或数据管理功能配置本地路径。
+
+请勿将以下内容提交到公开仓库：
+
+- 真实生产图片、检测证据和客户数据
+- 许可证文件、设备指纹、私钥和访问令牌
+- 工业相机厂商 SDK、商业模型和未获授权的第三方文件
+- `workers/.venv`、本地数据库和运行日志
+
+## 许可证模块
+
+VisionWorkbench 支持按“数据与模型模块”发放许可证。许可证可以只开放目标检测，也可以同时开放语义分割、实例分割、行为识别等模块。
+
+当许可证不包含某个模块时：
+
+- 任务配置列表会保留任务，但标记为“已禁用”；
+- 未授权任务不能在实时检测中选择或运行；
+- TCP 触发未授权任务会被拦截；
+- 对应的数据与模型导航入口会被禁用。
+
+## 开发说明
+
+建议在提交代码前运行：
+
+```powershell
+dotnet build VisionWorkbench.slnx -c Release
+dotnet test tests\VisionWorkbench.Tests\VisionWorkbench.Tests.csproj -c Release
+```
+
+新增算法时，优先复用 `workers/python-sdk` 中的 Worker 协议和生命周期实现。新增相机时，优先实现 `VisionWorkbench.Cameras.Abstractions` 定义的接口，并补充离线或模拟输入测试。
+
+## 文档
+
+- [项目交接文档](HANDOFF.md)
+- [商业化实施方案](VisionWorkbench-商用化完整实施方案.md)
+- [Python Worker SDK](workers/python-sdk)
+- [测试项目](tests/VisionWorkbench.Tests)
+
+## 开源许可证
+
+发布前请在仓库根目录补充 `LICENSE` 文件，并根据实际授权范围选择 MIT、Apache-2.0 或其他合适的开源许可证。第三方模型、相机 SDK 和插件的许可证不因本项目开源而自动改变，使用前请分别确认其授权条件。
+
+## 项目链接
+
+- GitHub：<https://github.com/guanhaiye/VisionWorkBench>
+- Gitee：<https://gitee.com/yzbnb/vision-workbench>
