@@ -58,10 +58,13 @@ public partial class TasksPage : UserControl
         public override string ToString() => DisplayName;
     }
 
-    private sealed record TaskRow(long Id, string StationCode, string TaskName)
+    private sealed record TaskRow(long Id, string StationCode, string TaskName, bool IsAuthorized)
     {
         public long Id { get; } = Id;
-        public string Name { get; } = $"[{StationCode}] {TaskName}";
+        public bool IsAuthorized { get; } = IsAuthorized;
+        public string Name { get; } = IsAuthorized
+            ? $"[{StationCode}] {TaskName}"
+            : $"[{StationCode}] {TaskName}（已禁用）";
     }
 
     public sealed class RuleRow
@@ -545,7 +548,11 @@ public partial class TasksPage : UserControl
         {
             var tasks = await AppServices.Instance.Recipes.ListAsync();
             TaskList.ItemsSource = tasks
-                .Select(t => new TaskRow(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
+                .Select(t => new TaskRow(
+                    t.Entity.Id,
+                    t.Recipe.StationCode,
+                    t.Recipe.Name,
+                    IsRecipeAuthorized(t.Recipe)))
                 .ToArray();
             _sopDefinitions = (await AppServices.Instance.SopDefinitions.ListAsync())
                 .Where(definition => definition.Status == SopDefinitionStatus.Published)
@@ -567,12 +574,36 @@ public partial class TasksPage : UserControl
         }
     }
 
+    /// <summary>Refreshes the task list after a license import without deleting disabled tasks.</summary>
+    internal void RefreshLicenseAvailability() => Refresh();
+
+    private static bool IsRecipeAuthorized(Recipe recipe)
+    {
+        var taskTypes = recipe.Sop?.Definition?.Steps
+            .OrderBy(step => step.Order)
+            .Where(step => step.Execution is not null)
+            .Select(step => step.Execution!.TaskType)
+            .Append(recipe.TaskType)
+            .ToArray() ?? [recipe.TaskType];
+
+        return taskTypes
+            .Select(type => LicenseModuleCatalog.FromTaskType(type.ToString()))
+            .Where(module => module is not null)
+            .All(module => AppServices.Instance.License.HasModule(module!));
+    }
+
     private async void TaskList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         await DisposeTaskTestSessionAsync();
         if (TaskList.SelectedItem is not TaskRow row)
         {
             ClearTaskTestPreview();
+            return;
+        }
+        if (!row.IsAuthorized)
+        {
+            ClearTaskTestPreview();
+            EditorPanel.IsEnabled = false;
             return;
         }
         ClearTaskTestPreview();
@@ -754,6 +785,13 @@ public partial class TasksPage : UserControl
         }
         var isSopTask = IsSopTask();
         var taskType = SelectedTaskType();
+        var taskModule = LicenseModuleCatalog.FromTaskType(taskType.ToString());
+        if (!isSopTask && taskModule is not null && !AppServices.Instance.License.HasModule(taskModule))
+        {
+            ThemedMessageBox.Show("当前许可证未授权所选任务类型对应的数据与模型模块。", "模块未授权",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         _postProcessMode = SelectedPostProcessMode();
         if (!isSopTask && _postProcessMode == PostProcessMode.PythonScript && string.IsNullOrWhiteSpace(_postProcessScript))
         {
@@ -1273,6 +1311,12 @@ public partial class TasksPage : UserControl
         if (TaskTypeCombo is null || ModeCombo is null || RoiXText is null || RulesGrid is null || BehaviorGroup is null)
         {
             return;
+        }
+        foreach (var item in TaskTypeCombo.Items.OfType<ComboBoxItem>())
+        {
+            var tag = item.Tag as string;
+            var module = LicenseModuleCatalog.FromTaskType(tag);
+            item.IsEnabled = module is null || AppServices.Instance.License.HasModule(module);
         }
         var selectedType = SelectedTaskType();
         var isSop = IsSopTask();

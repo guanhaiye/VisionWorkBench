@@ -197,9 +197,18 @@ public partial class Shell : Window
 
     private void ShowPage(string key)
     {
-        if (!IsLicenseExemptPage(key) && !AppServices.Instance.License.Validate().IsValid)
+        var license = AppServices.Instance.License.Validate();
+        if (!IsLicenseExemptPage(key) && !license.IsValid)
         {
             ShowPage("license");
+            return;
+        }
+        if (license.IsValid && LicenseModuleCatalog.FromNavigationKey(key) is { } moduleId
+            && !AppServices.Instance.License.HasModule(moduleId))
+        {
+            ThemedMessageBox.Show(this,
+                $"当前许可证未授权模块：{LicenseModuleCatalog.Modules.FirstOrDefault(item => item.Id == moduleId)?.DisplayName ?? moduleId}",
+                "模块未授权", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (key.StartsWith("data-model-", StringComparison.OrdinalIgnoreCase))
@@ -276,7 +285,20 @@ public partial class Shell : Window
         };
         foreach (var item in navigationLists.SelectMany(list => list.Items.OfType<ListBoxItem>()))
         {
-            item.IsEnabled = isLicensed || string.Equals(item.Tag?.ToString(), "license", StringComparison.OrdinalIgnoreCase);
+            var key = item.Tag?.ToString() ?? string.Empty;
+            var moduleId = LicenseModuleCatalog.FromNavigationKey(key);
+            item.IsEnabled = !isLicensed
+                ? string.Equals(key, "license", StringComparison.OrdinalIgnoreCase)
+                : moduleId is null || AppServices.Instance.License.HasModule(moduleId);
+        }
+
+        if (_cache.TryGetValue("live", out var livePage) && livePage is LivePage live)
+        {
+            _ = live.RefreshLicensedTasksAsync();
+        }
+        if (_cache.TryGetValue("tasks", out var tasksPage) && tasksPage is TasksPage tasks)
+        {
+            tasks.RefreshLicenseAvailability();
         }
     }
 

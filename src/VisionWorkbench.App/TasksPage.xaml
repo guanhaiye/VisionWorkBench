@@ -27,7 +27,13 @@
                 <Button Grid.Column="2" Content="刷新" Click="Refresh_Click"
                         MinWidth="0" Padding="4,5" Margin="2,2" />
             </Grid>
-            <ListBox x:Name="TaskList" DisplayMemberPath="Name" SelectionChanged="TaskList_SelectionChanged" />
+            <ListBox x:Name="TaskList" DisplayMemberPath="Name" SelectionChanged="TaskList_SelectionChanged">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="IsEnabled" Value="{Binding IsAuthorized}" />
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
         </DockPanel>
 
         <!-- 右：编辑器 -->

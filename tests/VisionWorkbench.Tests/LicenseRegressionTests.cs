@@ -53,6 +53,22 @@ public sealed class LicenseRegressionTests : IDisposable
     }
 
     [Fact]
+    public async Task Module_Selection_Restricts_Data_And_Model_Access()
+    {
+        using var service = CreateService();
+        var payload = Payload() with
+        {
+            Features = ["data-model.detection"],
+            Modules = ["data-model.detection"],
+        };
+        await service.ImportAsync(await WriteLicense(payload));
+
+        Assert.True(service.HasModule("data-model.detection"));
+        Assert.False(service.HasModule("data-model.semantic-segmentation"));
+        Assert.False(service.HasModule("data-model.pose"));
+    }
+
+    [Fact]
     public async Task Invalid_Import_Preserves_Installed_Bytes_And_Cached_Activation()
     {
         using var service = CreateService();

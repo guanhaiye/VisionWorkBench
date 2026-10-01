@@ -63,6 +63,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken)
             ?? throw new InvalidOperationException($"任务配置不存在: {task.Name}");
         var recipe = found.Recipe;
+        EnsureRecipeModules(recipe);
         if (string.Equals(recipe.CameraProviderId, "image-folder", StringComparison.OrdinalIgnoreCase))
             return await ExecuteOfflineImageFolderAsync(request, task, recipe, cancellationToken);
 
@@ -347,7 +348,24 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
         var found = await services.Recipes.FindAsync(task.Id, cancellationToken);
         if (found?.Recipe is not { } recipe) return;
 
+        EnsureRecipeModules(recipe);
+
         await PrewarmModelSessionsAsync(task.Id, recipe, maxConcurrentSessions, cancellationToken);
+    }
+
+    private void EnsureRecipeModules(Recipe recipe)
+    {
+        var taskTypes = recipe.Sop?.Definition?.Steps
+            .Where(step => step.Execution is not null)
+            .Select(step => step.Execution!.TaskType)
+            .Append(recipe.TaskType)
+            .Distinct()
+            .ToArray() ?? [recipe.TaskType];
+        foreach (var taskType in taskTypes)
+        {
+            if (LicenseModuleCatalog.FromTaskType(taskType.ToString()) is { } moduleId)
+                services.License.EnsureModule(moduleId);
+        }
     }
 
     private static bool IsTcpTriggerEnabled(string? triggerJson)

@@ -195,6 +195,24 @@ public partial class LiveTaskPanel : UserControl
         TaskCombo.IsEnabled = _run is null;
     }
 
+    /// <summary>
+    /// Refreshes the task list after a license change. A task which is no longer
+    /// authorized is cleared and its active run is stopped immediately.
+    /// </summary>
+    public async Task ApplyAvailableTasksAsync(IReadOnlyList<LiveTaskItem> tasks)
+    {
+        var selectedId = TaskId;
+        SetAvailableTasks(tasks);
+        if (selectedId == 0 || _availableTasks.Any(task => task.Id == selectedId))
+        {
+            return;
+        }
+
+        await CleanupAsync(disposeAlgorithm: true);
+        StatusText.Text = "当前任务未被许可证授权，已禁用实时检测";
+        TaskCombo.IsEnabled = true;
+    }
+
     public void ClearTaskSelection()
     {
         TaskCombo.SelectedIndex = -1;
@@ -256,6 +274,14 @@ public partial class LiveTaskPanel : UserControl
                     RoiPolicy = recipe.RoiPolicy,
                     Rules = recipe.Rules,
                 })];
+            }
+
+            var unauthorizedModel = modelDefinitions
+                .Select(model => LicenseModuleCatalog.FromTaskType(model.Execution.TaskType.ToString()))
+                .FirstOrDefault(module => module is not null && !AppServices.Instance.License.HasModule(module));
+            if (unauthorizedModel is not null)
+            {
+                throw new UnauthorizedAccessException($"当前许可证未授权模块：{unauthorizedModel}");
             }
 
             foreach (var model in modelDefinitions)
@@ -1162,6 +1188,7 @@ public partial class LiveTaskPanel : UserControl
             DecisionText.Foreground = color;
             CountText.Text = $"数量: {result.Output.GetCount()}";
             ElapsedText.Text = $"算法耗时: {result.Output.Performance?.TotalMs ?? 0:0.#} ms";
+            ApplyDecisionStatistics(result.Decision.Status);
             DrawOverlay(result.Output);
         });
     }
@@ -1485,12 +1512,7 @@ public partial class LiveTaskPanel : UserControl
                 $"{DateTime.Now:HH:mm:ss.fff}  帧 {e.Frame?.Sequence ?? e.Output.Sequence}  "
                 + $"工位 {e.StationCode}  {text}  数量 {e.Output.GetCount()}"
                 + (string.IsNullOrWhiteSpace(detectionSummary) ? "" : $"  {detectionSummary}"));
-            switch (e.Decision.Status)
-            {
-                case DecisionStatus.Ok: _okCount++; break;
-                case DecisionStatus.Ng: _ngCount++; break;
-            }
-            UpdateStatisticsText();
+            ApplyDecisionStatistics(e.Decision.Status);
 
             // 结果必须绘制在本次推理对应的原始帧上，避免批量处理时错叠到下一张图片。
             if (e.Frame is not null)
@@ -1506,6 +1528,23 @@ public partial class LiveTaskPanel : UserControl
             }
             DrawOverlay(e.Output);
         });
+    }
+
+    private void ApplyDecisionStatistics(DecisionStatus status)
+    {
+        switch (status)
+        {
+            case DecisionStatus.Ok:
+                _okCount++;
+                break;
+            case DecisionStatus.Ng:
+                _ngCount++;
+                break;
+            default:
+                return;
+        }
+
+        UpdateStatisticsText();
     }
 
     private static (string Text, Brush Brush) GetDisplayDecision(RecordCompletedEventArgs args)

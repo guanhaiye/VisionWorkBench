@@ -19,7 +19,52 @@ public sealed record LicensePayload(
     DateTime ExpiresAtUtc,
     string MachineFingerprint,
     IReadOnlyList<string> Features,
-    IReadOnlyDictionary<string, int>? Limits = null);
+    IReadOnlyDictionary<string, int>? Limits = null,
+    IReadOnlyList<string>? Modules = null);
+
+public sealed record LicenseModuleDefinition(string Id, string DisplayName);
+
+public static class LicenseModuleCatalog
+{
+    public const string AllId = "module.all";
+
+    public static IReadOnlyList<LicenseModuleDefinition> Modules { get; } =
+    [
+        new("data-model.detection", "AI 目标检测"),
+        new("data-model.semantic-segmentation", "AI 语义分割"),
+        new("data-model.instance-segmentation", "AI 实例分割"),
+        new("data-model.pose", "AI 关键点检测"),
+        new("data-model.behavior", "AI 行为识别"),
+        new("data-model.ai-text", "AI 字符识别"),
+        new("data-model.barcode", "AI 条码识别"),
+        new("data-model.qrcode", "AI 二维码识别"),
+    ];
+
+    public static string? FromNavigationKey(string key) => key switch
+    {
+        "data-model-detection" => "data-model.detection",
+        "data-model-semantic-segmentation" => "data-model.semantic-segmentation",
+        "data-model-instance-segmentation" => "data-model.instance-segmentation",
+        "data-model-pose" => "data-model.pose",
+        "data-model-behavior" => "data-model.behavior",
+        "data-model-ai-text" => "data-model.ai-text",
+        "data-model-barcode" => "data-model.barcode",
+        "data-model-qrcode" => "data-model.qrcode",
+        _ => null,
+    };
+
+    public static string? FromTaskType(string? taskType) => taskType switch
+    {
+        "Detection" or "Counting" => "data-model.detection",
+        "SemanticSegmentation" => "data-model.semantic-segmentation",
+        "InstanceSegmentation" or "ContourAnalysis" => "data-model.instance-segmentation",
+        "BehaviorRecognition" => "data-model.behavior",
+        "AiText" => "data-model.ai-text",
+        "Barcode" => "data-model.barcode",
+        "QrCode" => "data-model.qrcode",
+        _ => null,
+    };
+}
 
 public sealed record LicenseDocument(LicensePayload Payload, string Signature, string SignatureAlgorithm = "ECDSA_P256_SHA256");
 
@@ -139,6 +184,7 @@ public sealed class LicenseService : IDisposable
                 string.IsNullOrWhiteSpace(payload.LicenseId) ||
                 string.IsNullOrWhiteSpace(payload.MachineFingerprint) ||
                 payload.Features is null || payload.Features.Any(string.IsNullOrWhiteSpace) ||
+                payload.Modules?.Any(string.IsNullOrWhiteSpace) == true ||
                 payload.Limits?.Any(item => string.IsNullOrWhiteSpace(item.Key) || item.Value < 0) == true)
                 throw new InvalidDataException("许可证缺少必要字段或包含无效功能/数量限制");
             if (payload.NotBeforeUtc.Kind != DateTimeKind.Utc || payload.ExpiresAtUtc.Kind != DateTimeKind.Utc ||
@@ -245,6 +291,42 @@ public sealed class LicenseService : IDisposable
         var status = Current;
         return status.IsValid && status.Payload?.Features.Contains(feature, StringComparer.OrdinalIgnoreCase) == true;
     }
+
+    public bool HasModule(string moduleId)
+    {
+        var status = Current;
+        if (!status.IsValid || string.IsNullOrWhiteSpace(moduleId)) return false;
+        var payload = status.Payload!;
+        if (payload.Modules is not null)
+            return payload.Modules.Contains(AllId(), StringComparer.OrdinalIgnoreCase)
+                || payload.Modules.Contains(moduleId, StringComparer.OrdinalIgnoreCase);
+
+        // Licenses issued before module authorization remain compatible through
+        // their original task-type feature names.
+        var legacyFeature = moduleId switch
+        {
+            "data-model.detection" => "detection",
+            "data-model.semantic-segmentation" => "semantic-segmentation",
+            "data-model.instance-segmentation" => "instance-segmentation",
+            "data-model.pose" => "pose",
+            "data-model.behavior" => "behavior",
+            "data-model.ai-text" => "ai-text",
+            "data-model.barcode" => "barcode",
+            "data-model.qrcode" => "qrcode",
+            _ => moduleId,
+        };
+        return payload.Features.Contains(AllId(), StringComparer.OrdinalIgnoreCase)
+            || payload.Features.Contains(moduleId, StringComparer.OrdinalIgnoreCase)
+            || payload.Features.Contains(legacyFeature, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public void EnsureModule(string moduleId)
+    {
+        if (!HasModule(moduleId))
+            throw new UnauthorizedAccessException($"当前许可证未授权模块：{moduleId}");
+    }
+
+    private static string AllId() => LicenseModuleCatalog.AllId;
 
     public void EnsureFeature(string feature)
     {

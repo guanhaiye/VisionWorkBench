@@ -45,7 +45,13 @@ public partial class LicensePage : UserControl
             ? "—"
             : $"{payload.NotBeforeUtc.ToLocalTime():yyyy-MM-dd HH:mm} 至 {payload.ExpiresAtUtc.ToLocalTime():yyyy-MM-dd HH:mm}";
         MachineFingerprintText.Text = LicenseService.MachineFingerprint();
-        FeaturesList.ItemsSource = payload?.Features?.Count > 0 ? payload.Features : ["未载入许可证功能"];
+        var modules = payload?.Modules;
+        FeaturesList.ItemsSource = modules is { Count: > 0 }
+            ? modules.Select(module => module.Equals(LicenseModuleCatalog.AllId, StringComparison.OrdinalIgnoreCase)
+                ? "全部数据与模型模块"
+                : LicenseModuleCatalog.Modules.FirstOrDefault(item => item.Id.Equals(module, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? module)
+                .ToArray()
+            : payload?.Features?.Count > 0 ? payload.Features : ["未载入许可证功能"];
         LimitsText.Text = payload?.Limits is { Count: > 0 } limits
             ? "数量限制：" + string.Join("；", limits.Select(item => $"{item.Key}={item.Value}"))
             : "数量限制：无";

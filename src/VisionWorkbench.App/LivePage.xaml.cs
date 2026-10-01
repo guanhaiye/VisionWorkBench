@@ -110,12 +110,13 @@ public partial class LivePage : UserControl
             var items = tasks
                 .Where(t => t.Recipe.Sop is null
                     || t.Recipe.Sop.Definition?.Status == SopDefinitionStatus.Published)
+                .Where(t => IsRecipeAuthorized(t.Recipe))
                 .Select(t => new LiveTaskItem(t.Entity.Id, t.Recipe.StationCode, t.Recipe.Name))
                 .ToArray();
             _availableTasks = items;
             foreach (var panel in _panels)
             {
-                panel.SetAvailableTasks(_availableTasks);
+                await panel.ApplyAvailableTasksAsync(_availableTasks);
             }
 
             if (_panels.Count == 0)
@@ -156,6 +157,24 @@ public partial class LivePage : UserControl
         {
             _loadingTasks = false;
         }
+    }
+
+    /// <summary>Called after importing a license so cached live pages refresh immediately.</summary>
+    internal Task RefreshLicensedTasksAsync() => LoadTasksAsync();
+
+    private static bool IsRecipeAuthorized(Recipe recipe)
+    {
+        var taskTypes = recipe.Sop?.Definition?.Steps
+            .OrderBy(step => step.Order)
+            .Where(step => step.Execution is not null)
+            .Select(step => step.Execution!.TaskType)
+            .Append(recipe.TaskType)
+            .ToArray() ?? [recipe.TaskType];
+
+        return taskTypes
+            .Select(type => LicenseModuleCatalog.FromTaskType(type.ToString()))
+            .Where(module => module is not null)
+            .All(module => AppServices.Instance.License.HasModule(module!));
     }
 
     private void AddTask_Click(object sender, RoutedEventArgs e)

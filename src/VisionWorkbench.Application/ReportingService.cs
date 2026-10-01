@@ -9,6 +9,7 @@ public sealed record InspectionReport(DateTime FromUtc, DateTime ToUtc, int Tota
 
 public sealed record DashboardQuery(long? TaskId, string? Status, DateTime FromUtc, DateTime ToUtc);
 public sealed record DashboardBucket(DateTime StartUtc, int Total, int Ok, int Ng, int Review, double OkRate);
+public sealed record DashboardTrendSeries(long TaskId, string Name, IReadOnlyList<DashboardBucket> Points);
 public sealed record DashboardGroup(string Name, int Total, int Ok, int Ng, int Review, double OkRate);
 public sealed record DashboardPerformance(double AverageMs, double P50Ms, double P95Ms, double P99Ms);
 public sealed record DashboardSopSummary(int ProductCycles, int Ok, int Timeout, int WrongOrder, int Review, int Aborted);
@@ -27,7 +28,10 @@ public sealed record DashboardReport(
     IReadOnlyList<DashboardGroup> Statuses,
     IReadOnlyList<DashboardGroup> Tasks,
     DashboardSopSummary? Sop,
-    IReadOnlyList<DashboardGroup> SopFailures);
+    IReadOnlyList<DashboardGroup> SopFailures)
+{
+    public IReadOnlyList<DashboardTrendSeries> TrendSeries { get; init; } = [];
+}
 
 public sealed class ReportingService(VisionDbContextFactory factory)
 {
@@ -138,12 +142,21 @@ public sealed class ReportingService(VisionDbContextFactory factory)
             new DashboardGroup("待复核", review, 0, 0, review, 0),
         };
         var trend = BuildTrend(effective, query.FromUtc, query.ToUtc);
+        var trendSeries = effective
+            .GroupBy(row => row.TaskId)
+            .Select(group => new DashboardTrendSeries(
+                group.Key,
+                BuildTaskDisplayName(group.Key, group, taskNames),
+                BuildTrend(group.ToArray(), query.FromUtc, query.ToUtc)))
+            .Where(series => series.Points.Any(point => point.Total > 0))
+            .OrderBy(series => series.Name, StringComparer.Ordinal)
+            .ToArray();
         var tasks = effective.GroupBy(x => x.TaskId).Select(g =>
         {
             var rows = g.ToArray();
             var q = rows.Where(x => IsQualityStatus(x.Status)).ToArray();
             var good = q.Count(x => x.Status == "ok");
-            return new DashboardGroup(taskNames.GetValueOrDefault(g.Key, $"任务 {g.Key}"), q.Length, good,
+            return new DashboardGroup(BuildTaskDisplayName(g.Key, g, taskNames), q.Length, good,
                 q.Count(x => x.Status == "ng"), q.Count(x => x.Status == "review_required"), Rate(good, q.Length));
         }).OrderByDescending(x => x.Total).ThenBy(x => x.Name).Take(10).ToArray();
         DashboardSopSummary? sop = null;
@@ -159,11 +172,26 @@ public sealed class ReportingService(VisionDbContextFactory factory)
         }
         return new DashboardReport(query.FromUtc, query.ToUtc, terminal.Length, ok, ng, review, error, processing,
             Rate(ok, terminal.Length), new DashboardPerformance(values.Length == 0 ? 0 : values.Average(), Percentile(values, .50), Percentile(values, .95), Percentile(values, .99)),
-            trend, statuses, tasks, sop, sopStepFailures);
+            trend, statuses, tasks, sop, sopStepFailures)
+        {
+            TrendSeries = trendSeries,
+        };
     }
 
     private sealed record DashboardRecordRow(long TaskId, string StationCode, DateTime StartedAt, string Status, double TotalElapsedMs, long? SopRunId);
     private sealed record DashboardSopRow(long Id, long TaskId, DateTime StartedAtUtc, string? FinalStatus, string Status);
+
+    private static string BuildTaskDisplayName(
+        long taskId,
+        IEnumerable<DashboardRecordRow> rows,
+        IReadOnlyDictionary<long, string> taskNames)
+    {
+        var name = taskNames.GetValueOrDefault(taskId, $"任务 {taskId}");
+        var stationCode = rows
+            .Select(row => row.StationCode)
+            .FirstOrDefault(code => !string.IsNullOrWhiteSpace(code));
+        return string.IsNullOrWhiteSpace(stationCode) ? name : $"[{stationCode}] {name}";
+    }
 
     private static IReadOnlyList<DashboardBucket> BuildTrend(DashboardRecordRow[] rows, DateTime fromUtc, DateTime toUtc)
     {

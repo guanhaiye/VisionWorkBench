@@ -381,6 +381,10 @@ public partial class SettingsPage : UserControl
         {
             var status = await AppServices.Instance.License.ImportAsync(dialog.FileName);
             LicenseStatusText.Text = $"状态：{status.State}；{status.Message}\n许可证路径：{AppServices.Instance.License.LicensePath}";
+            if (Window.GetWindow(this) is Shell shell)
+            {
+                shell.ApplyLicenseAvailability(status.IsValid);
+            }
             await AppServices.Instance.Audit.RecordAsync("license.import", "license", status.Payload?.LicenseId,
                 AppServices.Instance.Settings.OperatorName);
         }
