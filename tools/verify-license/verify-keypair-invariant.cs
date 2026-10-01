@@ -6,7 +6,7 @@ using System.Security.Cryptography;
 AppContext.SetData("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", true);
 
 const string officialPublicKey =
-    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEks147MY/s3RH1OVtbQeaY0eKemW2N+gOXpMcqctBpzFOdDd8nvIm7SI7f/FNNtPiu4W7sAaeWw84TLTPPXW3mA==";
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoieaqt2/vVECWdyLfmHc+tJOTe1WKtGtQ8fWN6u0QD9+Jz8/CkbzFF7aHwZua5MzPL6HJvyBzi+RwDzxshSVhA==";
 
 using (var official = ECDsa.Create())
 {

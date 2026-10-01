@@ -42,7 +42,7 @@ public sealed record LicenseActivationRequest(
 public sealed class LicenseService : IDisposable
 {
     public const string OfficialPublicKey =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEks147MY/s3RH1OVtbQeaY0eKemW2N+gOXpMcqctBpzFOdDd8nvIm7SI7f/FNNtPiu4W7sAaeWw84TLTPPXW3mA==";
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoieaqt2/vVECWdyLfmHc+tJOTe1WKtGtQ8fWN6u0QD9+Jz8/CkbzFF7aHwZua5MzPL6HJvyBzi+RwDzxshSVhA==";
     private const long MaximumLicenseBytes = 1024 * 1024;
     private bool _disposed;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
