@@ -378,7 +378,7 @@ public sealed class ProjectCommunicationConfig
     public int LocalBindPort { get; set; }
     public bool AutoReconnect { get; set; } = true;
     public int ReconnectIntervalMs { get; set; } = 3000;
-    public int MaxReconnectIntervalMs { get; set; } = 30000;
+    public int MaxReconnectIntervalMs { get; set; } = 10000;
     public bool HeartbeatEnabled { get; set; }
     public int HeartbeatIntervalMs { get; set; } = 10000;
     public string HeartbeatMessage { get; set; } = "";
@@ -457,6 +457,8 @@ public sealed class TcpCommunicationProfileStore
     private static ProjectCommunicationConfig Normalize(ProjectCommunicationConfig profile)
     {
         profile.ProjectCode = string.IsNullOrWhiteSpace(profile.ProjectCode) ? "default" : profile.ProjectCode.Trim();
+        profile.ReconnectIntervalMs = Math.Clamp(profile.ReconnectIntervalMs, 200, 10000);
+        profile.MaxReconnectIntervalMs = Math.Clamp(profile.MaxReconnectIntervalMs, profile.ReconnectIntervalMs, 10000);
         profile.StationMaxConcurrency = Math.Clamp(profile.StationMaxConcurrency, 1, 8);
         profile.Name = string.IsNullOrWhiteSpace(profile.Name)
             ? profile.ProjectCode == "default" ? "默认 TCP/IP 项目" : profile.ProjectCode

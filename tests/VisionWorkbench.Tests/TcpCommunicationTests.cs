@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using VisionWorkbench.Application.Communication;
 using Xunit;
 
@@ -42,5 +43,35 @@ public sealed class TcpCommunicationTests
         Assert.True(decoder.HasPendingData);
         Assert.Equal("START_ST-001", Encoding.UTF8.GetString(decoder.FlushPending().Single()));
         Assert.False(decoder.HasPendingData);
+    }
+
+    [Fact]
+    public void ProfileStore_ClampsLegacyReconnectMaximumToTenSeconds()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "vw-tcp-profile-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "tcp-communication.json");
+            var legacy = new Dictionary<string, ProjectCommunicationConfig>
+            {
+                ["tcp-001"] = new()
+                {
+                    ProjectCode = "tcp-001",
+                    ReconnectIntervalMs = 3000,
+                    MaxReconnectIntervalMs = 30000,
+                },
+            };
+            File.WriteAllText(path, JsonSerializer.Serialize(legacy));
+
+            var loaded = new TcpCommunicationProfileStore(root).Load().Single();
+
+            Assert.Equal(3000, loaded.ReconnectIntervalMs);
+            Assert.Equal(10000, loaded.MaxReconnectIntervalMs);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 }
