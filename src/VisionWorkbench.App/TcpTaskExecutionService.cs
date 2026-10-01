@@ -339,7 +339,7 @@ public sealed class TcpTaskExecutionService(AppServices services) : IAsyncDispos
     public async Task PrewarmTaskAsync(long taskId, CancellationToken cancellationToken = default)
         => await PrewarmTaskAsync(taskId, 1, cancellationToken);
 
-    private async Task PrewarmTaskAsync(
+    public async Task PrewarmTaskAsync(
         long taskId, int maxConcurrentSessions, CancellationToken cancellationToken)
     {
         var task = await services.Tasks.FindAsync(taskId, cancellationToken);

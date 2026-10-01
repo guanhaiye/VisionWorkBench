@@ -511,6 +511,17 @@ public partial class CommunicationPage : UserControl
                 RemoveTriggerConfig(ruleTask, _config.ProjectCode);
                 await AppServices.Instance.Tasks.SaveAsync(ruleTask);
             }
+            if (config.Enabled)
+            {
+                // 新增或修改 TCP 规则后，在允许外部触发前完成模型预热，避免第一条指令承担冷启动时间。
+                var profiles = new TcpCommunicationProfileStore(
+                    AppServices.Instance.Settings.ConfigDirectory).Load();
+                var concurrency = TcpModelSessionPrewarmPolicy.GetConcurrency(
+                    task.TriggerJson, profiles);
+                StateText.Text = "正在预热 TCP 任务模型，请稍候…";
+                await AppServices.Instance.TcpTaskExecution.PrewarmTaskAsync(
+                    task.Id, concurrency, CancellationToken.None);
+            }
             _allTasks = await AppServices.Instance.Tasks.ListAsync();
             RefreshBoundTasks();
             var savedRow = TriggerRulesList.Items.OfType<TriggerRuleRow>().FirstOrDefault(item => item.TaskId == task.Id);

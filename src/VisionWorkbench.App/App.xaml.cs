@@ -118,9 +118,9 @@ public partial class App : System.Windows.Application
                 SetForegroundWindow(shellHandle);
             }
             splash?.Close();
+            // TCP 自动启动必须等待已配置触发任务完成 Worker/模型预热，避免首条指令承担冷启动时间。
+            await AppServices.Instance.TcpTaskExecution.PrewarmConfiguredTasksAsync(CancellationToken.None);
             await StartConfiguredTcpCommunicationAsync();
-            // 后台预热 TCP 任务的算法 Worker 与模型，避免重启后首次触发撞上 Python/模型冷启动超时。
-            _ = Task.Run(() => AppServices.Instance.TcpTaskExecution.PrewarmConfiguredTasksAsync(CancellationToken.None));
         }
         catch (Exception ex)
         {

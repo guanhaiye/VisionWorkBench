@@ -352,10 +352,12 @@ public partial class LiveTaskPanel : UserControl
             StatusText.Text = "TCP触发检测中…";
             try
             {
-                var result = await _run.SubmitSingleAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                var result = await _run.SubmitSingleAsync(
+                    request.ExecutionTimeout ?? TimeSpan.FromSeconds(30), cancellationToken);
                 if (result is null)
                 {
-                    throw new TimeoutException("实时检测在 30 秒内没有获得有效帧。");
+                    throw new TimeoutException(
+                        $"实时检测在 {(request.ExecutionTimeout ?? TimeSpan.FromSeconds(30)).TotalSeconds:0.#} 秒内没有获得有效帧。");
                 }
 
                 StatusText.Text = "TCP触发检测已完成";
